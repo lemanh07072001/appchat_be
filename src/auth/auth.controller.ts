@@ -22,8 +22,33 @@ export class AuthController {
 
   @Public()
   @Post('register')
-  register(@Body() authService: CreateUserDto) {
-    return this.usersService.create(authService);
+  async register(@Body() createUserDto: CreateUserDto) {
+    // Tạo user mới
+    const user = await this.usersService.create(createUserDto);
+
+    // Tự động login sau khi đăng ký thành công
+    const tokens = await this.authService.login({
+      email: user.email,
+      id: user._id,
+    });
+
+    // Trả về thông tin user và tokens (không trả về password)
+    return {
+      message: 'User registered successfully',
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        avatar: user.avatar,
+        role: user.role,
+        status: user.status,
+        email_verified_at: user.email_verified_at,
+        last_login_at: user.last_login_at,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+      ...tokens,
+    };
   }
 
   @Public()

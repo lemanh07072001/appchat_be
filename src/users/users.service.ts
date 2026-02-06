@@ -1,25 +1,24 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Users } from '../entities/Users';
-import { Repository } from 'typeorm';
+import { InjectModel } from '@nestjs/mongoose';
+import { User, UserDocument } from '../schemas/users.schema';
+import { Model } from 'mongoose';
 import { BadRequestException } from '@nestjs/common';
 import { CreateUserDto } from '../dto/create-user.dto';
 import * as bcrypt from 'bcrypt';
-import { LoginUserDto } from '../dto/login-user.dto';
 
 @Injectable()
 export class UsersService {
   constructor(
-    @InjectRepository(Users)
-    private userRepository: Repository<Users>,
+    @InjectModel(User.name)
+    private userModel: Model<UserDocument>,
   ) {}
 
   async findAll() {
-    return await this.userRepository.find();
+    return await this.userModel.find().exec();
   }
 
   async fineByEmail(email: string) {
-    return await this.userRepository.findOne({ where: { email } });
+    return await this.userModel.findOne({ email }).exec();
   }
 
   async validateUser(email: string, password: string) {
@@ -37,22 +36,27 @@ export class UsersService {
     return null;
   }
 
-  async create(data: CreateUserDto): Promise<Users> {
+  async create(data: CreateUserDto): Promise<UserDocument> {
     const existingUser = await this.fineByEmail(data.email);
 
     // 🔹 Kiểm tra Email có trong cơ sở dữ liệu không?
     if (existingUser) {
-      throw new BadRequestException('Email already exists');
+      throw new BadRequestException({
+        message: 'Validation failed',
+        errors: {
+          email: 'Email already exists',
+        },
+      });
     }
 
     // 🔹 Hash mật khẩu trước khi lưu
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(data.password, salt);
 
-    const user = this.userRepository.create({
+    const user = new this.userModel({
       ...data,
       password: hashedPassword,
     });
-    return this.userRepository.save(user);
+    return user.save();
   }
 }

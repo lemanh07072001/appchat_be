@@ -5,7 +5,6 @@ import {
   IsString,
   MinLength,
 } from 'class-validator';
-import { Unique } from 'typeorm';
 import { UserStatusEnum } from '../enum/user.enum';
 
 export class CreateUserDto {
