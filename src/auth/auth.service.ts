@@ -31,6 +31,13 @@ export class AuthService {
 
     // 3️⃣ Trả về cho client
     return {
+      user: {
+        email: user.email,
+        name: user.name,
+        money: user.money ?? 0,
+        role: user.role,
+        country: user.country ?? '',
+      },
       access_token,
       refresh_token,
       token_type: 'bearer',

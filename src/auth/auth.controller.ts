@@ -5,14 +5,16 @@ import {
   Request,
   UseGuards,
   Get,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 import { CreateUserDto } from '../dto/create-user.dto';
+import { LoginUserDto } from '../dto/login-user.dto';
 import { AuthGuard } from '../guards/auth.guard';
 import { Public } from '../guards/public.decorator';
 
-@Controller('auth')
+@Controller('api/auth')
 @UseGuards(AuthGuard)
 export class AuthController {
   constructor(
@@ -27,10 +29,7 @@ export class AuthController {
     const user = await this.usersService.create(createUserDto);
 
     // Tự động login sau khi đăng ký thành công
-    const tokens = await this.authService.login({
-      email: user.email,
-      id: user._id,
-    });
+    const { user: userInfo, ...tokens } = await this.authService.login(user);
 
     // Trả về thông tin user và tokens (không trả về password)
     return {
@@ -39,6 +38,8 @@ export class AuthController {
         id: user._id,
         name: user.name,
         email: user.email,
+        money: user.money,
+        country: user.country,
         avatar: user.avatar,
         role: user.role,
         status: user.status,
@@ -53,13 +54,30 @@ export class AuthController {
 
   @Public()
   @Post('login')
-  login(@Request() req: any) {
-    return this.authService.login(req.body);
+  async login(@Body() loginUserDto: LoginUserDto) {
+    const user = await this.authService.validateUser(
+      loginUserDto.email,
+      loginUserDto.password,
+    );
+    if (!user) {
+      throw new UnauthorizedException('Email or password is incorrect');
+    }
+    return this.authService.login(user);
   }
 
   @Get('profile')
-  getProfile(@Request() req: any) {
-    return req.user;
+  async getProfile(@Request() req: any) {
+    const user = await this.usersService.fineByEmail(req.user.email);
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+    return {
+      email: user.email,
+      name: user.name,
+      money: user.money ?? 0,
+      role: user.role,
+      country: user.country ?? '',
+    };
   }
 
   @Public()

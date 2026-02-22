@@ -32,6 +32,12 @@ export class User {
 
   @Prop({ type: Date, default: Date.now })
   last_login_at: Date;
+
+  @Prop({ type: Number, default: 0 })
+  money: number;
+
+  @Prop({ default: '' })
+  country: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
