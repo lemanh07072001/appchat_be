@@ -3,11 +3,18 @@ import { ServicesService } from './services.service';
 import { CreateServiceDto } from '../dto/create-service.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
+import { Public } from '../guards/public.decorator';
 
 @Controller()
 @UseGuards(AuthGuard)
 export class ServicesController {
   constructor(private readonly servicesService: ServicesService) {}
+
+  @Public()
+  @Get('api/services')
+  findPublicList(@Query('type') type?: string, @Query('ip_version') ip_version?: string) {
+    return this.servicesService.findPublicList(type, ip_version);
+  }
 
   @Get('api/admin/services')
   findAll(@Query() query: PaginationQueryDto) {

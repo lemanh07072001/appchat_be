@@ -12,6 +12,19 @@ export class ServicesService {
     private serviceModel: Model<ServiceDocument>,
   ) {}
 
+  async findPublicList(type?: string, ip_version?: string) {
+    const filter: any = {status: true };
+    if (type) filter.type = type;
+    if (ip_version) filter.ip_version = ip_version;
+    return this.serviceModel
+      .find(filter)
+      .populate('country', 'name code')
+      .select('-partner -body_api')
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec();
+  }
+
   async findAllPaginated(query: PaginationQueryDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
@@ -21,12 +34,14 @@ export class ServicesService {
     const orConditions: any[] = [
       { name: { $regex: search, $options: 'i' } },
       { type: { $regex: search, $options: 'i' } },
-      { partner: { $regex: search, $options: 'i' } },
-      { country: { $regex: search, $options: 'i' } },
     ];
 
     if (Types.ObjectId.isValid(search)) {
-      orConditions.push({ _id: new Types.ObjectId(search) });
+      orConditions.push(
+        { _id: new Types.ObjectId(search) },
+        { partner: new Types.ObjectId(search) },
+        { country: new Types.ObjectId(search) },
+      );
     }
 
     const filter = search ? { $or: orConditions } : {};
@@ -47,8 +62,16 @@ export class ServicesService {
     };
   }
 
+  private toObjectId(id?: string): Types.ObjectId | null {
+    return id && Types.ObjectId.isValid(id) ? new Types.ObjectId(id) : null;
+  }
+
   async create(data: CreateServiceDto): Promise<ServiceDocument> {
-    const service = new this.serviceModel(data);
+    const service = new this.serviceModel({
+      ...data,
+      partner: this.toObjectId(data.partner),
+      country: this.toObjectId(data.country),
+    });
     return service.save();
   }
 
@@ -57,7 +80,11 @@ export class ServicesService {
     if (!service) {
       throw new BadRequestException('Service not found');
     }
-    Object.assign(service, data);
+    Object.assign(service, {
+      ...data,
+      partner: this.toObjectId(data.partner),
+      country: this.toObjectId(data.country),
+    });
     return service.save();
   }
 
@@ -85,6 +112,8 @@ export class ServicesService {
       body_api: service.body_api,
       protocol: service.protocol,
       note: service.note,
+      isp: service.isp,
+      is_show: service.is_show,
       pricing: service.pricing,
     });
     return newService.save();

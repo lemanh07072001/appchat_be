@@ -1,0 +1,155 @@
+import { Injectable, BadRequestException } from '@nestjs/common';
+import {
+  IProxyProvider,
+  ProviderBuyParams,
+  ProviderCancelParams,
+  ProviderRenewParams,
+  ProviderRotateParams,
+  BuyResult,
+  RenewResult,
+  RotateResult,
+} from '../proxy-provider.interface';
+
+@Injectable()
+export class HomeproxyProvider implements IProxyProvider {
+  private readonly BASE_URL = 'https://api.homeproxy.vn/api';
+
+  // ─── Helper HTTP ─────────────────────────────────────────────────────────────
+
+  private async request<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    token: string,
+    body?: Record<string, any>,
+  ): Promise<T> {
+    const res = await fetch(`${this.BASE_URL}${path}`, {
+      method,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type':  'application/json',
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new BadRequestException(
+        `HomeProxy API error [${res.status}]: ${data?.message ?? JSON.stringify(data)}`,
+      );
+    }
+
+    return data as T;
+  }
+
+  // ─── Tạo credentials ngẫu nhiên cho proxy ────────────────────────────────────
+
+  private generateCredentials(): { user: string; password: string } {
+    const rand = () => Math.random().toString(36).substring(2, 10);
+    return { user: `u${rand()}`, password: `p${rand()}${rand()}` };
+  }
+
+  // ─── Mua proxy ───────────────────────────────────────────────────────────────
+
+  async buy(params: ProviderBuyParams): Promise<BuyResult> {
+    const { user, password } = this.generateCredentials();
+
+    const raw = await this.request<any>('POST', '/merchant/orders', params.token_api, {
+      paymentMethod: 'WALLET',
+      products: [
+        {
+          dayOfUse:     params.duration_days,
+          user,
+          password,
+          protocolType: params.protocol?.toLowerCase() === 'socks5' ? 'SOCKS' : 'HTTP',
+          provider:     params.isp?.toUpperCase(),   // VD: "VIETTEL"
+          quantity:     params.quantity,
+          product: {
+            id: params.id_service,                     // product.id lưu trong service.body_api
+          },
+        },
+      ],
+    });
+
+    // ── Map response → BuyResult ────────────────────────────────────────────
+    // Response: { id, products: [{ user, password, protocolType, ... }], ... }
+    const providerOrderId = String(raw?.id ?? '');
+
+    return { provider_order_id: providerOrderId, proxies: [], raw };
+  }
+
+  // ─── Lấy proxy theo order ID (async — sau khi HomeProxy hoàn tất) ────────────
+
+  async fetchOrderProxies(token_api: string, provider_order_id: string): Promise<any[]> {
+    const filter   = encodeURIComponent(`orderId:$eq:string:${provider_order_id}`);
+    const allItems: any[] = [];
+    let page = 1;
+
+    // Lấy hết tất cả trang
+    while (true) {
+      const raw = await this.request<any>(
+        'GET',
+        `/merchant/proxies?filter=${filter}&page=${page}&limit=100`,
+        token_api,
+      );
+
+      const items: any[] = raw?.data ?? [];
+      allItems.push(...items);
+
+      if (!raw?.hasNextPage) break;
+      page++;
+    }
+
+    return allItems.map((p: any) => ({
+      host:              p.proxy?.ipaddress?.domain ?? p.proxy?.ipaddress?.ip ?? '',
+      port:              Number(p.proxy?.port ?? 0),
+      username:          p.proxy?.username ?? '',
+      password:          p.proxy?.password ?? '',
+      protocol:          (p.protocol ?? 'http').toLowerCase(),
+      provider_proxy_id: typeof p.id === 'number' ? p.id : undefined,
+      domain:            p.proxy?.ipaddress?.domain ?? undefined,
+      prev_ip:           p.proxy?.ipaddress?.prevIp ?? undefined,
+      location:          p.proxy?.ipaddress?.location ?? undefined,
+      isp:               p.proxy?.ipaddress?.provider ?? undefined,
+    }));
+  }
+
+  // ─── Gia hạn ─────────────────────────────────────────────────────────────────
+  // TODO: cập nhật khi có tài liệu API gia hạn của HomeProxy
+
+  async renew(params: ProviderRenewParams): Promise<RenewResult> {
+    const raw = await this.request<any>('POST', '/orders/renew', params.token_api, {
+      orderId:      params.provider_order_id,
+      dayOfUse:     params.duration_days,
+    });
+
+    return {
+      success:      raw.success ?? true,
+      new_end_date: raw.endDate ? new Date(raw.endDate) : undefined,
+      raw,
+    };
+  }
+
+  // ─── Xoay IP ─────────────────────────────────────────────────────────────────
+  // TODO: cập nhật khi có tài liệu API rotate của HomeProxy
+
+  async rotate(params: ProviderRotateParams): Promise<RotateResult> {
+    const raw = await this.request<any>('POST', '/orders/rotate', params.token_api, {
+      orderId: params.provider_order_id,
+    });
+
+    return {
+      new_host: raw.newIp ?? raw.ip ?? raw.host,
+      raw,
+    };
+  }
+
+  // ─── Huỷ ─────────────────────────────────────────────────────────────────────
+  // TODO: cập nhật khi có tài liệu API cancel của HomeProxy
+
+  async cancel(params: ProviderCancelParams): Promise<void> {
+    await this.request<any>('POST', '/orders/cancel', params.token_api, {
+      orderId: params.provider_order_id,
+    });
+  }
+}

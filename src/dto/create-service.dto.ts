@@ -1,4 +1,4 @@
-import { IsBoolean, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsMongoId, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 
 export class CreateServiceDto {
   @IsNotEmpty()
@@ -22,11 +22,11 @@ export class CreateServiceDto {
   ip_version?: string;
 
   @IsOptional()
-  @IsString()
+  @IsMongoId()
   partner?: string;
 
   @IsOptional()
-  @IsString()
+  @IsMongoId()
   country?: string;
 
   @IsOptional()
@@ -34,12 +34,22 @@ export class CreateServiceDto {
   body_api?: string;
 
   @IsOptional()
-  @IsString()
-  protocol?: string;
+  @IsArray()
+  @IsString({ each: true })
+  protocol?: string[];
 
   @IsOptional()
-  @IsString()
-  note?: string;
+  @IsObject()
+  note?: Record<string, string>;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  isp?: string[];
+
+  @IsOptional()
+  @IsBoolean()
+  is_show?: boolean;
 
   @IsOptional()
   @IsObject()

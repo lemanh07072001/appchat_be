@@ -46,8 +46,11 @@ export class PartnersService {
     };
   }
 
-  async findAllList() {
-    return this.partnerModel.find({ status: true }).select('_id name code').sort({ order: 1 }).exec();
+  async findAllList(status?: string) {
+    const filter: any = {};
+    if (status === 'true') filter.status = true;
+    else if (status === 'false') filter.status = false;
+    return this.partnerModel.find(filter).select('_id name code status').sort({ order: 1 }).exec();
   }
 
   async create(data: CreatePartnerDto): Promise<PartnerDocument> {

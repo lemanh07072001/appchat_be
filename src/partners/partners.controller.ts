@@ -10,8 +10,8 @@ export class PartnersController {
   constructor(private readonly partnersService: PartnersService) {}
 
   @Get('list')
-  findAllList() {
-    return this.partnersService.findAllList();
+  findAllList(@Query('status') status?: string) {
+    return this.partnersService.findAllList(status);
   }
 
   @Get()
