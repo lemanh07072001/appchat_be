@@ -15,6 +15,7 @@ echo "════════════════════════�
 # ─── 1. Nginx reverse proxy ─────────────────────────────────
 echo "[1/2] Cấu hình Nginx reverse proxy..."
 
+sudo mkdir -p /etc/nginx/conf.d
 sudo tee /etc/nginx/conf.d/proxy-server.conf > /dev/null <<NGINX
 server {
     listen 80;
