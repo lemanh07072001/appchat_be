@@ -88,13 +88,13 @@ export class OrdersWorkerService implements OnModuleInit {
 
       const provider = this.providerFactory.getProvider(partner.code);
 
-      const ISP_MAP: Record<string, string> = {
-        vnpt:    '528d39a9-f826-4c65-989c-4591d9f0dce3',
-        viettel: 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd',
-        fpt:     'f0be21c6-2deb-499c-9d5d-7bba3f765a26',
-      };
+      let idService = '';
       const isp = (order.config?.isp as string ?? '').toLowerCase();
-      const idService = ISP_MAP[isp];
+      switch (isp) {
+        case 'vnpt':    idService = '528d39a9-f826-4c65-989c-4591d9f0dce3'; break;
+        case 'viettel': idService = 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd'; break;
+        case 'fpt':     idService = 'f0be21c6-2deb-499c-9d5d-7bba3f765a26'; break;
+      }
 
       // Retry buy() tối đa MAX_RETRIES lần
       const retryErrors: string[] = [];
