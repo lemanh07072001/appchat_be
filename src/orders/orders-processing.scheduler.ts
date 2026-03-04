@@ -83,29 +83,38 @@ export class OrdersProcessingScheduler implements OnModuleInit {
 
       if (!proxies || proxies.length === 0) return; // Chưa có proxy — chờ cycle sau
 
-      // Insert vào proxy collection — bỏ qua nếu đã tồn tại (idempotent)
+      // Idempotent: skip nếu proxy đã được insert cho order này
+      const existing = await this.proxyModel.countDocuments({ order_id: order._id }).exec();
+      if (existing > 0) {
+        // Proxy đã có, chỉ đảm bảo status ACTIVE
+        await this.orderModel.findByIdAndUpdate(order._id, { status: OrderStatusEnum.ACTIVE }).exec();
+        return;
+      }
+
+      const orderId      = new Types.ObjectId(order._id);
+      const serviceId    = order.service_id ? new Types.ObjectId(order.service_id) : null;
       const proxyDocs = proxies.map((p: any) => ({
-        order_id:          new Types.ObjectId(order._id),
-        proxy_type_id:     order.service_id ? new Types.ObjectId(order.service_id) : null,
+        order_id:          orderId,
+        proxy_type_id:     serviceId,
         ip_address:        p.host,
-        port:              p.port,
+        port:              Number(p.port),
         protocol:          (p.protocol?.toLowerCase() ?? 'http') as ProxyProtocolEnum,
         auth_username:     p.username,
         auth_password:     p.password,
         provider_proxy_id: p.provider_proxy_id ?? null,
-        domain:            p.domain            ?? '',
-        prev_ip:           p.prev_ip           ?? '',
-        location:          p.location          ?? '',
-        isp:               p.isp               ?? '',
+        domain:            p.domain   ?? '',
+        prev_ip:           p.prev_ip  ?? '',
+        location:          p.location ?? '',
+        isp:               p.isp      ?? '',
         provider:          partner.code,
-        country_code:      p.country_code      ?? 'VN',
+        country_code:      p.country_code ?? 'VN',
         is_active:         true,
         is_available:      false,
       }));
 
+      // ordered:false — tiếp tục insert dù có doc nào bị duplicate key (sparse unique index)
       await this.proxyModel.insertMany(proxyDocs, { ordered: false });
 
-      // Update order → ACTIVE
       await this.orderModel.findByIdAndUpdate(order._id, {
         status: OrderStatusEnum.ACTIVE,
       }).exec();

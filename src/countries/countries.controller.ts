@@ -10,6 +10,12 @@ import { Public } from '../guards/public.decorator';
 export class CountriesController {
   constructor(private readonly countriesService: CountriesService) {}
 
+  @Public()
+  @Get('api/countries')
+  findCountries() {
+    return this.countriesService.findAllList();
+  }
+
   @Get('api/admin/countries/list')
   findAllList() {
     return this.countriesService.findAllList();

@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import {
   IProxyProvider,
   ProviderBuyParams,
@@ -12,7 +13,9 @@ import {
 
 @Injectable()
 export class HomeproxyProvider implements IProxyProvider {
-  private readonly BASE_URL = 'https://api.homeproxy.vn/api';
+  private readonly BASE_URL    = 'https://api.homeproxy.vn/api';
+  private readonly TIMEOUT_MS  = 30_000;
+  private readonly MAX_PAGES   = 50;
 
   // ─── Helper HTTP ─────────────────────────────────────────────────────────────
 
@@ -22,16 +25,31 @@ export class HomeproxyProvider implements IProxyProvider {
     token: string,
     body?: Record<string, any>,
   ): Promise<T> {
-    const res = await fetch(`${this.BASE_URL}${path}`, {
-      method,
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type':  'application/json',
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
 
-    const data = await res.json();
+    let res: Response;
+    try {
+      res = await fetch(`${this.BASE_URL}${path}`, {
+        method,
+        signal: controller.signal,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type':  'application/json',
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (err: any) {
+      throw new BadRequestException(
+        err?.name === 'AbortError'
+          ? `HomeProxy API timeout after ${this.TIMEOUT_MS}ms`
+          : `HomeProxy network error: ${err?.message}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
       throw new BadRequestException(
@@ -45,7 +63,7 @@ export class HomeproxyProvider implements IProxyProvider {
   // ─── Tạo credentials ngẫu nhiên cho proxy ────────────────────────────────────
 
   private generateCredentials(): { user: string; password: string } {
-    const rand = () => Math.random().toString(36).substring(2, 10);
+    const rand = () => randomBytes(6).toString('hex');
     return { user: `u${rand()}`, password: `p${rand()}${rand()}` };
   }
 
@@ -73,7 +91,10 @@ export class HomeproxyProvider implements IProxyProvider {
 
     // ── Map response → BuyResult ────────────────────────────────────────────
     // Response: { id, products: [{ user, password, protocolType, ... }], ... }
-    const providerOrderId = String(raw?.id ?? '');
+    const providerOrderId = raw?.id ? String(raw.id) : '';
+    if (!providerOrderId) {
+      throw new BadRequestException('HomeProxy không trả về order ID');
+    }
 
     return { provider_order_id: providerOrderId, proxies: [], raw };
   }
@@ -85,8 +106,8 @@ export class HomeproxyProvider implements IProxyProvider {
     const allItems: any[] = [];
     let page = 1;
 
-    // Lấy hết tất cả trang
-    while (true) {
+    // Lấy hết tất cả trang, tối đa MAX_PAGES để tránh loop vô hạn
+    while (page <= this.MAX_PAGES) {
       const raw = await this.request<any>(
         'GET',
         `/merchant/proxies?filter=${filter}&page=${page}&limit=100`,

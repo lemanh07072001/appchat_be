@@ -5,9 +5,11 @@ import { Order, OrderDocument } from '../schemas/orders.schema';
 import { User, UserDocument } from '../schemas/users.schema';
 import { Service, ServiceDocument } from '../schemas/services.schema';
 import { Country, CountryDocument } from '../schemas/countries.schema';
+import { Proxy, ProxyDocument } from '../schemas/proxies.schema';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { BuyOrderDto } from '../dto/buy-order.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
+import { UserOrderQueryDto } from '../dto/user-order-query.dto';
 import { OrderStatusEnum, PaymentMethodEnum, PaymentStatusEnum } from '../enum/order.enum';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { PENDING_ORDERS_KEY } from './orders.scheduler';
@@ -24,6 +26,8 @@ export class OrdersService {
     private serviceModel: Model<ServiceDocument>,
     @InjectModel(Country.name)
     private countryModel: Model<CountryDocument>,
+    @InjectModel(Proxy.name)
+    private proxyModel: Model<ProxyDocument>,
     @Inject(REDIS_CLIENT)
     private readonly redis: Redis,
   ) {}
@@ -113,15 +117,10 @@ export class OrdersService {
     const order = new this.orderModel(dataOrder);
     await order.save();
 
-    // 6. Push order ID vào Redis để worker xử lý ngay
+    // 6. Push order ID vào Redis List — worker BRPOP sẽ nhận ngay
     if (service.partner) {
-      const raw  = await this.redis.get(PENDING_ORDERS_KEY);
-      const ids: string[] = raw ? JSON.parse(raw) : [];
       const orderId = (order._id as Types.ObjectId).toString();
-      if (!ids.includes(orderId)) {
-        ids.push(orderId);
-        await this.redis.set(PENDING_ORDERS_KEY, JSON.stringify(ids));
-      }
+      await this.redis.lpush(PENDING_ORDERS_KEY, orderId);
     }
 
     return order;
@@ -165,13 +164,23 @@ export class OrdersService {
     };
   }
 
-  async findByUser(userId: string, query: PaginationQueryDto) {
+  async findByUser(userId: string, query: UserOrderQueryDto) {
     const page  = query.page ?? 1;
     const limit = query.limit ?? 10;
+    const search = query.search ?? '';
     const skip  = (page - 1) * limit;
-    const filter = { user_id: new Types.ObjectId(userId) };
 
-    const [data, total] = await Promise.all([
+    const filter: any = { user_id: new Types.ObjectId(userId) };
+
+    if (query.status !== undefined && query.status !== null) {
+      filter.status = query.status;
+    }
+
+    if (search) {
+      filter.order_code = { $regex: search, $options: 'i' };
+    }
+
+    const [orders, total] = await Promise.all([
       this.orderModel
         .find(filter)
         .populate('service_id', 'name proxy_type ip_version')
@@ -184,6 +193,27 @@ export class OrdersService {
         .exec(),
       this.orderModel.countDocuments(filter).exec(),
     ]);
+
+    // Lookup proxies cho tất cả orders trong 1 query
+    const orderIds = orders.map((o) => o._id);
+    const proxies = await this.proxyModel
+      .find({ order_id: { $in: orderIds } })
+      .select('order_id ip_address port protocol auth_username auth_password country_code region city isp is_active health_status')
+      .lean()
+      .exec();
+
+    // Group proxies theo order_id
+    const proxyMap = new Map<string, typeof proxies>();
+    for (const proxy of proxies) {
+      const key = proxy.order_id.toString();
+      if (!proxyMap.has(key)) proxyMap.set(key, []);
+      proxyMap.get(key)!.push(proxy);
+    }
+
+    const data = orders.map((order) => ({
+      ...order,
+      proxies: proxyMap.get((order._id as Types.ObjectId).toString()) ?? [],
+    }));
 
     return {
       data,

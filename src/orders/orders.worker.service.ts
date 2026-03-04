@@ -7,13 +7,12 @@ import { Service, ServiceDocument } from '../schemas/services.schema';
 import { OrderStatusEnum } from '../enum/order.enum';
 import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 import { REDIS_CLIENT } from '../redis/redis.module';
-// 
 import { PENDING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 
 
-/** Thời gian nghỉ khi Redis không có order nào */
-const POLL_INTERVAL_MS = 3000;
+/** Timeout BRPOP — block tối đa 5 giây chờ order mới */
+const BRPOP_TIMEOUT_SECONDS = 5;
 /** Lock mỗi order tối đa 5 phút để tránh deadlock */
 const ORDER_LOCK_TTL_SECONDS = 300;
 /** Số lần thử lại khi buy() thất bại */
@@ -39,46 +38,28 @@ export class OrdersWorkerService implements OnModuleInit {
   }
 
   private async startWorker(): Promise<void> {
-    this.logger.log('Worker started — polling Redis for pending orders...');
+    this.logger.log('Worker started — BRPOP waiting for pending orders...');
 
     while (this.running) {
-
       try {
-        await this.processOneBatch();
+        // BRPOP block chờ order mới — trả về ngay khi có LPUSH
+        const result = await this.redis.brpop(PENDING_ORDERS_KEY, BRPOP_TIMEOUT_SECONDS);
+
+        if (!result) continue; // Timeout — không có order, loop lại
+
+        const [, orderId] = result; // result = [key, value]
+        this.logger.log(`Received order ${orderId} from Redis`);
+
+        await this.processOrder(orderId);
       } catch (err) {
         this.logger.error('Unexpected worker error', err?.message);
-        await this.sleep(POLL_INTERVAL_MS);
+        await this.sleep(2000);
       }
     }
   }
 
-  private async processOneBatch(): Promise<void> {
-    const raw = await this.redis.get(PENDING_ORDERS_KEY);
-
-    if (!raw) {
-      await this.sleep(POLL_INTERVAL_MS);
-      return;
-    }
-
-    const ids: string[] = JSON.parse(raw);
-
-    if (ids.length === 0) {
-      await this.sleep(POLL_INTERVAL_MS);
-      return;
-    }
-
-    this.logger.log(`Found ${ids.length} pending order IDs in Redis`);
-
-    // Xử lý song song — mỗi order có lock riêng để tránh trùng giữa các worker
-    await Promise.allSettled(ids.map(id => this.processOrder(id)));
-
-    // Sleep sau khi xử lý xong — tránh spin loop khi Redis cache chưa được refresh
-    await this.sleep(POLL_INTERVAL_MS);
-  }
-
   private async processOrder(orderId: string): Promise<void> {
     // Claim lock per order — chỉ 1 worker xử lý 1 order
-    let id_service_provider = '';
     const lockKey = `lock:order:${orderId}`;
     const claimed = await this.redis.set(lockKey, '1', 'EX', ORDER_LOCK_TTL_SECONDS, 'NX');
     if (!claimed) {
@@ -107,13 +88,6 @@ export class OrdersWorkerService implements OnModuleInit {
 
       const provider = this.providerFactory.getProvider(partner.code);
 
-      const isp = (order.config?.isp as string ?? '').toLowerCase();
-      switch (isp) {
-        case 'vnpt':        id_service_provider = '528d39a9-f826-4c65-989c-4591d9f0dce3'; break;
-        case 'viettel':     id_service_provider = 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd'; break;
-        case 'fpt':         id_service_provider = 'f0be21c6-2deb-499c-9d5d-7bba3f765a26'; break;
-      }
-
       // Retry buy() tối đa MAX_RETRIES lần
       const retryErrors: string[] = [];
       let result: any = null;
@@ -126,7 +100,7 @@ export class OrdersWorkerService implements OnModuleInit {
             duration_days: order.duration_days,
             proxy_type:    order.proxy_type,
             body_api:      service?.body_api,
-            id_service:    id_service_provider,
+            id_service:    service?.id_service || undefined,
             isp:           order.config?.isp      as string | undefined,
             protocol:      order.config?.protocol as string | undefined,
           });

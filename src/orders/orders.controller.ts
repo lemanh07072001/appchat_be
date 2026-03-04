@@ -4,6 +4,7 @@ import { OrdersService } from './orders.service';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { BuyOrderDto } from '../dto/buy-order.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
+import { UserOrderQueryDto } from '../dto/user-order-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
 import { OrderStatusEnum, PaymentStatusEnum } from '../enum/order.enum';
 
@@ -20,7 +21,7 @@ export class OrdersController {
   }
 
   @Get('api/orders/my')
-  findMyOrders(@Req() req: Request, @Query() query: PaginationQueryDto) {
+  findMyOrders(@Req() req: Request, @Query() query: UserOrderQueryDto) {
     const userId = (req as any).user.sub as string;
     return this.ordersService.findByUser(userId, query);
   }

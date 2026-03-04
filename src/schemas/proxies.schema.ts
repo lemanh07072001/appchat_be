@@ -74,3 +74,7 @@ export class Proxy {
 }
 
 export const ProxySchema = SchemaFactory.createForClass(Proxy);
+
+ProxySchema.index({ order_id: 1 });
+ProxySchema.index({ provider_proxy_id: 1 }, { unique: true, sparse: true }); // tránh insert trùng
+ProxySchema.index({ is_active: 1, is_available: 1 });
