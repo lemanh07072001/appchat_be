@@ -221,6 +221,41 @@ export class OrdersService {
     };
   }
 
+  async findOneByUser(userId: string, orderId: string, query: PaginationQueryDto) {
+    const order = await this.orderModel
+      .findOne({ _id: new Types.ObjectId(orderId), user_id: new Types.ObjectId(userId) })
+      .populate('service_id', 'name proxy_type ip_version')
+      .populate('country_id', 'name code')
+      .select('-admin_note -cost_per_unit -total_cost -profit -partner_id -provider_order_id -error_message -credentials')
+      .lean()
+      .exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    const page  = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const skip  = (page - 1) * limit;
+
+    const proxyFilter = { order_id: order._id };
+    const [proxies, totalProxies] = await Promise.all([
+      this.proxyModel
+        .find(proxyFilter)
+        .select('ip_address port protocol auth_username auth_password country_code region city isp is_active health_status')
+        .skip(skip)
+        .limit(limit)
+        .lean()
+        .exec(),
+      this.proxyModel.countDocuments(proxyFilter).exec(),
+    ]);
+
+    return {
+      ...order,
+      proxies: {
+        data: proxies,
+        meta: { total: totalProxies, page, limit, totalPages: Math.ceil(totalProxies / limit) },
+      },
+    };
+  }
+
   async findOne(id: string): Promise<OrderDocument> {
     const order = await this.orderModel
       .findById(id)

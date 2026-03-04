@@ -26,6 +26,12 @@ export class OrdersController {
     return this.ordersService.findByUser(userId, query);
   }
 
+  @Get('api/orders/my/:id')
+  findMyOrderDetail(@Req() req: Request, @Param('id') id: string, @Query() query: PaginationQueryDto) {
+    const userId = (req as any).user.sub as string;
+    return this.ordersService.findOneByUser(userId, id, query);
+  }
+
   // ─── Admin ────────────────────────────────────────────────
   @Get('api/admin/orders')
   findAll(@Query() query: PaginationQueryDto) {
