@@ -88,6 +88,14 @@ export class OrdersWorkerService implements OnModuleInit {
 
       const provider = this.providerFactory.getProvider(partner.code);
 
+      const ISP_MAP: Record<string, string> = {
+        vnpt:    '528d39a9-f826-4c65-989c-4591d9f0dce3',
+        viettel: 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd',
+        fpt:     'f0be21c6-2deb-499c-9d5d-7bba3f765a26',
+      };
+      const isp = (order.config?.isp as string ?? '').toLowerCase();
+      const idService = ISP_MAP[isp];
+
       // Retry buy() tối đa MAX_RETRIES lần
       const retryErrors: string[] = [];
       let result: any = null;
@@ -100,7 +108,7 @@ export class OrdersWorkerService implements OnModuleInit {
             duration_days: order.duration_days,
             proxy_type:    order.proxy_type,
             body_api:      service?.body_api,
-            id_service:    service?.id_service || undefined,
+            id_service:    idService,
             isp:           order.config?.isp      as string | undefined,
             protocol:      order.config?.protocol as string | undefined,
           });
