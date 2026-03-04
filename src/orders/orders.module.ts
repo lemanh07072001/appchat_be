@@ -11,6 +11,7 @@ import { OrdersService } from './orders.service';
 import { OrdersController } from './orders.controller';
 import { OrdersScheduler } from './orders.scheduler';
 import { OrdersProcessingScheduler } from './orders-processing.scheduler';
+import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
 import { ProxyProvidersModule } from '../proxy-providers/proxy-providers.module';
 
 @Module({
@@ -27,7 +28,7 @@ import { ProxyProvidersModule } from '../proxy-providers/proxy-providers.module'
     ProxyProvidersModule,
   ],
   controllers: [OrdersController],
-  providers: [OrdersService, OrdersScheduler, OrdersProcessingScheduler],
+  providers: [OrdersService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler],
   exports: [OrdersService],
 })
 export class OrdersModule {}

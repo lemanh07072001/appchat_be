@@ -8,6 +8,7 @@ export enum OrderStatusEnum {
   CANCELLED        = 6, // Huỷ
   PARTIAL_REFUNDED = 7, // Hoàn 1 phần
   FAILED           = 8, // Lỗi khi gọi provider
+  PENDING_REFUND   = 9, // Chờ hoàn tiền
 }
 
 export enum PaymentStatusEnum {

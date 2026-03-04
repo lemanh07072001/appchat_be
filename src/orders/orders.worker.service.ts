@@ -141,7 +141,7 @@ export class OrdersWorkerService implements OnModuleInit {
     } catch (err) {
       this.logger.error(`Order ${orderId} thất bại: ${err?.message}`);
       await this.orderModel.findByIdAndUpdate(orderId, {
-        status:        OrderStatusEnum.FAILED,
+        status:        OrderStatusEnum.PENDING_REFUND,
         error_message: err?.message ?? 'Worker error',
       }).exec();
     } finally {
