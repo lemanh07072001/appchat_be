@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
 import { IProxyProvider } from './proxy-provider.interface';
 import { Proxyv6Provider } from './impl/proxyv6.provider';
 import { HomeproxyProvider } from './impl/homeproxy.provider';
+import { ProxyvnProvider } from './impl/proxyvn.provider';
 // import { ProxysellerProvider } from './impl/proxyseller.provider';
 
 /**
@@ -20,12 +21,14 @@ export class ProxyProviderFactory implements OnModuleInit {
   constructor(
     private readonly proxyv6:     Proxyv6Provider,
     private readonly homeproxy:   HomeproxyProvider,
+    private readonly proxyvn:     ProxyvnProvider,
     // private readonly proxyseller: ProxysellerProvider,
   ) {}
 
   onModuleInit() {
     this.registry.set('proxyv6',   this.proxyv6);
     this.registry.set('homeproxy', this.homeproxy);
+    this.registry.set('proxyvn',   this.proxyvn);
     // this.registry.set('proxyseller', this.proxyseller);
   }
 
