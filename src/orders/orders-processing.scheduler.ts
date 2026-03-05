@@ -8,6 +8,7 @@ import { Proxy, ProxyDocument } from '../schemas/proxies.schema';
 import { OrderStatusEnum } from '../enum/order.enum';
 import { ProxyProtocolEnum } from '../enum/proxy.enum';
 import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
+import { AffiliateService } from '../affiliate/affiliate.service';
 
 /** Số order xử lý song song mỗi batch — tránh rate limit */
 const BATCH_SIZE = 20;
@@ -22,6 +23,7 @@ export class OrdersProcessingScheduler implements OnModuleInit {
     @InjectModel(Partner.name) private readonly partnerModel: Model<PartnerDocument>,
     @InjectModel(Proxy.name)   private readonly proxyModel:   Model<ProxyDocument>,
     private readonly providerFactory: ProxyProviderFactory,
+    private readonly affiliateService: AffiliateService,
   ) {}
 
   onModuleInit() {
@@ -37,7 +39,7 @@ export class OrdersProcessingScheduler implements OnModuleInit {
     try {
       const orders = await this.orderModel
         .find({ status: OrderStatusEnum.PROCESSING, provider_order_id: { $ne: '' } })
-        .select('_id provider_order_id partner_id config')
+        .select('_id provider_order_id partner_id config user_id total_price')
         .lean()
         .exec();
 
@@ -120,6 +122,7 @@ export class OrdersProcessingScheduler implements OnModuleInit {
       }).exec();
 
       this.logger.log(`Order ${order._id} → ACTIVE, inserted ${proxies.length} proxies`);
+      void this.affiliateService.handleOrderActive(order as any);
     } catch (err) {
       this.logger.error(`fetchAndActivate ${order._id}: ${err?.message}`);
     }

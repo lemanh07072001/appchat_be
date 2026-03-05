@@ -13,6 +13,7 @@ import { OrdersScheduler } from './orders.scheduler';
 import { OrdersProcessingScheduler } from './orders-processing.scheduler';
 import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
 import { ProxyProvidersModule } from '../proxy-providers/proxy-providers.module';
+import { AffiliateModule } from '../affiliate/affiliate.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { ProxyProvidersModule } from '../proxy-providers/proxy-providers.module'
     ]),
     JwtModule,
     ProxyProvidersModule,
+    AffiliateModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler],

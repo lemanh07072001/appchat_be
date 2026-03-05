@@ -7,6 +7,7 @@ import { Service, ServiceSchema } from './schemas/services.schema';
 import { Proxy, ProxySchema } from './schemas/proxies.schema';
 import { RedisModule } from './redis/redis.module';
 import { ProxyProvidersModule } from './proxy-providers/proxy-providers.module';
+import { AffiliateModule } from './affiliate/affiliate.module';
 import { OrdersWorkerService } from './orders/orders.worker.service';
 
 /**
@@ -34,6 +35,7 @@ import { OrdersWorkerService } from './orders/orders.worker.service';
 
     RedisModule,
     ProxyProvidersModule,
+    AffiliateModule,
   ],
   providers: [OrdersWorkerService],
 })

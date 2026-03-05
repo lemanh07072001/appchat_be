@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
+import { Document, Types } from 'mongoose';
 import { UserRoleEnum, UserStatusEnum } from '../enum/user.enum';
 
 export type UserDocument = User & Document & {
@@ -38,6 +38,16 @@ export class User {
 
   @Prop({ default: '' })
   country: string;
+
+  // ─── Affiliate ────────────────────────────────────────────
+  @Prop({ default: '', unique: true, sparse: true })
+  referral_code: string;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  referred_by: Types.ObjectId;
+
+  @Prop({ type: Number, default: 0 })
+  affiliate_balance: number;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

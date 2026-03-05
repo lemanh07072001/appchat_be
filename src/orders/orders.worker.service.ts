@@ -8,6 +8,7 @@ import { Proxy, ProxyDocument } from '../schemas/proxies.schema';
 import { OrderStatusEnum } from '../enum/order.enum';
 import { ProxyProtocolEnum } from '../enum/proxy.enum';
 import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
+import { AffiliateService } from '../affiliate/affiliate.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { PENDING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
@@ -36,6 +37,7 @@ export class OrdersWorkerService implements OnModuleInit {
     @InjectModel(Proxy.name)   private readonly proxyModel:   Model<ProxyDocument>,
     @Inject(REDIS_CLIENT)      private readonly redis:        Redis,
     private readonly providerFactory: ProxyProviderFactory,
+    private readonly affiliateService: AffiliateService,
   ) {}
 
   onModuleInit() {
@@ -193,6 +195,7 @@ export class OrdersWorkerService implements OnModuleInit {
           order!.status = OrderStatusEnum.ACTIVE;
           await order!.save();
           this.logger.log(`Order ${orderId} → ACTIVE, inserted ${received} proxies`);
+          void this.affiliateService.handleOrderActive(order!);
         }
       } else {
         // Provider trả proxy async (HomeProxy) → chờ scheduler poll
