@@ -9,6 +9,7 @@ export enum OrderStatusEnum {
   PARTIAL_REFUNDED = 7, // Hoàn 1 phần
   FAILED           = 8, // Lỗi khi gọi provider
   PENDING_REFUND   = 9, // Chờ hoàn tiền
+  PARTIAL          = 10, // Mua thành công nhưng thiếu số lượng, chờ admin xử lý
 }
 
 export enum PaymentStatusEnum {

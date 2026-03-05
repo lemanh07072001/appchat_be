@@ -118,6 +118,13 @@ export class Order {
   @Prop({ type: Types.ObjectId, ref: 'Order', default: null })
   renewed_to: Types.ObjectId;     // order mới sau khi gia hạn
 
+  // ─── Số lượng thực nhận & hoàn tiền ──────────────────────
+  @Prop({ type: Number, default: null })
+  actual_quantity: number;            // số proxy thực nhận từ provider (null = đủ)
+
+  @Prop({ type: Number, default: 0 })
+  refunded_amount: number;            // số tiền đã hoàn lại cho user
+
   // ─── Ghi chú ──────────────────────────────────────────────
   @Prop({ default: '' })
   error_message: string;

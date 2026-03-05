@@ -12,8 +12,8 @@ export class ServicesController {
 
   @Public()
   @Get('api/services')
-  findPublicList(@Query('type') type?: string, @Query('ip_version') ip_version?: string) {
-    return this.servicesService.findPublicList(type, ip_version);
+  findPublicList(@Query('category') category?: 'static' | 'rotating') {
+    return this.servicesService.findPublicList(category);
   }
 
   @Get('api/admin/services')

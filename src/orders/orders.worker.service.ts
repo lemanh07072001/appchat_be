@@ -21,6 +21,8 @@ const ORDER_LOCK_TTL_SECONDS = 300;
 const MAX_RETRIES = 3;
 /** Delay giữa các lần retry (ms) */
 const RETRY_DELAY_MS = 2000;
+/** Số proxy insert mỗi batch để tránh quá tải MongoDB */
+const INSERT_BATCH_SIZE = 500;
 
 @Injectable()
 export class OrdersWorkerService implements OnModuleInit {
@@ -147,7 +149,7 @@ export class OrdersWorkerService implements OnModuleInit {
 
       order!.provider_order_id = result.provider_order_id;
 
-      // Nếu provider trả proxy ngay (ProxyVN) → lưu luôn và set ACTIVE
+      // Nếu provider trả proxy ngay (ProxyVN) → lưu luôn
       if (result.proxies && result.proxies.length > 0) {
         const proxyDocs = result.proxies.map((p: any) => ({
           order_id:          order!._id,
@@ -168,10 +170,30 @@ export class OrdersWorkerService implements OnModuleInit {
           is_available:      false,
         }));
 
-        await this.proxyModel.insertMany(proxyDocs, { ordered: false });
-        order!.status = OrderStatusEnum.ACTIVE;
-        await order!.save();
-        this.logger.log(`Order ${orderId} → ACTIVE, inserted ${result.proxies.length} proxies`);
+        // Batch insert để tránh quá tải MongoDB khi SLL
+        for (let i = 0; i < proxyDocs.length; i += INSERT_BATCH_SIZE) {
+          await this.proxyModel.insertMany(
+            proxyDocs.slice(i, i + INSERT_BATCH_SIZE),
+            { ordered: false },
+          );
+        }
+
+        const received = result.proxies.length;
+        const ordered  = order!.quantity;
+
+        if (received < ordered) {
+          // Thiếu số lượng → PARTIAL, chờ admin refund
+          const shortage = ordered - received;
+          order!.actual_quantity = received;
+          order!.status = OrderStatusEnum.PARTIAL;
+          order!.admin_note = `Nhận ${received}/${ordered} proxy từ provider, thiếu ${shortage}`;
+          await order!.save();
+          this.logger.warn(`Order ${orderId} → PARTIAL: nhận ${received}/${ordered}, thiếu ${shortage}`);
+        } else {
+          order!.status = OrderStatusEnum.ACTIVE;
+          await order!.save();
+          this.logger.log(`Order ${orderId} → ACTIVE, inserted ${received} proxies`);
+        }
       } else {
         // Provider trả proxy async (HomeProxy) → chờ scheduler poll
         order!.status = OrderStatusEnum.PROCESSING;
