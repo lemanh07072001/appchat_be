@@ -4,7 +4,9 @@ import { Model, Types } from 'mongoose';
 import { Order, OrderDocument } from '../schemas/orders.schema';
 import { Partner, PartnerDocument } from '../schemas/partners.schema';
 import { Service, ServiceDocument } from '../schemas/services.schema';
+import { Proxy, ProxyDocument } from '../schemas/proxies.schema';
 import { OrderStatusEnum } from '../enum/order.enum';
+import { ProxyProtocolEnum } from '../enum/proxy.enum';
 import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { PENDING_ORDERS_KEY } from './orders.scheduler';
@@ -29,6 +31,7 @@ export class OrdersWorkerService implements OnModuleInit {
     @InjectModel(Order.name)   private readonly orderModel:   Model<OrderDocument>,
     @InjectModel(Partner.name) private readonly partnerModel: Model<PartnerDocument>,
     @InjectModel(Service.name) private readonly serviceModel: Model<ServiceDocument>,
+    @InjectModel(Proxy.name)   private readonly proxyModel:   Model<ProxyDocument>,
     @Inject(REDIS_CLIENT)      private readonly redis:        Redis,
     private readonly providerFactory: ProxyProviderFactory,
   ) {}
@@ -143,10 +146,38 @@ export class OrdersWorkerService implements OnModuleInit {
       }
 
       order!.provider_order_id = result.provider_order_id;
-      order!.status  = OrderStatusEnum.PROCESSING;
-      await order!.save();
 
-      this.logger.log(`Order ${orderId} → PROCESSING (provider_order_id: ${result.provider_order_id})`);
+      // Nếu provider trả proxy ngay (ProxyVN) → lưu luôn và set ACTIVE
+      if (result.proxies && result.proxies.length > 0) {
+        const proxyDocs = result.proxies.map((p: any) => ({
+          order_id:          order!._id,
+          proxy_type_id:     order!.service_id ?? null,
+          ip_address:        p.host,
+          port:              Number(p.port),
+          protocol:          (p.protocol?.toLowerCase() ?? 'http') as ProxyProtocolEnum,
+          auth_username:     p.username,
+          auth_password:     p.password,
+          provider_proxy_id: p.provider_proxy_id ?? null,
+          domain:            p.domain   ?? '',
+          prev_ip:           p.prev_ip  ?? '',
+          location:          p.location ?? '',
+          isp:               p.isp      ?? '',
+          provider:          partner.code,
+          country_code:      p.country_code ?? 'VN',
+          is_active:         true,
+          is_available:      false,
+        }));
+
+        await this.proxyModel.insertMany(proxyDocs, { ordered: false });
+        order!.status = OrderStatusEnum.ACTIVE;
+        await order!.save();
+        this.logger.log(`Order ${orderId} → ACTIVE, inserted ${result.proxies.length} proxies`);
+      } else {
+        // Provider trả proxy async (HomeProxy) → chờ scheduler poll
+        order!.status = OrderStatusEnum.PROCESSING;
+        await order!.save();
+        this.logger.log(`Order ${orderId} → PROCESSING (provider_order_id: ${result.provider_order_id})`);
+      }
     } catch (err) {
       this.logger.error(`Order ${orderId} thất bại: ${err?.message}`);
       await this.orderModel.findByIdAndUpdate(orderId, {
