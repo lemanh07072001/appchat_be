@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import {
   IProxyProvider,
   ProviderBuyParams,
@@ -13,6 +13,7 @@ import {
 
 @Injectable()
 export class ProxyvnProvider implements IProxyProvider {
+  private readonly logger     = new Logger(ProxyvnProvider.name);
   private readonly BASE_URL   = 'https://proxy.vn/apiv2';
   private readonly TIMEOUT_MS = 30_000;
 
@@ -92,7 +93,11 @@ export class ProxyvnProvider implements IProxyProvider {
       `&user=random` +
       `&password=random`;
 
+    this.logger.log(`[BUY] → ${this.BASE_URL}/muaproxy.php?key=***&loaiproxy=${loaiproxy}&soluong=${quantity}&ngay=${duration_days}&type=${type}&user=random&password=random`);
+
     const raw = await this.request<any[]>(url);
+
+    this.logger.log(`[BUY] ← response: ${JSON.stringify(raw)}`);
 
     // raw là mảng: các item proxy (status=100) + item summary (status=200/201)
     const items = Array.isArray(raw) ? raw : [raw];
