@@ -90,10 +90,19 @@ export class OrdersWorkerService implements OnModuleInit {
 
       let idService = '';
       const isp = (order.config?.isp as string ?? '').toLowerCase();
-      switch (isp) {
-        case 'vnpt':    idService = '528d39a9-f826-4c65-989c-4591d9f0dce3'; break;
-        case 'viettel': idService = 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd'; break;
-        case 'fpt':     idService = 'f0be21c6-2deb-499c-9d5d-7bba3f765a26'; break;
+
+      if (partner.code === 'homeproxy') {
+        // HomeProxy dùng UUID product ID
+        switch (isp) {
+          case 'vnpt':    idService = '528d39a9-f826-4c65-989c-4591d9f0dce3'; break;
+          case 'viettel': idService = 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd'; break;
+          case 'fpt':     idService = 'f0be21c6-2deb-499c-9d5d-7bba3f765a26'; break;
+        }
+      } else if (partner.code === 'proxyvn') {
+        // ProxyVN dùng tên loại proxy trực tiếp
+        idService = service?.id_service || isp;
+      } else {
+        idService = service?.id_service || '';
       }
 
       // Retry buy() tối đa MAX_RETRIES lần
