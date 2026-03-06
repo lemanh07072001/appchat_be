@@ -5,7 +5,10 @@
       "Bash(find /d/Nestjs/proxy_server -maxdepth 3 -type d \\\\\\( -name db -o -name database -o -name migrations -o -name order* -o -name sql \\\\\\))",
       "Bash(ls -la /d/Nestjs/proxy_server/src/*/*)",
       "Bash(find /d/Nestjs/proxy_server -name \"*.enum.ts\" -exec cat {} ;)",
-      "Bash(npx tsc --noEmit)"
+      "Bash(npx tsc --noEmit)",
+      "Bash(npx ts-node -r tsconfig-paths/register scripts/seed-orders.ts)",
+      "Bash(npx ts-node -r tsconfig-paths/register -e \":*)",
+      "Bash(node -e \":*)"
     ]
   }
 }

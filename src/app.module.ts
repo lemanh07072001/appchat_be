@@ -11,6 +11,7 @@ import { PartnersModule } from './partners/partners.module';
 import { ServicesModule } from './services/services.module';
 import { OrdersModule } from './orders/orders.module';
 import { RedisModule } from './redis/redis.module';
+import { AffiliateModule } from './affiliate/affiliate.module';
 
 @Module({
   imports: [
@@ -45,6 +46,8 @@ import { RedisModule } from './redis/redis.module';
     ServicesModule,
 
     OrdersModule,
+
+    AffiliateModule,
   ],
   controllers: [AppController],
   providers: [AppService],

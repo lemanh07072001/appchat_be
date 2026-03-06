@@ -7,9 +7,12 @@ export type AffiliateCommissionDocument = AffiliateCommission & Document & {
 };
 
 export enum AffiliateCommissionStatus {
-  CONFIRMED  = 'confirmed',  // Đơn hàng COMPLETED → hoa hồng được xác nhận
-  PAID       = 'paid',       // Đã cộng vào affiliate_balance
-  CANCELLED  = 'cancelled',  // Đơn bị huỷ sau khi đã confirm
+  PENDING    = 'pending',    // Order đang ACTIVE — chưa đủ điều kiện rút
+  CONFIRMED  = 'confirmed',  // Order đã EXPIRED — Đủ điều kiện, chờ admin duyệt
+  CREDITED   = 'credited',   // Admin đã duyệt, đã cộng vào affiliate_balance
+  REQUESTED  = 'requested',  // User yêu cầu rút về ngân hàng — chờ admin chuyển khoản
+  PAID       = 'paid',       // Admin đã chuyển khoản, user đã nhận tiền
+  CANCELLED  = 'cancelled',  // Đơn bị huỷ
 }
 
 @Schema({ timestamps: true })
@@ -35,15 +38,31 @@ export class AffiliateCommission {
   @Prop({
     type: String,
     enum: AffiliateCommissionStatus,
-    default: AffiliateCommissionStatus.CONFIRMED,
+    default: AffiliateCommissionStatus.PENDING,
   })
   status: AffiliateCommissionStatus;
 
-  @Prop({ type: Date, default: Date.now })
+  @Prop({ type: Date, default: null })
   confirmed_at: Date;
 
   @Prop({ type: Date, default: null })
+  credited_at: Date;         // Khi admin cộng vào affiliate_balance
+
+  @Prop({ type: Date, default: null })
+  requested_at: Date;
+
+  @Prop({ type: Date, default: null })
   paid_at: Date;
+
+  // ─── Snapshot thông tin ngân hàng tại thời điểm yêu cầu rút ─────────────
+  @Prop({ default: '' })
+  bank_name: string;
+
+  @Prop({ default: '' })
+  bank_account: string;
+
+  @Prop({ default: '' })
+  bank_owner: string;
 }
 
 export const AffiliateCommissionSchema = SchemaFactory.createForClass(AffiliateCommission);

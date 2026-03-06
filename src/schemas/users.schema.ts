@@ -48,6 +48,16 @@ export class User {
 
   @Prop({ type: Number, default: 0 })
   affiliate_balance: number;
+
+  // ─── Thông tin ngân hàng (để rút hoa hồng) ───────────────
+  @Prop({ default: '' })
+  bank_name: string;
+
+  @Prop({ default: '' })
+  bank_account: string;
+
+  @Prop({ default: '' })
+  bank_owner: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

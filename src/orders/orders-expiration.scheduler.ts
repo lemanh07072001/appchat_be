@@ -5,6 +5,7 @@ import { Model } from 'mongoose';
 import { Order, OrderDocument } from '../schemas/orders.schema';
 import { Proxy, ProxyDocument } from '../schemas/proxies.schema';
 import { OrderStatusEnum, OrderItemStatusEnum } from '../enum/order.enum';
+import { AffiliateService } from '../affiliate/affiliate.service';
 
 /** Số order xử lý mỗi batch */
 const BATCH_SIZE = 100;
@@ -17,10 +18,11 @@ export class OrdersExpirationScheduler {
   constructor(
     @InjectModel(Order.name)  private readonly orderModel: Model<OrderDocument>,
     @InjectModel(Proxy.name)  private readonly proxyModel: Model<ProxyDocument>,
+    private readonly affiliateService: AffiliateService,
   ) {}
 
-  /** Chạy mỗi 5 phút — check order ACTIVE đã hết hạn chưa */
-  @Cron('*/5 * * * *')
+  /** Chạy mỗi 1 phút — check order ACTIVE đã hết hạn chưa */
+  @Cron('* * * * *')
   async checkExpiredOrders(): Promise<void> {
     if (this.isRunning) return;
     this.isRunning = true;
@@ -61,6 +63,9 @@ export class OrdersExpirationScheduler {
           { order_id: { $in: orderIds } },
           { is_active: false, is_available: false },
         ).exec();
+
+        // Commission PENDING → CONFIRMED (order đã hoàn thành, đủ điều kiện rút)
+        void this.affiliateService.handleOrderExpired(orderIds);
 
         const codes = batch.map(o => o.order_code).join(', ');
         this.logger.log(`Expired batch: ${codes}`);

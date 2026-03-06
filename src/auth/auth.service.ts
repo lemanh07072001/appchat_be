@@ -15,7 +15,7 @@ export class AuthService {
   }
 
   async login(user: any) {
-    const payload = { email: user.email, sub: user.id };
+    const payload = { email: user.email, sub: user.id, role: user.role };
 
     // 1️⃣ Access token (hết hạn nhanh)
     const access_token = this.jwtService.sign(payload, {
@@ -56,7 +56,7 @@ export class AuthService {
       // 🔄 Tạo access token mới
       const newAccessToken = this.jwtService.sign(
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        { email: payload.email, sub: payload.sub  },
+        { email: payload.email, sub: payload.sub, role: payload.role },
         { secret: process.env.JWT_SECRET, expiresIn: '15m' },
       );
 

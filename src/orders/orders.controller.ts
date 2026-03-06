@@ -1,17 +1,28 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { OrdersService } from './orders.service';
+import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { BuyOrderDto } from '../dto/buy-order.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { UserOrderQueryDto } from '../dto/user-order-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
+import { AdminGuard } from '../guards/admin.guard';
 import { OrderStatusEnum, PaymentStatusEnum } from '../enum/order.enum';
 
 @Controller()
 @UseGuards(AuthGuard)
 export class OrdersController {
-  constructor(private readonly ordersService: OrdersService) {}
+  constructor(
+    private readonly ordersService: OrdersService,
+    private readonly expirationScheduler: OrdersExpirationScheduler,
+  ) {}
+
+  @Post('api/admin/orders/run-expiration')
+  @UseGuards(AdminGuard)
+  runExpiration() {
+    return this.expirationScheduler.checkExpiredOrders();
+  }
 
   // ─── User: mua dịch vụ ────────────────────────────────────
   @Post('api/orders/buy')

@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
+import { AffiliateService } from '../affiliate/affiliate.service';
 import { CreateUserDto } from '../dto/create-user.dto';
 import { LoginUserDto } from '../dto/login-user.dto';
 import { AuthGuard } from '../guards/auth.guard';
@@ -20,6 +21,7 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly usersService: UsersService,
+    private readonly affiliateService: AffiliateService,
   ) {}
 
   @Public()
@@ -27,6 +29,10 @@ export class AuthController {
   async register(@Body() createUserDto: CreateUserDto) {
     // Tạo user mới
     const user = await this.usersService.create(createUserDto);
+
+    // Tự động tạo referral_code + gán referred_by nếu có ref
+    console.log('[register] ref received:', createUserDto.ref);
+    await this.affiliateService.initNewUser(user._id.toString(), createUserDto.ref);
 
     // Tự động login sau khi đăng ký thành công
     const { user: userInfo, ...tokens } = await this.authService.login(user);

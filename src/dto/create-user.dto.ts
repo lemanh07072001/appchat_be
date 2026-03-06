@@ -21,4 +21,8 @@ export class CreateUserDto {
   @IsOptional()
   @IsEnum(UserStatusEnum)
   status: UserStatusEnum;
+
+  @IsOptional()
+  @IsString()
+  ref?: string;
 }
