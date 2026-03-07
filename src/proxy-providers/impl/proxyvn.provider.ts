@@ -84,10 +84,7 @@ export class ProxyvnProvider implements IProxyProvider {
     if (!id_service) {
       throw new BadRequestException('ProxyVN: thiếu id_service (loaiproxy)');
     }
-    let loaiproxy = id_service.charAt(0).toUpperCase() + id_service.slice(1);
-    if (loaiproxy === 'us' || loaiproxy === 'Us') {
-      loaiproxy = 'US';
-    }
+    const loaiproxy = id_service;
 
     const url =
       `${this.BASE_URL}/muaproxy.php` +
