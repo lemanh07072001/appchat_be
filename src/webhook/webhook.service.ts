@@ -36,6 +36,8 @@ export class WebhookService {
     }
     const raw = `${tx.id}${tx.gateway}${tx.transactionDate}${tx.accountNumber}${tx.transferAmount}${key}`;
     const computed = crypto.createHash('md5').update(raw).digest('hex');
+    this.logger.debug(`Checksum raw: "${raw}"`);
+    this.logger.debug(`Computed: ${computed} | Expected: ${tx.checksum}`);
     return computed === tx.checksum;
   }
 
