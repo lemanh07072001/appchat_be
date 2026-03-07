@@ -99,7 +99,7 @@ export class ProxyvnProvider implements IProxyProvider {
       `&user=random` +
       `&password=random`;
 
-    this.logger.log(`[BUY] → ${this.BASE_URL}/muaproxy.php?key=***&loaiproxy=${loaiproxy}&soluong=${quantity}&ngay=${duration_days}&type=${type}&user=random&password=random`);
+    this.logger.log(`[BUY] → ${url}`);
 
     const raw = await this.request<any[]>(url);
 
