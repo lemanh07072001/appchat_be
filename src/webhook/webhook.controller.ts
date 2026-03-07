@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, UseGuards, Headers, UnauthorizedException } from '@nestjs/common';
 import { WebhookService } from './webhook.service';
 import { AdminGuard } from '../guards/admin.guard';
 import { Public } from '../guards/public.decorator';
@@ -10,7 +10,15 @@ export class WebhookController {
   // ─── Pays2 gọi vào đây khi có giao dịch ─────────────────────────────────
   @Public()
   @Post('webhook/pays2')
-  handlePays2(@Body() body: { transactions: any[] }) {
+  handlePays2(
+    @Headers('authorization') authorization: string,
+    @Body() body: { transactions: any[] },
+  ) {
+    const token = process.env.PAYS2_WEBHOOK_TOKEN;
+    if (token) {
+      const bearer = (authorization ?? '').replace('Bearer ', '').trim();
+      if (bearer !== token) throw new UnauthorizedException('Invalid webhook token');
+    }
     return this.webhookService.handlePays2(body);
   }
 

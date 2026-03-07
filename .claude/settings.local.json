@@ -8,7 +8,9 @@
       "Bash(npx tsc --noEmit)",
       "Bash(npx ts-node -r tsconfig-paths/register scripts/seed-orders.ts)",
       "Bash(npx ts-node -r tsconfig-paths/register -e \":*)",
-      "Bash(node -e \":*)"
+      "Bash(node -e \":*)",
+      "WebSearch",
+      "WebFetch(domain:docs.pay2s.vn)"
     ]
   }
 }
