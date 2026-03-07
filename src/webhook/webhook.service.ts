@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as crypto from 'crypto';
@@ -211,9 +211,15 @@ export class WebhookService {
     };
   }
 
-  async getList(page = 1, limit = 20, status?: string) {
+  async getList(page = 1, limit = 20, status?: string, source?: string, from_date?: string, to_date?: string) {
     const filter: any = {};
     if (status) filter.status = status;
+    if (source) filter.source = source;
+    if (from_date || to_date) {
+      filter.createdAt = {};
+      if (from_date) filter.createdAt.$gte = new Date(from_date + 'T00:00:00+07:00');
+      if (to_date)   filter.createdAt.$lte = new Date(to_date   + 'T23:59:59.999+07:00');
+    }
     const skip = (page - 1) * limit;
 
     const [data, total] = await Promise.all([
@@ -228,5 +234,56 @@ export class WebhookService {
     ]);
 
     return { data, total, page, limit };
+  }
+
+  // ─── Admin: duyệt giao dịch lỗi — cộng tiền bằng tay ─────────────────
+  async approveTransaction(txId: string, userId?: string) {
+    const tx = await this.txModel.findById(txId).exec();
+    if (!tx) throw new BadRequestException('Giao dịch không tồn tại');
+    if (tx.status === TransactionStatus.PROCESSED) {
+      throw new BadRequestException('Giao dịch này đã được xử lý');
+    }
+
+    // Nếu giao dịch chưa có user_id (unmatched), admin phải truyền user_id
+    const targetUserId = userId || tx.user_id;
+    if (!targetUserId) {
+      throw new BadRequestException('Cần truyền user_id để cộng tiền');
+    }
+
+    const user = await this.userModel.findById(targetUserId).select('_id email money').exec();
+    if (!user) throw new BadRequestException('User không tồn tại');
+
+    const amount = tx.transfer_amount;
+    const balanceBefore = Number(user.money ?? 0);
+    const balanceAfter = balanceBefore + amount;
+
+    await this.userModel.findByIdAndUpdate(user._id, { $inc: { money: amount } }).exec();
+
+    tx.status = TransactionStatus.PROCESSED;
+    tx.user_id = user._id;
+    tx.balance_before = balanceBefore;
+    tx.balance_after = balanceAfter;
+    tx.source = 'manual';
+    tx.note = `Admin duyệt — nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`;
+    await tx.save();
+
+    this.notification.sendTopupSuccess(user._id.toString(), { amount, balance: balanceAfter });
+
+    return { message: `Đã cộng ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`, transaction: tx };
+  }
+
+  // ─── Admin: huỷ giao dịch ─────────────────────────────────────────────
+  async rejectTransaction(txId: string, note?: string) {
+    const tx = await this.txModel.findById(txId).exec();
+    if (!tx) throw new BadRequestException('Giao dịch không tồn tại');
+    if (tx.status === TransactionStatus.PROCESSED) {
+      throw new BadRequestException('Không thể huỷ giao dịch đã xử lý');
+    }
+
+    tx.status = TransactionStatus.FAILED;
+    tx.note = note || 'Admin huỷ giao dịch';
+    await tx.save();
+
+    return { message: 'Đã huỷ giao dịch', transaction: tx };
   }
 }

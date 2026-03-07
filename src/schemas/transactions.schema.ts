@@ -60,6 +60,9 @@ export class Transaction {
   @Prop({ type: Number, default: 0 })
   balance_after: number;            // Số dư sau khi cộng
 
+  @Prop({ default: 'auto' })
+  source: string;                    // auto | manual
+
   @Prop({ default: '' })
   note: string;                     // Ghi chú xử lý (lỗi, lý do, ...)
 }

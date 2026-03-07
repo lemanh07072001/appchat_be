@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { JwtModule } from '@nestjs/jwt';
 import { Transaction, TransactionSchema } from '../schemas/transactions.schema';
 import { User, UserSchema } from '../schemas/users.schema';
 import { WebhookService } from './webhook.service';
@@ -12,6 +13,7 @@ import { NotificationGateway } from './notification.gateway';
       { name: Transaction.name, schema: TransactionSchema },
       { name: User.name,        schema: UserSchema },
     ]),
+    JwtModule,
   ],
   controllers: [WebhookController],
   providers:   [WebhookService, NotificationGateway],

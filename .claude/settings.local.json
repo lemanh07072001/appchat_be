@@ -10,7 +10,8 @@
       "Bash(npx ts-node -r tsconfig-paths/register -e \":*)",
       "Bash(node -e \":*)",
       "WebSearch",
-      "WebFetch(domain:docs.pay2s.vn)"
+      "WebFetch(domain:docs.pay2s.vn)",
+      "Bash(npx ts-node src/seeds/seed-transactions.ts)"
     ]
   }
 }
