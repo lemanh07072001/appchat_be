@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import * as crypto from 'crypto';
 import { Transaction, TransactionDocument, TransactionStatus } from '../schemas/transactions.schema';
 import { User, UserDocument } from '../schemas/users.schema';
+import { NotificationGateway } from './notification.gateway';
 
 interface Pays2Transaction {
   id: number;
@@ -24,6 +25,7 @@ export class WebhookService {
   constructor(
     @InjectModel(Transaction.name) private txModel: Model<TransactionDocument>,
     @InjectModel(User.name)        private userModel: Model<UserDocument>,
+    private readonly notification: NotificationGateway,
   ) {}
 
   // ─── Xác minh checksum pays2 ──────────────────────────────────────────────
@@ -173,6 +175,7 @@ export class WebhookService {
         });
 
         this.logger.log(`Webhook #${tx.id}: nạp ${tx.transferAmount}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
+        this.notification.sendTopupSuccess(user._id.toString(), { amount, balance: balanceAfter });
         results.push(`#${tx.id}: processed → ${user.email}`);
 
       } catch (err: any) {

@@ -4,6 +4,7 @@ import { Transaction, TransactionSchema } from '../schemas/transactions.schema';
 import { User, UserSchema } from '../schemas/users.schema';
 import { WebhookService } from './webhook.service';
 import { WebhookController } from './webhook.controller';
+import { NotificationGateway } from './notification.gateway';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { WebhookController } from './webhook.controller';
     ]),
   ],
   controllers: [WebhookController],
-  providers:   [WebhookService],
+  providers:   [WebhookService, NotificationGateway],
+  exports:     [NotificationGateway],
 })
 export class WebhookModule {}
