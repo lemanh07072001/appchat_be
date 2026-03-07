@@ -29,6 +29,8 @@ async function seed() {
 
   const Transaction = mongoose.model('Transaction', TransactionSchema, 'transactions');
 
+  const uid = new mongoose.Types.ObjectId('69aab52b6b04c92bf301f30c');
+
   const transactions = [
     // 1. Auto - Processed (thành công)
     {
@@ -44,6 +46,7 @@ async function seed() {
       checksum: 'abc123',
       status: 'processed',
       source: 'auto',
+      user_id: uid,
       balance_before: 100000,
       balance_after: 600000,
       note: 'Nạp 500.000đ cho user@example.com',
@@ -62,6 +65,7 @@ async function seed() {
       checksum: 'def456',
       status: 'processed',
       source: 'auto',
+      user_id: uid,
       balance_before: 200000,
       balance_after: 1200000,
       note: 'Nạp 1.000.000đ cho admin@proxy.vn',
@@ -96,6 +100,7 @@ async function seed() {
       checksum: 'invalid_checksum',
       status: 'failed',
       source: 'auto',
+      user_id: uid,
       note: 'Checksum không hợp lệ',
     },
     // 5. Auto - Pending (chờ xử lý - trùng giao dịch)
@@ -112,7 +117,8 @@ async function seed() {
       checksum: 'jkl012',
       status: 'pending',
       source: 'auto',
-      note: 'Trùng giao dịch — user: admin@proxy.vn, cần admin xác nhận',
+      user_id: uid,
+      note: 'Trùng giao dịch — cần admin xác nhận',
     },
     // 6. Manual - Processed (admin nạp tay thành công)
     {
@@ -128,9 +134,10 @@ async function seed() {
       checksum: '',
       status: 'processed',
       source: 'manual',
+      user_id: uid,
       balance_before: 500000,
       balance_after: 2500000,
-      note: 'Admin nạp tay 2.000.000đ cho vip@example.com',
+      note: 'Admin nạp tay 2.000.000đ',
     },
     // 7. Manual - Processed
     {
@@ -146,9 +153,10 @@ async function seed() {
       checksum: '',
       status: 'processed',
       source: 'manual',
-      balance_before: 0,
-      balance_after: 150000,
-      note: 'Hoàn tiền 150.000đ cho test@gmail.com - đơn lỗi',
+      user_id: uid,
+      balance_before: 2500000,
+      balance_after: 2650000,
+      note: 'Hoàn tiền 150.000đ - đơn lỗi',
     },
     // 8. Auto - Processed
     {
@@ -164,9 +172,10 @@ async function seed() {
       checksum: 'mno345',
       status: 'processed',
       source: 'auto',
+      user_id: uid,
       balance_before: 50000,
       balance_after: 800000,
-      note: 'Nạp 750.000đ cho buyer@gmail.com',
+      note: 'Nạp 750.000đ',
     },
     // 9. Auto - Failed
     {
@@ -182,6 +191,7 @@ async function seed() {
       checksum: 'bad_hash',
       status: 'failed',
       source: 'auto',
+      user_id: uid,
       note: 'Checksum không hợp lệ',
     },
     // 10. Manual - Processed (khuyến mãi)
@@ -198,9 +208,189 @@ async function seed() {
       checksum: '',
       status: 'processed',
       source: 'manual',
+      user_id: uid,
       balance_before: 800000,
       balance_after: 900000,
-      note: 'Khuyến mãi tháng 3 - tặng 100.000đ cho buyer@gmail.com',
+      note: 'Khuyến mãi tháng 3 - tặng 100.000đ',
+    },
+    // 11. Auto - Rejected (admin huỷ)
+    {
+      transaction_id: 900011,
+      gateway: 'VCB',
+      transaction_date: new Date('2026-03-06T09:00:00Z'),
+      transaction_number: 'FT900011',
+      account_number: '1234567890',
+      content: 'NAP99887766 nap tien',
+      code: 'NAP99887766',
+      transfer_type: 'IN',
+      transfer_amount: 50000,
+      checksum: 'xyz111',
+      status: 'rejected',
+      source: 'auto',
+      user_id: uid,
+      note: 'Admin huỷ — giao dịch đáng ngờ',
+    },
+    // 12. Auto - Processed (ngày cũ hơn)
+    {
+      transaction_id: 900012,
+      gateway: 'TCB',
+      transaction_date: new Date('2026-03-05T14:20:00Z'),
+      transaction_number: 'FT900012',
+      account_number: '7778889990',
+      content: 'NAPAABB0011 mua proxy residential',
+      code: 'NAPAABB0011',
+      transfer_type: 'IN',
+      transfer_amount: 2000000,
+      checksum: 'pqr222',
+      status: 'processed',
+      source: 'auto',
+      user_id: uid,
+      balance_before: 0,
+      balance_after: 2000000,
+      note: 'Nạp 2.000.000đ',
+    },
+    // 13. Auto - Unmatched
+    {
+      transaction_id: 900013,
+      gateway: 'MB',
+      transaction_date: new Date('2026-03-05T10:00:00Z'),
+      transaction_number: 'FT900013',
+      account_number: '3334445556',
+      content: 'NGUYEN VAN A chuyen tien',
+      code: '',
+      transfer_type: 'IN',
+      transfer_amount: 450000,
+      checksum: 'stu333',
+      status: 'unmatched',
+      source: 'auto',
+      note: 'Không tìm được user trong nội dung CK',
+    },
+    // 14. Auto - Rejected
+    {
+      transaction_id: 900014,
+      gateway: 'ACB',
+      transaction_date: new Date('2026-03-04T08:30:00Z'),
+      transaction_number: 'FT900014',
+      account_number: '1112223334',
+      content: 'NAP11223344 test',
+      code: 'NAP11223344',
+      transfer_type: 'IN',
+      transfer_amount: 10000,
+      checksum: 'vwx444',
+      status: 'rejected',
+      source: 'auto',
+      user_id: uid,
+      note: 'Admin huỷ — số tiền quá nhỏ, nghi spam',
+    },
+    // 15. Manual - Processed (hoàn tiền)
+    {
+      transaction_id: 900015,
+      gateway: 'MANUAL',
+      transaction_date: new Date('2026-03-04T15:00:00Z'),
+      transaction_number: '',
+      account_number: '',
+      content: 'Hoàn tiền proxy lỗi #ORD456',
+      code: '',
+      transfer_type: 'IN',
+      transfer_amount: 350000,
+      checksum: '',
+      status: 'processed',
+      source: 'manual',
+      user_id: uid,
+      balance_before: 1200000,
+      balance_after: 1550000,
+      note: 'Hoàn tiền 350.000đ - proxy lỗi',
+    },
+    // 16. Auto - Processed
+    {
+      transaction_id: 900016,
+      gateway: 'VPB',
+      transaction_date: new Date('2026-03-03T11:45:00Z'),
+      transaction_number: 'FT900016',
+      account_number: '6667778889',
+      content: 'NAPCC00DD11 nap proxy ipv6',
+      code: 'NAPCC00DD11',
+      transfer_type: 'IN',
+      transfer_amount: 300000,
+      checksum: 'aaa555',
+      status: 'processed',
+      source: 'auto',
+      user_id: uid,
+      balance_before: 150000,
+      balance_after: 450000,
+      note: 'Nạp 300.000đ',
+    },
+    // 17. Auto - Pending
+    {
+      transaction_id: 900017,
+      gateway: 'VCB',
+      transaction_date: new Date('2026-03-03T16:00:00Z'),
+      transaction_number: 'FT900017',
+      account_number: '1234567890',
+      content: 'NAP3F9A2C1D nap them',
+      code: 'NAP3F9A2C1D',
+      transfer_type: 'IN',
+      transfer_amount: 500000,
+      checksum: 'bbb666',
+      status: 'pending',
+      source: 'auto',
+      user_id: uid,
+      note: 'Trùng giao dịch — cần admin xác nhận',
+    },
+    // 18. Auto - Failed
+    {
+      transaction_id: 900018,
+      gateway: 'TCB',
+      transaction_date: new Date('2026-03-02T09:30:00Z'),
+      transaction_number: 'FT900018',
+      account_number: '5555666677',
+      content: 'NAPDEADBEEF proxy',
+      code: 'NAPDEADBEEF',
+      transfer_type: 'IN',
+      transfer_amount: 800000,
+      checksum: 'wrong_hash',
+      status: 'failed',
+      source: 'auto',
+      user_id: uid,
+      note: 'Checksum không hợp lệ',
+    },
+    // 19. Manual - Processed (thưởng)
+    {
+      transaction_id: 900019,
+      gateway: 'MANUAL',
+      transaction_date: new Date('2026-03-01T10:00:00Z'),
+      transaction_number: '',
+      account_number: '',
+      content: 'Thưởng top user tháng 2',
+      code: '',
+      transfer_type: 'IN',
+      transfer_amount: 500000,
+      checksum: '',
+      status: 'processed',
+      source: 'manual',
+      user_id: uid,
+      balance_before: 900000,
+      balance_after: 1400000,
+      note: 'Thưởng 500.000đ - top user tháng 2',
+    },
+    // 20. Auto - Processed
+    {
+      transaction_id: 900020,
+      gateway: 'MB',
+      transaction_date: new Date('2026-03-01T14:00:00Z'),
+      transaction_number: 'FT900020',
+      account_number: '9876543210',
+      content: 'NAPEE00FF22 thanh toan proxy',
+      code: 'NAPEE00FF22',
+      transfer_type: 'IN',
+      transfer_amount: 1500000,
+      checksum: 'ccc777',
+      status: 'processed',
+      source: 'auto',
+      user_id: uid,
+      balance_before: 0,
+      balance_after: 1500000,
+      note: 'Nạp 1.500.000đ',
     },
   ];
 
@@ -217,7 +407,7 @@ async function seed() {
     }
   }
 
-  console.log('\nDone! 10 sample transactions seeded.');
+  console.log('\nDone! 20 sample transactions seeded.');
   await mongoose.disconnect();
 }
 

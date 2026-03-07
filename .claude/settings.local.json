@@ -11,7 +11,10 @@
       "Bash(node -e \":*)",
       "WebSearch",
       "WebFetch(domain:docs.pay2s.vn)",
-      "Bash(npx ts-node src/seeds/seed-transactions.ts)"
+      "Bash(npx ts-node src/seeds/seed-transactions.ts)",
+      "Bash(npx ts-node -e \":*)",
+      "Bash(npx ts-node -e \"import * as mongoose from ''mongoose''; import * as dotenv from ''dotenv''; dotenv.config\\(\\); async function run\\(\\) { const uri = process.env.MONGO_URI || ''mongodb://localhost:27017/proxydb''; await mongoose.connect\\(uri\\); console.log\\(''Connected''\\); const r = await mongoose.connection.db.collection\\(''transactions''\\).deleteMany\\({ transaction_id: { $gte: 900001, $lte: 900020 } }\\); console.log\\(''Deleted:'', r.deletedCount\\); await mongoose.disconnect\\(\\); } run\\(\\).catch\\(console.error\\);\")",
+      "Bash(npx ts-node src/seeds/delete-seed-transactions.ts)"
     ]
   }
 }

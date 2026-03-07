@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Param, Query, UseGuards, Headers, UnauthorizedException } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, Query, Req, UseGuards, Headers, UnauthorizedException } from '@nestjs/common';
 import { WebhookService } from './webhook.service';
 import { AuthGuard } from '../guards/auth.guard';
 import { AdminGuard } from '../guards/admin.guard';
@@ -8,6 +8,26 @@ import { Public } from '../guards/public.decorator';
 @UseGuards(AuthGuard)
 export class WebhookController {
   constructor(private readonly webhookService: WebhookService) {}
+
+  // ─── User: lịch sử nạp tiền của chính mình ─────────────────────────────
+  @Get('transactions')
+  getUserTransactions(
+    @Req() req: any,
+    @Query('page')      page      = '1',
+    @Query('limit')     limit     = '10',
+    @Query('status')    status?: string,
+    @Query('from_date') from_date?: string,
+    @Query('to_date')   to_date?: string,
+  ) {
+    return this.webhookService.getUserTransactions(
+      req.user.sub,
+      Number(page),
+      Number(limit),
+      status,
+      from_date,
+      to_date,
+    );
+  }
 
   // ─── Pays2 gọi vào đây khi có giao dịch ─────────────────────────────────
   @Public()
@@ -36,7 +56,7 @@ export class WebhookController {
   @Get('admin/transactions')
   getList(
     @Query('page')      page      = '1',
-    @Query('limit')     limit     = '20',
+    @Query('limit')     limit     = '10',
     @Query('status')    status?: string,
     @Query('source')    source?: string,
     @Query('from_date') from_date?: string,

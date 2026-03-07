@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import * as crypto from 'crypto';
 import { Transaction, TransactionDocument, TransactionStatus } from '../schemas/transactions.schema';
 import { User, UserDocument } from '../schemas/users.schema';
@@ -187,6 +187,48 @@ export class WebhookService {
     return { success: true, message: results.join(', ') };
   }
 
+  // ─── User: lịch sử nạp tiền của chính mình ───────────────────────────────
+  async getUserTransactions(
+    userId: string,
+    page = 1,
+    limit = 20,
+    status?: string,
+    from_date?: string,
+    to_date?: string,
+  ) {
+    const filter: any = { user_id: new Types.ObjectId(userId), transfer_type: 'IN' };
+    if (status) filter.status = status;
+    if (from_date || to_date) {
+      filter.createdAt = {};
+      if (from_date) filter.createdAt.$gte = new Date(from_date + 'T00:00:00+07:00');
+      if (to_date)   filter.createdAt.$lte = new Date(to_date   + 'T23:59:59.999+07:00');
+    }
+    const skip = (page - 1) * limit;
+
+    const [data, total, totalAmount] = await Promise.all([
+      this.txModel
+        .find(filter)
+        .select('transaction_id gateway transaction_date transfer_amount status source note createdAt')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.txModel.countDocuments(filter),
+      this.txModel.aggregate([
+        { $match: { user_id: new Types.ObjectId(userId), status: TransactionStatus.PROCESSED } },
+        { $group: { _id: null, total: { $sum: '$transfer_amount' } } },
+      ]),
+    ]);
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      total_deposited: totalAmount[0]?.total ?? 0,
+    };
+  }
+
   // ─── API thống kê (admin) ─────────────────────────────────────────────────
   async getStats() {
     const [total, processed, unmatched, failed, duplicate, totalAmount] = await Promise.all([
@@ -278,6 +320,9 @@ export class WebhookService {
     if (!tx) throw new BadRequestException('Giao dịch không tồn tại');
     if (tx.status === TransactionStatus.PROCESSED) {
       throw new BadRequestException('Không thể huỷ giao dịch đã xử lý');
+    }
+    if (tx.status === TransactionStatus.REJECTED) {
+      throw new BadRequestException('Giao dịch đã bị huỷ');
     }
 
     tx.status = TransactionStatus.REJECTED;
