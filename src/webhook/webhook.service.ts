@@ -79,7 +79,10 @@ export class WebhookService {
           continue;
         }
 
-        // 2. Xác minh checksum
+        // 2. Tìm user từ nội dung CK (trước checksum để có user_id khi log)
+        const user = await this.findUserFromContent(tx.content);
+
+        // 3. Xác minh checksum
         if (!this.verifyChecksum(tx)) {
           await this.txModel.create({
             transaction_id:     tx.id,
@@ -89,17 +92,15 @@ export class WebhookService {
             account_number:     tx.accountNumber,
             content:            tx.content,
             transfer_type:      tx.transferType,
-            transfer_amount:    tx.transferAmount,
+            transfer_amount:    Number(tx.transferAmount),
             checksum:           tx.checksum,
             status:             TransactionStatus.FAILED,
+            user_id:            user?._id ?? null,
             note:               'Checksum không hợp lệ',
           });
           results.push(`#${tx.id}: checksum invalid`);
           continue;
         }
-
-        // 3. Tìm user từ nội dung CK
-        const user = await this.findUserFromContent(tx.content);
 
         if (!user) {
           // User không tồn tại — lưu lại để admin xử lý sau
@@ -136,10 +137,14 @@ export class WebhookService {
         }
 
         // 5. User đúng + không trùng → cộng tiền
-        const balanceBefore = user.money ?? 0;
-        const balanceAfter  = balanceBefore + tx.transferAmount;
+        const amount        = Number(tx.transferAmount);
+        const balanceBefore = Number(user.money ?? 0);
+        const balanceAfter  = balanceBefore + amount;
 
-        await this.userModel.findByIdAndUpdate(user._id, { money: balanceAfter }).exec();
+        await this.userModel.findByIdAndUpdate(
+          user._id,
+          { $inc: { money: amount } },
+        ).exec();
 
         await this.txModel.create({
           transaction_id:     tx.id,
@@ -149,13 +154,13 @@ export class WebhookService {
           account_number:     tx.accountNumber,
           content:            tx.content,
           transfer_type:      tx.transferType,
-          transfer_amount:    tx.transferAmount,
+          transfer_amount:    amount,
           checksum:           tx.checksum,
           status:             TransactionStatus.PROCESSED,
           user_id:            user._id,
           balance_before:     balanceBefore,
           balance_after:      balanceAfter,
-          note:               `Nạp ${tx.transferAmount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+          note:               `Nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
         });
 
         this.logger.log(`Webhook #${tx.id}: nạp ${tx.transferAmount}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
