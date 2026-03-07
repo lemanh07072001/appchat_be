@@ -5,6 +5,7 @@ import { Model } from 'mongoose';
 import { BadRequestException } from '@nestjs/common';
 import { CreateUserDto } from '../dto/create-user.dto';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class UsersService {
@@ -36,6 +37,16 @@ export class UsersService {
     return null;
   }
 
+  private async generateTopupCode(): Promise<string> {
+    let code: string;
+    let exists: boolean;
+    do {
+      code = 'NAP' + crypto.randomBytes(4).toString('hex').toUpperCase(); // VD: NAP3F9A2C1D
+      exists = !!(await this.userModel.findOne({ topup_code: code }).exec());
+    } while (exists);
+    return code;
+  }
+
   async create(data: CreateUserDto): Promise<UserDocument> {
     const existingUser = await this.fineByEmail(data.email);
 
@@ -53,9 +64,12 @@ export class UsersService {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(data.password, salt);
 
+    const topup_code = await this.generateTopupCode();
+
     const user = new this.userModel({
       ...data,
       password: hashedPassword,
+      topup_code,
     });
     return user.save();
   }

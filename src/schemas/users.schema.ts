@@ -39,6 +39,10 @@ export class User {
   @Prop({ default: '' })
   country: string;
 
+  // ─── Mã nạp tiền ──────────────────────────────────────────
+  @Prop({ default: '', unique: true, sparse: true })
+  topup_code: string;           // Mã định danh khi chuyển khoản, VD: NAP123456
+
   // ─── Affiliate ────────────────────────────────────────────
   @Prop({ default: '', unique: true, sparse: true })
   referral_code: string;

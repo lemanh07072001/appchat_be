@@ -74,6 +74,12 @@ export class OrdersController {
     return this.ordersService.renew(id);
   }
 
+  @Post('api/admin/orders/:id/approve-refund')
+  @UseGuards(AdminGuard)
+  approveRefund(@Param('id') id: string) {
+    return this.ordersService.approveRefund(id);
+  }
+
   @Delete('api/admin/orders/:id')
   delete(@Param('id') id: string) {
     return this.ordersService.delete(id);

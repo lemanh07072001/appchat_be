@@ -1,6 +1,5 @@
-import { Body, Injectable, Post, UnauthorizedException  } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
-import { LoginUserDto } from '../dto/login-user.dto';
 import { JwtService } from '@nestjs/jwt';
 
 @Injectable()
@@ -37,6 +36,7 @@ export class AuthService {
         money: user.money ?? 0,
         role: user.role,
         country: user.country ?? '',
+        topup_code: user.topup_code ?? '',
       },
       access_token,
       refresh_token,

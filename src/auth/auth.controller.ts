@@ -49,6 +49,7 @@ export class AuthController {
         avatar: user.avatar,
         role: user.role,
         status: user.status,
+        topup_code: user.topup_code,
         email_verified_at: user.email_verified_at,
         last_login_at: user.last_login_at,
         createdAt: user.createdAt,
@@ -83,6 +84,7 @@ export class AuthController {
       money: user.money ?? 0,
       role: user.role,
       country: user.country ?? '',
+      topup_code: user.topup_code ?? '',
     };
   }
 

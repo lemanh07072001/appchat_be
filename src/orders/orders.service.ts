@@ -329,6 +329,32 @@ export class OrdersService {
     return saved;
   }
 
+  async approveRefund(id: string): Promise<OrderDocument> {
+    const order = await this.orderModel.findById(id).exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    if (order.status !== OrderStatusEnum.PENDING_REFUND) {
+      throw new BadRequestException('Order không ở trạng thái PENDING_REFUND');
+    }
+
+    if (order.payment_method !== PaymentMethodEnum.BALANCE) {
+      throw new BadRequestException('Chỉ hoàn tiền được với đơn thanh toán bằng số dư');
+    }
+
+    const refundAmount = order.total_price ?? 0;
+    if (refundAmount <= 0) throw new BadRequestException('Số tiền hoàn không hợp lệ');
+
+    await this.userModel.findByIdAndUpdate(
+      order.user_id,
+      { $inc: { money: refundAmount } },
+    ).exec();
+
+    order.refunded_amount = refundAmount;
+    order.status = OrderStatusEnum.FAILED;
+    order.payment_status = PaymentStatusEnum.REFUNDED;
+    return order.save();
+  }
+
   async delete(id: string) {
     const order = await this.orderModel.findByIdAndDelete(id).exec();
     if (!order) throw new BadRequestException('Order not found');
