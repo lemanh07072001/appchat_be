@@ -47,6 +47,10 @@ export class CreateServiceDto {
   isp?: { name: string; code: string }[];
 
   @IsOptional()
+  @IsString()
+  usage_type?: string;
+
+  @IsOptional()
   @IsBoolean()
   is_show?: boolean;
 

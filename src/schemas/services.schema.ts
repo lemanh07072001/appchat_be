@@ -44,6 +44,9 @@ export class Service {
   @Prop({ type: [{ name: String, code: String }], default: [] })
   isp: { name: string; code: string }[];
 
+  @Prop({ default: 'private' })
+  usage_type: string;
+
   @Prop({ default: true })
   is_show: boolean;
 

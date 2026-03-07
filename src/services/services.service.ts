@@ -12,9 +12,11 @@ export class ServicesService {
     private serviceModel: Model<ServiceDocument>,
   ) {}
 
-  async findPublicList(category?: 'static' | 'rotating') {
+  async findPublicList(category?: 'static' | 'rotating', usage_type?: string, ip_version?: string) {
     const filter: any = { status: true };
     if (category) filter.type = category;
+    if (usage_type) filter.usage_type = usage_type;
+    if (ip_version) filter.ip_version = ip_version;
     return this.serviceModel
       .find(filter)
       .populate('country', 'name code')
