@@ -44,8 +44,7 @@ export class CreateServiceDto {
 
   @IsOptional()
   @IsArray()
-  @IsString({ each: true })
-  isp?: string[];
+  isp?: { name: string; code: string }[];
 
   @IsOptional()
   @IsBoolean()

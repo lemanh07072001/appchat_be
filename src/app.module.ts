@@ -13,6 +13,7 @@ import { OrdersModule } from './orders/orders.module';
 import { RedisModule } from './redis/redis.module';
 import { AffiliateModule } from './affiliate/affiliate.module';
 import { WebhookModule } from './webhook/webhook.module';
+import { IpsModule } from './ips/ips.module';
 
 @Module({
   imports: [
@@ -51,6 +52,8 @@ import { WebhookModule } from './webhook/webhook.module';
     AffiliateModule,
 
     WebhookModule,
+
+    IpsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

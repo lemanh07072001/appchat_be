@@ -41,8 +41,8 @@ export class Service {
   @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
   note: Record<string, string>;
 
-  @Prop({ type: [String], default: [] })
-  isp: string[];
+  @Prop({ type: [{ name: String, code: String }], default: [] })
+  isp: { name: string; code: string }[];
 
   @Prop({ default: true })
   is_show: boolean;
