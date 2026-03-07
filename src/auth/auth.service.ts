@@ -31,6 +31,7 @@ export class AuthService {
     // 3️⃣ Trả về cho client
     return {
       user: {
+        id: user.id ?? user._id,
         email: user.email,
         name: user.name,
         money: user.money ?? 0,
