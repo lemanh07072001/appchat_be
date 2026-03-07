@@ -280,7 +280,7 @@ export class WebhookService {
       throw new BadRequestException('Không thể huỷ giao dịch đã xử lý');
     }
 
-    tx.status = TransactionStatus.FAILED;
+    tx.status = TransactionStatus.REJECTED;
     tx.note = note || 'Admin huỷ giao dịch';
     await tx.save();
 

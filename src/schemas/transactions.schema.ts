@@ -12,6 +12,7 @@ export enum TransactionStatus {
   UNMATCHED  = 'unmatched',   // Không tìm được user
   DUPLICATE  = 'duplicate',   // Trùng transaction_id
   FAILED     = 'failed',      // Lỗi khi xử lý
+  REJECTED   = 'rejected',    // Admin huỷ giao dịch
 }
 
 @Schema({ timestamps: true })
