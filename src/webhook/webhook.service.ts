@@ -48,13 +48,16 @@ export class WebhookService {
 
     // 1. Tìm topup_code dạng NAP + 8 ký tự hex
     const match = text.match(/NAP[0-9A-F]{8}/);
+    this.logger.debug(`findUser — content: "${content}" | match: ${match?.[0] ?? 'null'}`);
     if (match) {
       const user = await this.userModel
         .findOne({ topup_code: match[0] })
         .select('_id email money topup_code')
         .exec();
+      this.logger.debug(`findUser — topup_code: ${match[0]} | user: ${user?.email ?? 'not found'}`);
       if (user) return user;
     }
+    
 
     // 2. Fallback: tìm theo email trong nội dung
     const emailMatch = content.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
@@ -82,6 +85,7 @@ export class WebhookService {
         }
 
         // 2. Tìm user từ nội dung CK (trước checksum để có user_id khi log)
+        const code = tx.content.toUpperCase().match(/NAP[0-9A-F]{8}/)?.[0] ?? '';
         const user = await this.findUserFromContent(tx.content);
 
         // 3. Xác minh checksum
@@ -93,6 +97,7 @@ export class WebhookService {
             transaction_number: tx.transactionNumber,
             account_number:     tx.accountNumber,
             content:            tx.content,
+            code,
             transfer_type:      tx.transferType,
             transfer_amount:    Number(tx.transferAmount),
             checksum:           tx.checksum,
@@ -113,6 +118,7 @@ export class WebhookService {
             transaction_number: tx.transactionNumber,
             account_number:     tx.accountNumber,
             content:            tx.content,
+            code,
             transfer_type:      tx.transferType,
             transfer_amount:    tx.transferAmount,
             checksum:           tx.checksum,
@@ -155,6 +161,7 @@ export class WebhookService {
           transaction_number: tx.transactionNumber,
           account_number:     tx.accountNumber,
           content:            tx.content,
+          code,
           transfer_type:      tx.transferType,
           transfer_amount:    amount,
           checksum:           tx.checksum,

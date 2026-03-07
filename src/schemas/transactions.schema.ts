@@ -35,6 +35,9 @@ export class Transaction {
   @Prop({ default: '' })
   content: string;            // Nội dung chuyển khoản (chứa mã user)
 
+  @Prop({ default: '' })
+  code: string;               // Mã nạp tiền tách từ content (VD: NAP123456)
+
   @Prop({ default: 'IN' })
   transfer_type: string;      // IN | OUT
 
