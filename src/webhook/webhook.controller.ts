@@ -70,9 +70,9 @@ export class WebhookController {
   @Post('admin/transactions/:id/approve')
   approve(
     @Param('id') id: string,
-    @Body('user_id') userId: string,
+    @Body('email') email?: string,
   ) {
-    return this.webhookService.approveTransaction(id, userId);
+    return this.webhookService.approveTransaction(id, email);
   }
 
   // ─── Admin: huỷ giao dịch ─────────────────────────────────────────────

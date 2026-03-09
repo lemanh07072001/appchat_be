@@ -1,21 +1,74 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { User, UserDocument } from '../schemas/users.schema';
+import { Transaction, TransactionDocument, TransactionStatus } from '../schemas/transactions.schema';
 import { Model } from 'mongoose';
-import { BadRequestException } from '@nestjs/common';
 import { CreateUserDto } from '../dto/create-user.dto';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     @InjectModel(User.name)
     private userModel: Model<UserDocument>,
+    @InjectModel(Transaction.name)
+    private txModel: Model<TransactionDocument>,
   ) {}
 
   async findAll() {
     return await this.userModel.find().exec();
+  }
+
+  async findAllPaginated(
+    page = 1,
+    limit = 10,
+    search?: string,
+    status?: number,
+    role?: number,
+  ) {
+    const filter: any = {};
+
+    if (search) {
+      const regex = new RegExp(search, 'i');
+      filter.$or = [
+        { name: regex },
+        { email: regex },
+        { topup_code: regex },
+      ];
+    }
+
+    if (status != null) filter.status = status;
+    if (role != null) filter.role = role;
+
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      this.userModel
+        .find(filter)
+        .select('-password')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .exec(),
+      this.userModel.countDocuments(filter),
+    ]);
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  async findById(id: string) {
+    const user = await this.userModel.findById(id).select('-password').exec();
+    if (!user) throw new BadRequestException('User không tồn tại');
+    return user;
   }
 
   async fineByEmail(email: string) {
@@ -41,7 +94,7 @@ export class UsersService {
     let code: string;
     let exists: boolean;
     do {
-      code = 'NAP' + crypto.randomBytes(4).toString('hex').toUpperCase(); // VD: NAP3F9A2C1D
+      code = 'NAP' + crypto.randomBytes(4).toString('hex').toUpperCase();
       exists = !!(await this.userModel.findOne({ topup_code: code }).exec());
     } while (exists);
     return code;
@@ -50,7 +103,6 @@ export class UsersService {
   async create(data: CreateUserDto): Promise<UserDocument> {
     const existingUser = await this.fineByEmail(data.email);
 
-    // 🔹 Kiểm tra Email có trong cơ sở dữ liệu không?
     if (existingUser) {
       throw new BadRequestException({
         message: 'Validation failed',
@@ -60,7 +112,6 @@ export class UsersService {
       });
     }
 
-    // 🔹 Hash mật khẩu trước khi lưu
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(data.password, salt);
 
@@ -72,5 +123,86 @@ export class UsersService {
       topup_code,
     });
     return user.save();
+  }
+
+  async update(id: string, data: any) {
+    // Nếu đổi password → hash lại
+    if (data.password) {
+      const salt = await bcrypt.genSalt(10);
+      data.password = await bcrypt.hash(data.password, salt);
+    } else {
+      delete data.password;
+    }
+
+    // Không cho sửa email trùng
+    if (data.email) {
+      const existing = await this.userModel.findOne({ email: data.email, _id: { $ne: id } }).exec();
+      if (existing) {
+        throw new BadRequestException('Email đã tồn tại');
+      }
+    }
+
+    const user = await this.userModel
+      .findByIdAndUpdate(id, data, { new: true })
+      .select('-password')
+      .exec();
+    if (!user) throw new BadRequestException('User không tồn tại');
+    return user;
+  }
+
+  async delete(id: string) {
+    const user = await this.userModel.findByIdAndDelete(id).exec();
+    if (!user) throw new BadRequestException('User không tồn tại');
+    return { message: 'Xoá user thành công' };
+  }
+
+  async deleteMany(ids: string[]) {
+    if (!ids?.length) throw new BadRequestException('Cần truyền danh sách ids');
+    const result = await this.userModel.deleteMany({ _id: { $in: ids } }).exec();
+    return { message: `Đã xoá ${result.deletedCount} user` };
+  }
+
+  // ─── Admin: nạp tiền cho user ─────────────────────────────────────────
+  async deposit(userId: string, amount: number, note?: string) {
+    if (!amount || amount <= 0) {
+      throw new BadRequestException('Số tiền phải lớn hơn 0');
+    }
+
+    const user = await this.userModel.findById(userId).select('_id email money').exec();
+    if (!user) throw new BadRequestException('User không tồn tại');
+
+    const balanceBefore = Number(user.money ?? 0);
+    const balanceAfter = balanceBefore + amount;
+
+    await this.userModel.findByIdAndUpdate(user._id, { $inc: { money: amount } }).exec();
+
+    // Lưu vào lịch sử giao dịch
+    const txId = Date.now() + Math.floor(Math.random() * 1000);
+    await this.txModel.create({
+      transaction_id: txId,
+      gateway: 'MANUAL',
+      transaction_date: new Date(),
+      transaction_number: '',
+      account_number: '',
+      content: note || `Admin nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+      code: '',
+      transfer_type: 'IN',
+      transfer_amount: amount,
+      checksum: '',
+      status: TransactionStatus.PROCESSED,
+      user_id: user._id,
+      balance_before: balanceBefore,
+      balance_after: balanceAfter,
+      source: 'manual',
+      note: note || `Admin nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+    });
+
+    this.logger.log(`Deposit: +${amount.toLocaleString('vi-VN')}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
+
+    return {
+      message: `Đã nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+      balance_before: balanceBefore,
+      balance_after: balanceAfter,
+    };
   }
 }

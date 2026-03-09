@@ -279,21 +279,26 @@ export class WebhookService {
   }
 
   // ─── Admin: duyệt giao dịch lỗi — cộng tiền bằng tay ─────────────────
-  async approveTransaction(txId: string, userId?: string) {
+  async approveTransaction(txId: string, email?: string) {
     const tx = await this.txModel.findById(txId).exec();
     if (!tx) throw new BadRequestException('Giao dịch không tồn tại');
     if (tx.status === TransactionStatus.PROCESSED) {
       throw new BadRequestException('Giao dịch này đã được xử lý');
     }
 
-    // Nếu giao dịch chưa có user_id (unmatched), admin phải truyền user_id
-    const targetUserId = userId || tx.user_id;
-    if (!targetUserId) {
-      throw new BadRequestException('Cần truyền user_id để cộng tiền');
-    }
+    let user: UserDocument | null = null;
 
-    const user = await this.userModel.findById(targetUserId).select('_id email money').exec();
-    if (!user) throw new BadRequestException('User không tồn tại');
+    // Nếu admin truyền email → tìm theo email
+    if (email) {
+      user = await this.userModel.findOne({ email }).select('_id email money').exec();
+      if (!user) throw new BadRequestException(`Không tìm thấy user với email: ${email}`);
+    } else if (tx.user_id) {
+      // Fallback: dùng user_id đã có trong giao dịch
+      user = await this.userModel.findById(tx.user_id).select('_id email money').exec();
+      if (!user) throw new BadRequestException('User không tồn tại');
+    } else {
+      throw new BadRequestException('Cần nhập email để cộng tiền');
+    }
 
     const amount = tx.transfer_amount;
     const balanceBefore = Number(user.money ?? 0);
