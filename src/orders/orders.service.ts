@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import * as crypto from 'crypto';
 import { Order, OrderDocument } from '../schemas/orders.schema';
 import { User, UserDocument } from '../schemas/users.schema';
 import { Service, ServiceDocument } from '../schemas/services.schema';
@@ -37,9 +38,8 @@ export class OrdersService {
   }
 
   private generateOrderCode(): string {
-    const date = new Date();
-    const datePart = date.toISOString().slice(0, 10).replace(/-/g, '');
-    const rand = Math.random().toString(36).substring(2, 7).toUpperCase();
+    const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const rand = crypto.randomBytes(5).toString('hex').toUpperCase(); // 10 hex chars ≈ 1 trillion combinations
     return `ORD-${datePart}-${rand}`;
   }
 

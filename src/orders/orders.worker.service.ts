@@ -24,11 +24,18 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 /** Số proxy insert mỗi batch để tránh quá tải MongoDB */
 const INSERT_BATCH_SIZE = 500;
+/** Số order fail liên tiếp trước khi disable partner */
+const PARTNER_FAIL_THRESHOLD = 5;
+/** TTL của error counter (giây) — reset sau 30 phút không lỗi */
+const PARTNER_FAIL_TTL_SECONDS = 1800;
+/** Số order xử lý đồng thời tối đa */
+const MAX_CONCURRENCY = 5;
 
 @Injectable()
 export class OrdersWorkerService implements OnModuleInit {
   private readonly logger = new Logger(OrdersWorkerService.name);
   private running = true;
+  private activeCount = 0;
 
   constructor(
     @InjectModel(Order.name)   private readonly orderModel:   Model<OrderDocument>,
@@ -45,19 +52,27 @@ export class OrdersWorkerService implements OnModuleInit {
   }
 
   private async startWorker(): Promise<void> {
-    this.logger.log('Worker started — BRPOP waiting for pending orders...');
+    this.logger.log(`Worker started — concurrency: ${MAX_CONCURRENCY}, BRPOP waiting...`);
 
     while (this.running) {
       try {
+        // Chờ nếu đang xử lý đủ slot
+        if (this.activeCount >= MAX_CONCURRENCY) {
+          await this.sleep(200);
+          continue;
+        }
+
         // BRPOP block chờ order mới — trả về ngay khi có LPUSH
         const result = await this.redis.brpop(PENDING_ORDERS_KEY, BRPOP_TIMEOUT_SECONDS);
 
         if (!result) continue; // Timeout — không có order, loop lại
 
         const [, orderId] = result; // result = [key, value]
-        this.logger.log(`Received order ${orderId} from Redis`);
+        this.logger.log(`Received order ${orderId} from Redis (active: ${this.activeCount + 1}/${MAX_CONCURRENCY})`);
 
-        await this.processOrder(orderId);
+        // Xử lý song song — không await, chạy nền
+        this.activeCount++;
+        void this.processOrder(orderId).finally(() => { this.activeCount--; });
       } catch (err) {
         this.logger.error('Unexpected worker error', err?.message);
         await this.sleep(2000);
@@ -137,17 +152,32 @@ export class OrdersWorkerService implements OnModuleInit {
       }
 
       if (retryErrors.length === MAX_RETRIES || !result) {
-        // Hết lần thử — disable partner + tất cả service liên quan
         const errorSummary = retryErrors.length
           ? retryErrors.join(' | ')
           : 'buy() returned null';
-        this.logger.error(`Order ${orderId}: hết ${MAX_RETRIES} lần thử, disable partner "${partner.code}" — ${errorSummary}`);
-        await Promise.all([
-          this.partnerModel.findByIdAndUpdate(partner._id, { status: false }).exec(),
-          this.serviceModel.updateMany({ partner: partner._id }, { status: false }).exec(),
-        ]);
+
+        // Tăng error counter theo partner — chỉ disable khi vượt ngưỡng liên tiếp
+        const failKey = `partner:fail:${partner._id}`;
+        const failCount = await this.redis.incr(failKey);
+        await this.redis.expire(failKey, PARTNER_FAIL_TTL_SECONDS);
+
+        if (failCount >= PARTNER_FAIL_THRESHOLD) {
+          this.logger.error(`Partner "${partner.code}": ${failCount} order fail liên tiếp → disable partner + services`);
+          await Promise.all([
+            this.partnerModel.findByIdAndUpdate(partner._id, { status: false }).exec(),
+            this.serviceModel.updateMany({ partner: partner._id }, { status: false }).exec(),
+            this.redis.del(failKey),
+          ]);
+        } else {
+          this.logger.warn(`Order ${orderId}: fail (${failCount}/${PARTNER_FAIL_THRESHOLD}) — ${errorSummary}`);
+        }
+
         throw new Error(errorSummary);
       }
+
+      // Order thành công → reset error counter của partner
+      const failKey = `partner:fail:${partner._id}`;
+      await this.redis.del(failKey);
 
       order!.provider_order_id = result.provider_order_id;
 
@@ -161,7 +191,7 @@ export class OrdersWorkerService implements OnModuleInit {
           protocol:          (p.protocol?.toLowerCase() ?? 'http') as ProxyProtocolEnum,
           auth_username:     p.username,
           auth_password:     p.password,
-          provider_proxy_id: p.provider_proxy_id ?? null,
+          provider_proxy_id: p.provider_proxy_id ?? undefined,
           domain:            p.domain   ?? '',
           prev_ip:           p.prev_ip  ?? '',
           location:          p.location ?? '',

@@ -96,11 +96,12 @@ export class ProxyvnProvider implements IProxyProvider {
       `&user=random` +
       `&password=random`;
 
-    this.logger.log(`[BUY] → ${url}`);
+    const safeUrl = url.replace(/key=[^&]+/, 'key=***');
+    this.logger.log(`[BUY] → ${safeUrl}`);
 
     const raw = await this.request<any[]>(url);
 
-    this.logger.log(`[BUY] ← response: ${JSON.stringify(raw)}`);
+    this.logger.debug(`[BUY] ← response: ${JSON.stringify(raw)}`);
 
     // raw là mảng: các item proxy (status=100) + item summary (status=200/201)
     const items = Array.isArray(raw) ? raw : [raw];
