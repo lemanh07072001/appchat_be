@@ -168,15 +168,17 @@ export class UsersService {
       throw new BadRequestException('Số tiền phải lớn hơn 0');
     }
 
-    const user = await this.userModel.findById(userId).select('_id email money').exec();
-    if (!user) throw new BadRequestException('User không tồn tại');
+    // Atomic: $inc + trả về document SAU khi cộng → tránh race condition
+    const updatedUser = await this.userModel.findByIdAndUpdate(
+      userId,
+      { $inc: { money: amount } },
+      { new: true },
+    ).select('_id email money').exec();
+    if (!updatedUser) throw new BadRequestException('User không tồn tại');
 
-    const balanceBefore = Number(user.money ?? 0);
-    const balanceAfter = balanceBefore + amount;
+    const balanceAfter = Number(updatedUser.money ?? 0);
+    const balanceBefore = balanceAfter - amount;
 
-    await this.userModel.findByIdAndUpdate(user._id, { $inc: { money: amount } }).exec();
-
-    // Lưu vào lịch sử giao dịch
     const txId = Date.now() + Math.floor(Math.random() * 1000);
     await this.txModel.create({
       transaction_id: txId,
@@ -184,23 +186,23 @@ export class UsersService {
       transaction_date: new Date(),
       transaction_number: '',
       account_number: '',
-      content: note || `Admin nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+      content: note || `Admin nạp ${amount.toLocaleString('vi-VN')}đ cho ${updatedUser.email}`,
       code: '',
       transfer_type: 'IN',
       transfer_amount: amount,
       checksum: '',
       status: TransactionStatus.PROCESSED,
-      user_id: user._id,
+      user_id: updatedUser._id,
       balance_before: balanceBefore,
       balance_after: balanceAfter,
       source: 'manual',
-      note: note || `Admin nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+      note: note || `Admin nạp ${amount.toLocaleString('vi-VN')}đ cho ${updatedUser.email}`,
     });
 
-    this.logger.log(`Deposit: +${amount.toLocaleString('vi-VN')}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
+    this.logger.log(`Deposit: +${amount.toLocaleString('vi-VN')}đ → ${updatedUser.email} (${balanceBefore} → ${balanceAfter})`);
 
     return {
-      message: `Đã nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+      message: `Đã nạp ${amount.toLocaleString('vi-VN')}đ cho ${updatedUser.email}`,
       balance_before: balanceBefore,
       balance_after: balanceAfter,
     };
@@ -212,17 +214,22 @@ export class UsersService {
       throw new BadRequestException('Số tiền phải lớn hơn 0');
     }
 
-    const user = await this.userModel.findById(userId).select('_id email money').exec();
-    if (!user) throw new BadRequestException('User không tồn tại');
+    // Atomic: chỉ trừ nếu đủ tiền (money >= amount), trả về document SAU khi trừ
+    const updatedUser = await this.userModel.findOneAndUpdate(
+      { _id: userId, money: { $gte: amount } },
+      { $inc: { money: -amount } },
+      { new: true },
+    ).select('_id email money').exec();
 
-    const balanceBefore = Number(user.money ?? 0);
-    if (balanceBefore < amount) {
-      throw new BadRequestException(`Số dư không đủ (hiện có: ${balanceBefore.toLocaleString('vi-VN')}đ)`);
+    if (!updatedUser) {
+      // Kiểm tra user có tồn tại không để trả lỗi chính xác
+      const exists = await this.userModel.findById(userId).select('money').exec();
+      if (!exists) throw new BadRequestException('User không tồn tại');
+      throw new BadRequestException(`Số dư không đủ (hiện có: ${Number(exists.money ?? 0).toLocaleString('vi-VN')}đ)`);
     }
 
-    const balanceAfter = balanceBefore - amount;
-
-    await this.userModel.findByIdAndUpdate(user._id, { $inc: { money: -amount } }).exec();
+    const balanceAfter = Number(updatedUser.money ?? 0);
+    const balanceBefore = balanceAfter + amount;
 
     const txId = Date.now() + Math.floor(Math.random() * 1000);
     await this.txModel.create({
@@ -231,23 +238,23 @@ export class UsersService {
       transaction_date: new Date(),
       transaction_number: '',
       account_number: '',
-      content: note || `Admin trừ ${amount.toLocaleString('vi-VN')}đ từ ${user.email}`,
+      content: note || `Admin trừ ${amount.toLocaleString('vi-VN')}đ từ ${updatedUser.email}`,
       code: '',
       transfer_type: 'OUT',
       transfer_amount: amount,
       checksum: '',
       status: TransactionStatus.PROCESSED,
-      user_id: user._id,
+      user_id: updatedUser._id,
       balance_before: balanceBefore,
       balance_after: balanceAfter,
       source: 'manual',
-      note: note || `Admin trừ ${amount.toLocaleString('vi-VN')}đ từ ${user.email}`,
+      note: note || `Admin trừ ${amount.toLocaleString('vi-VN')}đ từ ${updatedUser.email}`,
     });
 
-    this.logger.log(`Deduct: -${amount.toLocaleString('vi-VN')}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
+    this.logger.log(`Deduct: -${amount.toLocaleString('vi-VN')}đ → ${updatedUser.email} (${balanceBefore} → ${balanceAfter})`);
 
     return {
-      message: `Đã trừ ${amount.toLocaleString('vi-VN')}đ từ ${user.email}`,
+      message: `Đã trừ ${amount.toLocaleString('vi-VN')}đ từ ${updatedUser.email}`,
       balance_before: balanceBefore,
       balance_after: balanceAfter,
     };

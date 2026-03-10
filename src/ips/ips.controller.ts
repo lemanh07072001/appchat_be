@@ -3,9 +3,10 @@ import { IpsService } from './ips.service';
 import { CreateIpDto } from '../dto/create-ip.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
+import { AdminGuard } from '../guards/admin.guard';
 
 @Controller('api/admin/ips')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, AdminGuard)
 export class IpsController {
   constructor(private readonly ipsService: IpsService) {}
 

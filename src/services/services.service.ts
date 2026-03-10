@@ -85,6 +85,8 @@ export class ServicesService {
       ...data,
       partner: this.toObjectId(data.partner),
       country: this.toObjectId(data.country),
+      isp: data.isp ?? [],
+      protocol: data.protocol ?? [],
     });
     return service.save();
   }

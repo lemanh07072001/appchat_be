@@ -43,10 +43,9 @@ export class WebhookController {
     @Body() body: { transactions: any[] },
   ) {
     const token = process.env.PAYS2_WEBHOOK_TOKEN;
-    if (token) {
-      const bearer = (authorization ?? '').replace('Bearer ', '').trim();
-      if (bearer !== token) throw new UnauthorizedException('Invalid webhook token');
-    }
+    if (!token) throw new UnauthorizedException('Webhook token not configured');
+    const bearer = (authorization ?? '').replace('Bearer ', '').trim();
+    if (bearer !== token) throw new UnauthorizedException('Invalid webhook token');
     return this.webhookService.handlePays2(body);
   }
 

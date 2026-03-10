@@ -3,9 +3,10 @@ import { PartnersService } from './partners.service';
 import { CreatePartnerDto } from '../dto/create-partner.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
+import { AdminGuard } from '../guards/admin.guard';
 
 @Controller('api/admin/partners')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, AdminGuard)
 export class PartnersController {
   constructor(private readonly partnersService: PartnersService) {}
 

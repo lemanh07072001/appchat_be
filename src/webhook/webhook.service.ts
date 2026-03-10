@@ -36,8 +36,8 @@ export class WebhookService {
   private verifyChecksum(tx: Pays2Transaction): boolean {
     const key = process.env.PAYS2_CHECKSUM_KEY ?? '';
     if (!key) {
-      this.logger.warn('PAYS2_CHECKSUM_KEY chưa được cấu hình, bỏ qua xác minh checksum');
-      return true;
+      this.logger.error('PAYS2_CHECKSUM_KEY chưa được cấu hình — từ chối giao dịch');
+      return false;
     }
     const raw = `${tx.id}${tx.gateway}${tx.transactionDate}${tx.accountNumber}${tx.transferAmount}${key}`;
     const computed = crypto.createHash('md5').update(raw).digest('hex');
@@ -135,47 +135,52 @@ export class WebhookService {
           continue;
         }
 
-        // 4. Kiểm tra trùng giao dịch
-        const existing = await this.txModel.findOne({ transaction_id: tx.id }).exec();
+        // 4. Atomic: kiểm tra trùng + tạo transaction trong 1 bước
+        const amount = Number(tx.transferAmount);
+        const existing = await this.txModel.findOneAndUpdate(
+          { transaction_id: tx.id },
+          {
+            $setOnInsert: {
+              transaction_id:     tx.id,
+              gateway:            tx.gateway,
+              transaction_date:   new Date(tx.transactionDate),
+              transaction_number: tx.transactionNumber,
+              account_number:     tx.accountNumber,
+              content:            tx.content,
+              code,
+              transfer_type:      tx.transferType,
+              transfer_amount:    amount,
+              checksum:           tx.checksum,
+              status:             TransactionStatus.PROCESSED,
+              user_id:            user._id,
+              note:               `Nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+            },
+          },
+          { upsert: true, new: false }, // new:false → trả null nếu vừa insert, trả doc cũ nếu đã tồn tại
+        ).exec();
+
+        // Nếu trả về doc cũ → trùng giao dịch
         if (existing) {
-          // Trùng giao dịch — chuyển sang chờ xử lý để admin xem xét thủ công
-          await this.txModel.findByIdAndUpdate(existing._id, {
-            status: TransactionStatus.PENDING,
-            user_id: user._id,
-            note:   `Trùng giao dịch — user: ${user.email}, cần admin xác nhận`,
-          }).exec();
           this.logger.warn(`Webhook #${tx.id}: trùng giao dịch — user: ${user.email}`);
-          results.push(`#${tx.id}: duplicate → pending`);
+          results.push(`#${tx.id}: duplicate → skipped`);
           continue;
         }
 
-        // 5. User đúng + không trùng → cộng tiền
-        const amount        = Number(tx.transferAmount);
-        const balanceBefore = Number(user.money ?? 0);
-        const balanceAfter  = balanceBefore + amount;
-
-        await this.userModel.findByIdAndUpdate(
+        // 5. Cộng tiền atomic + lấy balance mới
+        const updatedUser = await this.userModel.findByIdAndUpdate(
           user._id,
           { $inc: { money: amount } },
+          { new: true },
         ).exec();
 
-        await this.txModel.create({
-          transaction_id:     tx.id,
-          gateway:            tx.gateway,
-          transaction_date:   new Date(tx.transactionDate),
-          transaction_number: tx.transactionNumber,
-          account_number:     tx.accountNumber,
-          content:            tx.content,
-          code,
-          transfer_type:      tx.transferType,
-          transfer_amount:    amount,
-          checksum:           tx.checksum,
-          status:             TransactionStatus.PROCESSED,
-          user_id:            user._id,
-          balance_before:     balanceBefore,
-          balance_after:      balanceAfter,
-          note:               `Nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
-        });
+        const balanceAfter = Number(updatedUser?.money ?? 0);
+        const balanceBefore = balanceAfter - amount;
+
+        // Cập nhật balance vào transaction record
+        await this.txModel.findOneAndUpdate(
+          { transaction_id: tx.id },
+          { balance_before: balanceBefore, balance_after: balanceAfter },
+        ).exec();
 
         this.logger.log(`Webhook #${tx.id}: nạp ${tx.transferAmount}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
         this.notification.sendTopupSuccess(user._id.toString(), { amount, balance: balanceAfter });

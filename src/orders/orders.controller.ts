@@ -45,31 +45,37 @@ export class OrdersController {
 
   // ─── Admin ────────────────────────────────────────────────
   @Get('api/admin/orders')
+  @UseGuards(AdminGuard)
   findAll(@Query() query: PaginationQueryDto) {
     return this.ordersService.findAllPaginated(query);
   }
 
   @Get('api/admin/orders/:id')
+  @UseGuards(AdminGuard)
   findOne(@Param('id') id: string) {
     return this.ordersService.findOne(id);
   }
 
   @Post('api/admin/orders')
+  @UseGuards(AdminGuard)
   create(@Body() dto: CreateOrderDto) {
     return this.ordersService.create(dto);
   }
 
   @Patch('api/admin/orders/:id/status')
+  @UseGuards(AdminGuard)
   updateStatus(@Param('id') id: string, @Body('status') status: OrderStatusEnum) {
     return this.ordersService.updateStatus(id, status);
   }
 
   @Patch('api/admin/orders/:id/payment-status')
+  @UseGuards(AdminGuard)
   updatePaymentStatus(@Param('id') id: string, @Body('payment_status') status: PaymentStatusEnum) {
     return this.ordersService.updatePaymentStatus(id, status);
   }
 
   @Post('api/admin/orders/:id/renew')
+  @UseGuards(AdminGuard)
   renew(@Param('id') id: string) {
     return this.ordersService.renew(id);
   }
@@ -81,6 +87,7 @@ export class OrdersController {
   }
 
   @Delete('api/admin/orders/:id')
+  @UseGuards(AdminGuard)
   delete(@Param('id') id: string) {
     return this.ordersService.delete(id);
   }

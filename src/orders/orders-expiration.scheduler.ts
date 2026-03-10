@@ -30,10 +30,10 @@ export class OrdersExpirationScheduler {
     try {
       const now = new Date();
 
-      // Tìm orders ACTIVE có end_date <= now
+      // Tìm orders ACTIVE hoặc PROCESSING có end_date <= now
       const expiredOrders = await this.orderModel
         .find({
-          status: OrderStatusEnum.ACTIVE,
+          status: { $in: [OrderStatusEnum.ACTIVE, OrderStatusEnum.PROCESSING] },
           end_date: { $ne: null, $lte: now },
         })
         .select('_id order_code')

@@ -38,7 +38,11 @@ export class OrdersProcessingScheduler implements OnModuleInit {
 
     try {
       const orders = await this.orderModel
-        .find({ status: OrderStatusEnum.PROCESSING, provider_order_id: { $ne: '' } })
+        .find({
+          status: OrderStatusEnum.PROCESSING,
+          provider_order_id: { $ne: '' },
+          end_date: { $gt: new Date() },
+        })
         .select('_id provider_order_id partner_id config user_id total_price')
         .lean()
         .exec();

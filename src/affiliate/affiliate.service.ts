@@ -149,22 +149,32 @@ export class AffiliateService {
       throw new BadRequestException('Commission không đủ điều kiện để yêu cầu rút');
     }
 
-    // Trừ affiliate_balance + tạo withdrawal record
-    await Promise.all([
-      this.userModel.findByIdAndUpdate(userId, {
-        $inc: { affiliate_balance: -updated.commission_amount },
-      }).exec(),
-      this.withdrawalModel.create({
-        user_id:        new Types.ObjectId(userId),
-        total_amount:   updated.commission_amount,
-        bank_name:      user.bank_name,
-        bank_account:   user.bank_account,
-        bank_owner:     user.bank_owner,
-        status:         WithdrawalStatus.REQUESTED,
-        commission_ids: [new Types.ObjectId(commissionId)],
-        requested_at:   new Date(),
-      }),
-    ]);
+    // Atomic: trừ affiliate_balance chỉ khi đủ tiền
+    const deducted = await this.userModel.findOneAndUpdate(
+      { _id: new Types.ObjectId(userId), affiliate_balance: { $gte: updated.commission_amount } },
+      { $inc: { affiliate_balance: -updated.commission_amount } },
+      { new: true },
+    ).exec();
+
+    if (!deducted) {
+      // Rollback commission status về CREDITED
+      await this.commissionModel.findByIdAndUpdate(updated._id, {
+        status: AffiliateCommissionStatus.CREDITED,
+        requested_at: null,
+      }).exec();
+      throw new BadRequestException('Số dư ví affiliate không đủ');
+    }
+
+    await this.withdrawalModel.create({
+      user_id:        new Types.ObjectId(userId),
+      total_amount:   updated.commission_amount,
+      bank_name:      user.bank_name,
+      bank_account:   user.bank_account,
+      bank_owner:     user.bank_owner,
+      status:         WithdrawalStatus.REQUESTED,
+      commission_ids: [new Types.ObjectId(commissionId)],
+      requested_at:   new Date(),
+    });
 
     this.logger.log(`Affiliate: user ${userId} yêu cầu rút commission ${commissionId} → ${user.bank_account}`);
     return { message: 'Yêu cầu rút đã được gửi, chờ admin chuyển khoản' };
@@ -230,25 +240,36 @@ export class AffiliateService {
       },
     ).exec();
 
-    // Trừ affiliate_balance + tạo 1 withdrawal record gộp tất cả commissions
-    await Promise.all([
-      this.userModel.findByIdAndUpdate(userId, {
-        $inc: { affiliate_balance: -user.affiliate_balance },
-      }).exec(),
-      this.withdrawalModel.create({
-        user_id:        new Types.ObjectId(userId),
-        total_amount:   user.affiliate_balance,
-        bank_name:      user.bank_name,
-        bank_account:   user.bank_account,
-        bank_owner:     user.bank_owner,
-        status:         WithdrawalStatus.REQUESTED,
-        commission_ids: commissionIds,
-        requested_at:   now,
-      }),
-    ]);
+    // Atomic: trừ affiliate_balance chỉ khi đủ tiền
+    const withdrawAmount = user.affiliate_balance;
+    const deducted = await this.userModel.findOneAndUpdate(
+      { _id: new Types.ObjectId(userId), affiliate_balance: { $gte: withdrawAmount } },
+      { $inc: { affiliate_balance: -withdrawAmount } },
+      { new: true },
+    ).exec();
 
-    this.logger.log(`Affiliate: user ${userId} yêu cầu rút ${user.affiliate_balance} → ${user.bank_account}`);
-    return { message: 'Yêu cầu rút đã được gửi, chờ admin chuyển khoản', total: user.affiliate_balance };
+    if (!deducted) {
+      // Rollback commissions về CREDITED
+      await this.commissionModel.updateMany(
+        { _id: { $in: commissionIds }, status: AffiliateCommissionStatus.REQUESTED },
+        { status: AffiliateCommissionStatus.CREDITED, requested_at: null },
+      ).exec();
+      throw new BadRequestException('Số dư ví affiliate không đủ');
+    }
+
+    await this.withdrawalModel.create({
+      user_id:        new Types.ObjectId(userId),
+      total_amount:   withdrawAmount,
+      bank_name:      user.bank_name,
+      bank_account:   user.bank_account,
+      bank_owner:     user.bank_owner,
+      status:         WithdrawalStatus.REQUESTED,
+      commission_ids: commissionIds,
+      requested_at:   now,
+    });
+
+    this.logger.log(`Affiliate: user ${userId} yêu cầu rút ${withdrawAmount} → ${user.bank_account}`);
+    return { message: 'Yêu cầu rút đã được gửi, chờ admin chuyển khoản', total: withdrawAmount };
   }
 
   private validateObjectId(id: string, label = 'ID') {
