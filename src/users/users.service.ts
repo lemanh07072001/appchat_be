@@ -90,7 +90,7 @@ export class UsersService {
     return null;
   }
 
-  private async generateTopupCode(): Promise<string> {
+  private async generateUniqueTopupCode(): Promise<string> {
     let code: string;
     let exists: boolean;
     do {
@@ -115,7 +115,7 @@ export class UsersService {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(data.password, salt);
 
-    const topup_code = await this.generateTopupCode();
+    const topup_code = await this.generateUniqueTopupCode();
 
     const user = new this.userModel({
       ...data,
@@ -204,5 +204,64 @@ export class UsersService {
       balance_before: balanceBefore,
       balance_after: balanceAfter,
     };
+  }
+
+  // ─── Admin: trừ tiền user ─────────────────────────────────────────────
+  async deduct(userId: string, amount: number, note?: string) {
+    if (!amount || amount <= 0) {
+      throw new BadRequestException('Số tiền phải lớn hơn 0');
+    }
+
+    const user = await this.userModel.findById(userId).select('_id email money').exec();
+    if (!user) throw new BadRequestException('User không tồn tại');
+
+    const balanceBefore = Number(user.money ?? 0);
+    if (balanceBefore < amount) {
+      throw new BadRequestException(`Số dư không đủ (hiện có: ${balanceBefore.toLocaleString('vi-VN')}đ)`);
+    }
+
+    const balanceAfter = balanceBefore - amount;
+
+    await this.userModel.findByIdAndUpdate(user._id, { $inc: { money: -amount } }).exec();
+
+    const txId = Date.now() + Math.floor(Math.random() * 1000);
+    await this.txModel.create({
+      transaction_id: txId,
+      gateway: 'MANUAL',
+      transaction_date: new Date(),
+      transaction_number: '',
+      account_number: '',
+      content: note || `Admin trừ ${amount.toLocaleString('vi-VN')}đ từ ${user.email}`,
+      code: '',
+      transfer_type: 'OUT',
+      transfer_amount: amount,
+      checksum: '',
+      status: TransactionStatus.PROCESSED,
+      user_id: user._id,
+      balance_before: balanceBefore,
+      balance_after: balanceAfter,
+      source: 'manual',
+      note: note || `Admin trừ ${amount.toLocaleString('vi-VN')}đ từ ${user.email}`,
+    });
+
+    this.logger.log(`Deduct: -${amount.toLocaleString('vi-VN')}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
+
+    return {
+      message: `Đã trừ ${amount.toLocaleString('vi-VN')}đ từ ${user.email}`,
+      balance_before: balanceBefore,
+      balance_after: balanceAfter,
+    };
+  }
+
+  // ─── Admin: tạo/đổi mã nạp tiền ─────────────────────────────────────
+  async generateTopupCode(userId: string) {
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) throw new BadRequestException('Không tìm thấy người dùng');
+
+    const topup_code = await this.generateUniqueTopupCode();
+    user.topup_code = topup_code;
+    await user.save();
+
+    return { topup_code, message: 'Tạo mã nạp thành công' };
   }
 }

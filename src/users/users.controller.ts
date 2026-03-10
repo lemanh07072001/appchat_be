@@ -60,4 +60,20 @@ export class UsersController {
   ) {
     return this.usersService.deposit(id, amount, note);
   }
+
+  // ─── Admin: trừ tiền user ─────────────────────────────────────────────
+  @Post(':id/deduct')
+  deduct(
+    @Param('id') id: string,
+    @Body('amount') amount: number,
+    @Body('note')   note?: string,
+  ) {
+    return this.usersService.deduct(id, amount, note);
+  }
+
+  // ─── Admin: tạo/đổi mã nạp tiền ───────────────────────────────────────
+  @Post(':id/generate-topup-code')
+  generateTopupCode(@Param('id') id: string) {
+    return this.usersService.generateTopupCode(id);
+  }
 }

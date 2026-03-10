@@ -9,6 +9,12 @@ import { Public } from '../guards/public.decorator';
 export class WebhookController {
   constructor(private readonly webhookService: WebhookService) {}
 
+  // ─── User: dashboard ───────────────────────────────────────────────────
+  @Get('dashboard')
+  getDashboard(@Req() req: any) {
+    return this.webhookService.getUserDashboard(req.user.sub);
+  }
+
   // ─── User: lịch sử nạp tiền của chính mình ─────────────────────────────
   @Get('transactions')
   getUserTransactions(
@@ -44,6 +50,13 @@ export class WebhookController {
     return this.webhookService.handlePays2(body);
   }
 
+  // ─── Admin: dashboard ──────────────────────────────────────────────────
+  @UseGuards(AdminGuard)
+  @Get('admin/dashboard')
+  getAdminDashboard() {
+    return this.webhookService.getAdminDashboard();
+  }
+
   // ─── Admin: thống kê tổng quan ───────────────────────────────────────────
   @UseGuards(AdminGuard)
   @Get('admin/transactions/stats')
@@ -65,14 +78,15 @@ export class WebhookController {
     return this.webhookService.getList(Number(page), Number(limit), status, source, from_date, to_date);
   }
 
-  // ─── Admin: xử lý giao dịch lỗi — cộng tiền bằng tay ─────────────────
+  // ─── Admin: duyệt giao dịch — cộng tiền ────────────────────────────────
   @UseGuards(AdminGuard)
   @Post('admin/transactions/:id/approve')
   approve(
+    @Req() req: any,
     @Param('id') id: string,
     @Body('email') email?: string,
   ) {
-    return this.webhookService.approveTransaction(id, email);
+    return this.webhookService.approveTransaction(id, email, req.user.sub);
   }
 
   // ─── Admin: huỷ giao dịch ─────────────────────────────────────────────

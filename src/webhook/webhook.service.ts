@@ -4,6 +4,8 @@ import { Model, Types } from 'mongoose';
 import * as crypto from 'crypto';
 import { Transaction, TransactionDocument, TransactionStatus } from '../schemas/transactions.schema';
 import { User, UserDocument } from '../schemas/users.schema';
+import { Order, OrderDocument } from '../schemas/orders.schema';
+import { OrderStatusEnum } from '../enum/order.enum';
 import { NotificationGateway } from './notification.gateway';
 
 interface Pays2Transaction {
@@ -25,6 +27,7 @@ export class WebhookService {
   constructor(
     @InjectModel(Transaction.name) private txModel: Model<TransactionDocument>,
     @InjectModel(User.name)        private userModel: Model<UserDocument>,
+    @InjectModel(Order.name)       private orderModel: Model<OrderDocument>,
     private readonly notification: NotificationGateway,
   ) {}
 
@@ -278,25 +281,33 @@ export class WebhookService {
     return { data, total, page, limit };
   }
 
-  // ─── Admin: duyệt giao dịch lỗi — cộng tiền bằng tay ─────────────────
-  async approveTransaction(txId: string, email?: string) {
+  // ─── Admin: duyệt giao dịch — cộng tiền ────────────────────────────────
+  async approveTransaction(txId: string, email?: string, adminUserId?: string) {
     const tx = await this.txModel.findById(txId).exec();
-    if (!tx) throw new BadRequestException('Giao dịch không tồn tại');
+    if (!tx) throw new BadRequestException('Không tìm thấy giao dịch');
     if (tx.status === TransactionStatus.PROCESSED) {
-      throw new BadRequestException('Giao dịch này đã được xử lý');
+      throw new BadRequestException('Giao dịch đã được xử lý trước đó');
     }
 
     let user: UserDocument | null = null;
 
-    // Nếu admin truyền email → tìm theo email
-    if (email) {
-      user = await this.userModel.findOne({ email }).select('_id email money').exec();
-      if (!user) throw new BadRequestException(`Không tìm thấy user với email: ${email}`);
-    } else if (tx.user_id) {
-      // Fallback: dùng user_id đã có trong giao dịch
+    // Ưu tiên 1: giao dịch đã match user_id sẵn
+    if (tx.user_id) {
       user = await this.userModel.findById(tx.user_id).select('_id email money').exec();
-      if (!user) throw new BadRequestException('User không tồn tại');
-    } else {
+    }
+
+    // Ưu tiên 2: admin nhập email
+    if (!user && email) {
+      user = await this.userModel.findOne({ email }).select('_id email money').exec();
+      if (!user) throw new BadRequestException('Không tìm thấy người dùng với email này');
+    }
+
+    // Ưu tiên 3: dùng admin đang đăng nhập
+    if (!user && adminUserId) {
+      user = await this.userModel.findById(adminUserId).select('_id email money').exec();
+    }
+
+    if (!user) {
       throw new BadRequestException('Cần nhập email để cộng tiền');
     }
 
@@ -310,13 +321,23 @@ export class WebhookService {
     tx.user_id = user._id;
     tx.balance_before = balanceBefore;
     tx.balance_after = balanceAfter;
-    tx.source = 'manual';
+    tx.source = 'bank';
     tx.note = `Admin duyệt — nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`;
     await tx.save();
 
     this.notification.sendTopupSuccess(user._id.toString(), { amount, balance: balanceAfter });
 
-    return { message: `Đã cộng ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`, transaction: tx };
+    return {
+      message: 'Duyệt giao dịch thành công',
+      data: {
+        _id: tx._id,
+        status: tx.status,
+        user_id: { _id: user._id, email: user.email },
+        balance_before: balanceBefore,
+        balance_after: balanceAfter,
+        transfer_amount: amount,
+      },
+    };
   }
 
   // ─── Admin: huỷ giao dịch ─────────────────────────────────────────────
@@ -335,5 +356,216 @@ export class WebhookService {
     await tx.save();
 
     return { message: 'Đã huỷ giao dịch', transaction: tx };
+  }
+
+  // ─── User: dashboard ────────────────────────────────────────────────────
+  async getUserDashboard(userId: string) {
+    const uid = new Types.ObjectId(userId);
+
+    const [user, activeProxies, totalDeposited, totalOrders] = await Promise.all([
+      this.userModel.findById(uid).select('money email name topup_code').exec(),
+      this.orderModel.countDocuments({ user_id: uid, status: OrderStatusEnum.ACTIVE }),
+      this.txModel.aggregate([
+        { $match: { user_id: uid, status: TransactionStatus.PROCESSED, transfer_type: 'IN' } },
+        { $group: { _id: null, total: { $sum: '$transfer_amount' } } },
+      ]),
+      this.orderModel.countDocuments({ user_id: uid }),
+    ]);
+
+    return {
+      balance: user?.money ?? 0,
+      active_proxies: activeProxies,
+      total_deposited: totalDeposited[0]?.total ?? 0,
+      total_orders: totalOrders,
+    };
+  }
+
+  // ─── Admin: dashboard ───────────────────────────────────────────────────
+  async getAdminDashboard() {
+    const now = new Date();
+
+    // Đầu ngày hôm nay (UTC+7)
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+
+    // Đầu tháng này
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    // 30 ngày trước
+    const days30Ago = new Date(now);
+    days30Ago.setDate(days30Ago.getDate() - 29);
+    days30Ago.setHours(0, 0, 0, 0);
+
+    const [
+      totalUsers,
+      newUsersToday,
+      newUsersThisMonth,
+      totalRevenue,
+      revenueToday,
+      revenueThisMonth,
+      totalDeposits,
+      pendingDeposits,
+      unmatchedDeposits,
+      totalOrders,
+      activeOrders,
+      expiredOrders,
+      revenueChart,
+      recentDeposits,
+      recentOrders,
+      recentUsers,
+      topUsers,
+    ] = await Promise.all([
+      // ── Stats ──
+      this.userModel.countDocuments(),
+      this.userModel.countDocuments({ createdAt: { $gte: startOfToday } }),
+      this.userModel.countDocuments({ createdAt: { $gte: startOfMonth } }),
+      this.txModel.aggregate([
+        { $match: { status: TransactionStatus.PROCESSED, transfer_type: 'IN' } },
+        { $group: { _id: null, total: { $sum: '$transfer_amount' } } },
+      ]),
+      this.txModel.aggregate([
+        { $match: { status: TransactionStatus.PROCESSED, transfer_type: 'IN', createdAt: { $gte: startOfToday } } },
+        { $group: { _id: null, total: { $sum: '$transfer_amount' } } },
+      ]),
+      this.txModel.aggregate([
+        { $match: { status: TransactionStatus.PROCESSED, transfer_type: 'IN', createdAt: { $gte: startOfMonth } } },
+        { $group: { _id: null, total: { $sum: '$transfer_amount' } } },
+      ]),
+      this.txModel.countDocuments({ transfer_type: 'IN' }),
+      this.txModel.countDocuments({ status: TransactionStatus.PENDING }),
+      this.txModel.countDocuments({ status: TransactionStatus.UNMATCHED }),
+      this.orderModel.countDocuments(),
+      this.orderModel.countDocuments({ status: OrderStatusEnum.ACTIVE }),
+      this.orderModel.countDocuments({ status: OrderStatusEnum.EXPIRED }),
+
+      // ── Revenue chart 30 ngày ──
+      this.txModel.aggregate([
+        {
+          $match: {
+            status: TransactionStatus.PROCESSED,
+            transfer_type: 'IN',
+            createdAt: { $gte: days30Ago },
+          },
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: '+07:00' } },
+            revenue: { $sum: '$transfer_amount' },
+            deposits: { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]),
+
+      // ── Recent deposits (5) ──
+      this.txModel
+        .find({ transfer_type: 'IN' })
+        .populate('user_id', 'email name')
+        .select('transaction_id gateway transfer_amount content status createdAt')
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .exec(),
+
+      // ── Recent orders (5) ──
+      this.orderModel
+        .find()
+        .populate('user_id', 'email name')
+        .populate('service_id', 'name')
+        .select('order_code total_price status createdAt')
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .exec(),
+
+      // ── Recent users (5) ──
+      this.userModel
+        .find()
+        .select('name email money status createdAt')
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .exec(),
+
+      // ── Top 5 users by spending ──
+      this.orderModel.aggregate([
+        { $match: { status: { $in: [OrderStatusEnum.ACTIVE, OrderStatusEnum.COMPLETED, OrderStatusEnum.EXPIRED] } } },
+        {
+          $group: {
+            _id: '$user_id',
+            total_spent: { $sum: '$total_price' },
+            total_orders: { $sum: 1 },
+          },
+        },
+        { $sort: { total_spent: -1 } },
+        { $limit: 5 },
+        {
+          $lookup: {
+            from: 'users',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'user',
+          },
+        },
+        { $unwind: '$user' },
+        {
+          $project: {
+            _id: '$user._id',
+            name: '$user.name',
+            email: '$user.email',
+            money: '$user.money',
+            total_spent: 1,
+            total_orders: 1,
+          },
+        },
+      ]),
+    ]);
+
+    // Fill missing days in revenue chart
+    const chartMap = new Map<string, { revenue: number; deposits: number }>();
+    for (const item of revenueChart) {
+      chartMap.set(item._id, { revenue: item.revenue, deposits: item.deposits });
+    }
+    const filledChart: { date: string; revenue: number; deposits: number }[] = [];
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(days30Ago);
+      d.setDate(d.getDate() + i);
+      const key = d.toISOString().slice(0, 10);
+      filledChart.push({
+        date: key,
+        revenue: chartMap.get(key)?.revenue ?? 0,
+        deposits: chartMap.get(key)?.deposits ?? 0,
+      });
+    }
+
+    // Format recent orders
+    const formattedOrders = recentOrders.map((o: any) => ({
+      _id: o._id,
+      order_code: o.order_code,
+      user_id: o.user_id,
+      service_name: o.service_id?.name ?? '',
+      amount: o.total_price,
+      status: o.status,
+      createdAt: o.createdAt,
+    }));
+
+    return {
+      stats: {
+        total_users: totalUsers,
+        new_users_today: newUsersToday,
+        new_users_this_month: newUsersThisMonth,
+        total_revenue: totalRevenue[0]?.total ?? 0,
+        revenue_today: revenueToday[0]?.total ?? 0,
+        revenue_this_month: revenueThisMonth[0]?.total ?? 0,
+        total_deposits: totalDeposits,
+        pending_deposits: pendingDeposits,
+        unmatched_deposits: unmatchedDeposits,
+        total_orders: totalOrders,
+        active_orders: activeOrders,
+        expired_orders: expiredOrders,
+      },
+      revenue_chart: filledChart,
+      recent_deposits: recentDeposits,
+      recent_orders: formattedOrders,
+      recent_users: recentUsers,
+      top_users: topUsers,
+    };
   }
 }
