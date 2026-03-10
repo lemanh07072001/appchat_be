@@ -39,7 +39,7 @@ export class Proxy {
   @Prop({ default: '' })
   city: string;
 
-  @Prop({ default: null })
+  @Prop()
   provider_proxy_id: number;
 
   @Prop({ default: '' })
