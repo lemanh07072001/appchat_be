@@ -47,7 +47,19 @@ export class WebhookController {
     if (!token) throw new UnauthorizedException('Webhook token not configured');
     const bearer = (authorization ?? '').replace('Bearer ', '').trim();
     if (bearer !== token) throw new UnauthorizedException('Invalid webhook token');
-    return this.webhookService.handlePays2(body, req.headers);
+    return this.webhookService.handlePays2(body, req.headers, req.ip);
+  }
+
+  // ─── Admin: danh sách webhook log ────────────────────────────────────────
+  @UseGuards(AdminGuard)
+  @Get('admin/webhooks')
+  getWebhookLogs(
+    @Query('page')      page      = '1',
+    @Query('limit')     limit     = '10',
+    @Query('from_date') from_date?: string,
+    @Query('to_date')   to_date?: string,
+  ) {
+    return this.webhookService.getWebhookLogs(Number(page), Number(limit), from_date, to_date);
   }
 
   // ─── Admin: dashboard ──────────────────────────────────────────────────
@@ -74,8 +86,10 @@ export class WebhookController {
     @Query('source')    source?: string,
     @Query('from_date') from_date?: string,
     @Query('to_date')   to_date?: string,
+    @Query('gateway')   gateway?: string,
+    @Query('content')   content?: string,
   ) {
-    return this.webhookService.getList(Number(page), Number(limit), status, source, from_date, to_date);
+    return this.webhookService.getList(Number(page), Number(limit), status, source, from_date, to_date, gateway, content);
   }
 
   // ─── Admin: duyệt giao dịch — cộng tiền ────────────────────────────────

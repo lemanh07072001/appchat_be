@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 import { Transaction, TransactionDocument, TransactionStatus } from '../schemas/transactions.schema';
 import { User, UserDocument } from '../schemas/users.schema';
 import { Order, OrderDocument } from '../schemas/orders.schema';
+import { WebhookLog, WebhookLogDocument } from '../schemas/webhook-log.schema';
 import { OrderStatusEnum } from '../enum/order.enum';
 import { NotificationGateway } from './notification.gateway';
 
@@ -25,9 +26,10 @@ export class WebhookService {
   private readonly logger = new Logger(WebhookService.name);
 
   constructor(
-    @InjectModel(Transaction.name) private txModel: Model<TransactionDocument>,
-    @InjectModel(User.name)        private userModel: Model<UserDocument>,
-    @InjectModel(Order.name)       private orderModel: Model<OrderDocument>,
+    @InjectModel(Transaction.name)  private txModel: Model<TransactionDocument>,
+    @InjectModel(User.name)         private userModel: Model<UserDocument>,
+    @InjectModel(Order.name)        private orderModel: Model<OrderDocument>,
+    @InjectModel(WebhookLog.name)   private webhookLogModel: Model<WebhookLogDocument>,
     private readonly notification: NotificationGateway,
   ) {}
 
@@ -91,7 +93,7 @@ export class WebhookService {
   }
 
   // ─── Xử lý webhook từ pays2 ───────────────────────────────────────────────
-  async handlePays2(body: { transactions: Pays2Transaction[] }, headers?: Record<string, any>): Promise<{ success: boolean; message: string }> {
+  async handlePays2(body: { transactions: Pays2Transaction[] }, headers?: Record<string, any>, ip?: string): Promise<{ success: boolean; message: string }> {
     const results: string[] = [];
 
     for (const tx of body.transactions) {
@@ -190,7 +192,54 @@ export class WebhookService {
       }
     }
 
-    return { success: true, message: results.join(', ') };
+    const response = { success: true, message: results.join(', ') };
+
+    // Lưu webhook log
+    await this.webhookLogModel.create({
+      source:      'pays2',
+      headers:     headers ?? null,
+      payload:     body,
+      response,
+      status_code: 200,
+      ip:          ip ?? '',
+    });
+
+    return response;
+  }
+
+  // ─── Admin: danh sách webhook log ────────────────────────────────────────
+  async getWebhookLogs(page = 1, limit = 20, from_date?: string, to_date?: string) {
+    const filter: any = {};
+    if (from_date || to_date) {
+      filter.createdAt = {};
+      if (from_date) filter.createdAt.$gte = new Date(from_date + 'T00:00:00+07:00');
+      if (to_date)   filter.createdAt.$lte = new Date(to_date   + 'T23:59:59.999+07:00');
+    }
+    const skip = (page - 1) * limit;
+
+    const [data, total] = await Promise.all([
+      this.webhookLogModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .select('source ip payload response status_code createdAt')
+        .exec(),
+      this.webhookLogModel.countDocuments(filter),
+    ]);
+
+    return {
+      data: data.map(log => ({
+        _id:               log._id,
+        source:            log.source,
+        ip:                log.ip,
+        transactions_count: (log.payload as any)?.transactions?.length ?? 0,
+        response:          log.response,
+        status_code:       log.status_code,
+        received_at:       (log as any).createdAt,
+      })),
+      pagination: { total, page, limit, total_pages: Math.ceil(total / limit) },
+    };
   }
 
   // ─── User: lịch sử nạp tiền của chính mình ───────────────────────────────
@@ -259,29 +308,75 @@ export class WebhookService {
     };
   }
 
-  async getList(page = 1, limit = 20, status?: string, source?: string, from_date?: string, to_date?: string) {
-    const filter: any = {};
-    if (status) filter.status = status;
-    if (source) filter.source = source;
+  async getList(
+    page = 1,
+    limit = 20,
+    status?: string,
+    source?: string,
+    from_date?: string,
+    to_date?: string,
+    gateway?: string,
+    content?: string,
+  ) {
+    const filter: any = { transfer_type: 'IN' };
+    if (status)  filter.status  = status;
+    if (source)  filter.source  = source;
+    if (gateway) filter.gateway = gateway.toUpperCase();
+    if (content) filter.content = { $regex: content, $options: 'i' };
     if (from_date || to_date) {
-      filter.createdAt = {};
-      if (from_date) filter.createdAt.$gte = new Date(from_date + 'T00:00:00+07:00');
-      if (to_date)   filter.createdAt.$lte = new Date(to_date   + 'T23:59:59.999+07:00');
+      filter.transaction_date = {};
+      if (from_date) filter.transaction_date.$gte = new Date(from_date + 'T00:00:00+07:00');
+      if (to_date)   filter.transaction_date.$lte = new Date(to_date   + 'T23:59:59.999+07:00');
     }
     const skip = (page - 1) * limit;
 
-    const [data, total] = await Promise.all([
+    const [data, total, stats] = await Promise.all([
       this.txModel
         .find(filter)
         .populate('user_id', 'email name')
-        .sort({ createdAt: -1 })
+        .sort({ transaction_date: -1 })
         .skip(skip)
         .limit(limit)
+        .select('transaction_date content transfer_amount gateway user_id status transaction_number account_number')
         .exec(),
       this.txModel.countDocuments(filter),
+      this.txModel.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            total_amount:     { $sum: '$transfer_amount' },
+            total_processed:  { $sum: { $cond: [{ $eq: ['$status', TransactionStatus.PROCESSED] }, 1, 0] } },
+            total_unmatched:  { $sum: { $cond: [{ $eq: ['$status', TransactionStatus.UNMATCHED] }, 1, 0] } },
+            amount_processed: { $sum: { $cond: [{ $eq: ['$status', TransactionStatus.PROCESSED] }, '$transfer_amount', 0] } },
+          },
+        },
+      ]),
     ]);
 
-    return { data, total, page, limit };
+    const s = stats[0] ?? { total_amount: 0, total_processed: 0, total_unmatched: 0, amount_processed: 0 };
+
+    return {
+      data: data.map(tx => ({
+        _id:                tx._id,
+        transaction_date:   tx.transaction_date,
+        content:            tx.content,
+        transfer_amount:    tx.transfer_amount,
+        gateway:            tx.gateway,
+        account_number:     tx.account_number,
+        transaction_number: tx.transaction_number,
+        recipient:          (tx.user_id as any)?.email ?? null,
+        status:             tx.status,
+      })),
+      pagination: { total, page, limit, total_pages: Math.ceil(total / limit) },
+      summary: {
+        total_transactions: total,
+        total_amount:       s.total_amount,
+        total_processed:    s.total_processed,
+        amount_processed:   s.amount_processed,
+        total_unmatched:    s.total_unmatched,
+      },
+    };
   }
 
   // ─── Admin: duyệt giao dịch — cộng tiền ────────────────────────────────
