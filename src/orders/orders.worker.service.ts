@@ -109,7 +109,14 @@ export class OrdersWorkerService implements OnModuleInit {
         return;
       }
 
-      void this.orderLogService.info(orderId, OrderLogStep.WORKER_ORDER_VERIFIED, 'Order xác nhận PENDING, tiếp tục xử lý');
+      // Tính queue wait time: từ khi order được tạo → worker bắt đầu xử lý
+      const orderCreatedAt = (order as any).createdAt as Date | undefined;
+      const queueWaitMs = orderCreatedAt ? t0 - orderCreatedAt.getTime() : null;
+      this.logger.log(`Order ${orderId}: [STEP 1] Queue wait = ${queueWaitMs ?? '?'}ms`);
+
+      void this.orderLogService.info(orderId, OrderLogStep.WORKER_ORDER_VERIFIED, 'Order xác nhận PENDING, tiếp tục xử lý', {
+        queue_wait_ms: queueWaitMs,
+      });
 
       const [partner, service] = await Promise.all([
         order.partner_id ? this.partnerModel.findById(order.partner_id).exec() : null,
@@ -144,10 +151,12 @@ export class OrdersWorkerService implements OnModuleInit {
       // Retry buy() tối đa MAX_RETRIES lần
       const retryErrors: string[] = [];
       let result: any = null;
+      const tProviderStart = Date.now();
 
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         const tAttempt = Date.now();
         try {
+          this.logger.log(`Order ${orderId}: [STEP 2] Calling provider.buy() (attempt ${attempt}/${MAX_RETRIES})`);
           void this.orderLogService.info(
             orderId,
             OrderLogStep.WORKER_PROVIDER_CALL,
@@ -174,13 +183,15 @@ export class OrdersWorkerService implements OnModuleInit {
             protocol:      order.config?.protocol as string | undefined,
           });
 
+          const providerCallMs = Date.now() - tAttempt;
+          this.logger.log(`Order ${orderId}: [STEP 2] provider.buy() OK in ${providerCallMs}ms (attempt ${attempt})`);
           void this.orderLogService.info(
             orderId,
             OrderLogStep.WORKER_PROVIDER_OK,
             `provider.buy() thành công lần ${attempt}`,
             {
               attempt,
-              duration_ms:       Date.now() - tAttempt,
+              duration_ms:       providerCallMs,
               provider_order_id: result?.provider_order_id,
               proxies_returned:  result?.proxies?.length ?? 0,
             },
@@ -311,7 +322,7 @@ export class OrdersWorkerService implements OnModuleInit {
         order!.status = OrderStatusEnum.PROCESSING;
         await order!.save();
         await this.redis.lpush(PROCESSING_ORDERS_KEY, orderId);
-        this.logger.log(`Order ${orderId} → PROCESSING, pushed to ${PROCESSING_ORDERS_KEY}`);
+        this.logger.log(`Order ${orderId}: [STEP 3] → PROCESSING, pushed to processing queue (provider API took ${Date.now() - tProviderStart}ms, total worker ${Date.now() - t0}ms)`);
         void this.orderLogService.info(
           orderId,
           OrderLogStep.WORKER_STATUS_PROCESSING,

@@ -72,6 +72,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
 
   private async pollUntilActive(orderId: string): Promise<void> {
     const t0 = Date.now();
+    this.logger.log(`Order ${orderId}: [STEP 4] ProcessingWorker started polling`);
 
     const order = await this.orderModel
       .findById(orderId)
@@ -102,6 +103,8 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
       await this.sleep(POLL_INTERVAL_MS);
 
       try {
+        const tPoll = Date.now();
+        this.logger.log(`Order ${orderId}: [STEP 4] Poll attempt ${attempt}/${MAX_POLL_ATTEMPTS} (elapsed: ${tPoll - t0}ms)`);
         void this.orderLogService.info(
           orderId,
           OrderLogStep.POLLING_STARTED,
@@ -113,6 +116,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
           partner.token_api,
           order.provider_order_id,
         );
+        this.logger.log(`Order ${orderId}: [STEP 4] fetchOrderProxies returned ${proxies?.length ?? 0} proxies (${Date.now() - tPoll}ms)`);
 
         if (!proxies || proxies.length === 0) {
           void this.orderLogService.info(
