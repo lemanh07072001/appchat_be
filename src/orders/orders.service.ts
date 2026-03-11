@@ -491,6 +491,77 @@ export class OrdersService {
     return saved;
   }
 
+  async buySync(userId: string, dto: BuyOrderDto): Promise<{
+    status: string;
+    statusCode: number;
+    message: string;
+    order_code?: string;
+    proxiesip?: string[];
+    timestamp?: number;
+  }> {
+    const POLL_INTERVAL_MS = 500;
+    const MAX_WAIT_MS      = 60_000;
+
+    // 1. Tạo order và trừ tiền
+    const buyResult = await this.buy(userId, dto);
+    const orderId   = buyResult.data.order_id;
+
+    // 2. Poll DB cho đến khi ACTIVE / FAILED / timeout
+    const deadline = Date.now() + MAX_WAIT_MS;
+
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+
+      const order = await this.orderModel
+        .findById(orderId)
+        .select('status error_message')
+        .lean()
+        .exec();
+
+      if (!order) throw new BadRequestException('Order not found');
+
+      if (order.status === OrderStatusEnum.ACTIVE || order.status === OrderStatusEnum.PARTIAL) {
+        const proxies = await this.proxyModel
+          .find({ order_id: new Types.ObjectId(orderId) })
+          .select('ip_address port auth_username auth_password')
+          .lean()
+          .exec();
+
+        const proxiesip = proxies.map(
+          p => `${p.ip_address}:${p.port}:${p.auth_username}:${p.auth_password}`,
+        );
+
+        return {
+          status:     'SUCCESS',
+          statusCode: 200,
+          message:    'Giao dịch thành công!',
+          order_code: buyResult.data.order_code,
+          proxiesip,
+          timestamp:  Math.floor(new Date(buyResult.data.end_date).getTime() / 1000),
+        };
+      }
+
+      if (
+        order.status === OrderStatusEnum.PENDING_REFUND ||
+        order.status === OrderStatusEnum.FAILED
+      ) {
+        return {
+          status:     'FAILED',
+          statusCode: 400,
+          message:    (order as any).error_message ?? 'Đặt hàng thất bại, tiền sẽ được hoàn vào số dư',
+          order_code: buyResult.data.order_code,
+        };
+      }
+    }
+
+    return {
+      status:     'TIMEOUT',
+      statusCode: 408,
+      message:    'Timeout: không nhận được proxy sau 60 giây, vui lòng liên hệ hỗ trợ',
+      order_code: buyResult.data.order_code,
+    };
+  }
+
   async delete(id: string, actor = 'admin') {
     const order = await this.orderModel.findByIdAndDelete(id).exec();
     if (!order) throw new BadRequestException('Order not found');

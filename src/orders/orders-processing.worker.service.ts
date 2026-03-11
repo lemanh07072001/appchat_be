@@ -17,7 +17,7 @@ import { OrderLogStep } from '../schemas/order-log.schema';
 /** Timeout BRPOP — block tối đa 5s chờ order mới */
 const BRPOP_TIMEOUT_SECONDS  = 5;
 /** Delay giữa các lần poll khi chưa có proxy (ms) */
-const POLL_INTERVAL_MS       = 3_000;
+const POLL_INTERVAL_MS       = 1_000;
 /** Số lần poll tối đa trước khi bỏ cuộc */
 const MAX_POLL_ATTEMPTS      = 5;    // 5 × 3s = 15s tối đa
 /** Số proxy insert mỗi batch */

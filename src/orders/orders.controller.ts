@@ -42,6 +42,14 @@ export class OrdersController {
     return this.ordersService.buy(userId, dto);
   }
 
+  // ─── User: mua dịch vụ đồng bộ — trả về proxy ngay khi sẵn sàng ──
+  @Post('api/orders/buy-sync')
+  @UseGuards(ApiTokenGuard)
+  buySyncExternal(@Req() req: Request, @Body() dto: BuyOrderDto) {
+    const userId = (req as any).user.sub as string;
+    return this.ordersService.buySync(userId, dto);
+  }
+
   @Get('api/orders/my')
   findMyOrders(@Req() req: Request, @Query() query: UserOrderQueryDto) {
     const userId = (req as any).user.sub as string;
