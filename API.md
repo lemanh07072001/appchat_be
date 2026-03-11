@@ -165,3 +165,55 @@ Authorization: Bearer <jwt_token>
 GET /api/orders/my/:id
 Authorization: Bearer <jwt_token>
 ```
+
+---
+
+## Luồng xử lý Order
+
+### Provider sync (ProxyVN, Proxyv6...)
+```
+Client → POST /api/orders/buy (hoặc buy-external)
+  → Trừ tiền user
+  → Tạo order (PENDING)
+  → Push order_id → Redis [orders:pending]
+  → OrdersWorkerService BRPOP nhận ngay
+  → Gọi provider.buy() → trả proxies[] luôn
+  → Batch insert proxies (500/batch)
+  → Order → ACTIVE
+Thời gian: ~2-3s
+```
+
+### Provider async (HomeProxy)
+```
+Client → POST /api/orders/buy (hoặc buy-external)
+  → Trừ tiền user
+  → Tạo order (PENDING)
+  → Push order_id → Redis [orders:pending]
+  → OrdersWorkerService BRPOP nhận ngay
+  → Gọi provider.buy() → trả provider_order_id (KHÔNG có proxies)
+  → Order → PROCESSING
+  → Push order_id → Redis [orders:processing]
+  → OrdersProcessingWorkerService BRPOP nhận ngay
+  → Poll provider mỗi 3s, tối đa 5 lần (15s)
+    ├── Có proxy → Batch insert (500/batch) → Order → ACTIVE
+    └── Hết 5 lần → Order → PENDING_REFUND + ghi admin_note
+Thời gian: ~3-15s (tuỳ HomeProxy xử lý)
+```
+
+### Backup scheduler
+```
+OrdersScheduler         — mỗi 30 phút re-push PENDING orders bị miss vào [orders:pending]
+OrdersProcessingScheduler — mỗi 5 phút re-push PROCESSING orders bị miss vào [orders:processing]
+(Phòng trường hợp Redis restart hoặc server crash)
+```
+
+### Trạng thái order
+| Status | Ý nghĩa |
+|---|---|
+| `pending` | Mới tạo, đang chờ worker xử lý |
+| `processing` | Worker đã gọi provider, đang chờ proxy |
+| `active` | Có proxy, đang hoạt động |
+| `partial` | Nhận thiếu proxy so với số lượng đặt |
+| `pending_refund` | Thất bại, chờ admin hoàn tiền |
+| `failed` | Đã hoàn tiền xong |
+| `expired` | Hết hạn sử dụng |

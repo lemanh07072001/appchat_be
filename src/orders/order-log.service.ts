@@ -46,6 +46,34 @@ export class OrderLogService {
     return this.log({ order_id, step, level: OrderLogLevel.ERROR, message, data });
   }
 
+  /** Ghi nhiều log cùng lúc — 1 DB write thay vì N writes */
+  async bulkLog(entries: Array<{
+    order_id: string | Types.ObjectId;
+    step: OrderLogStep;
+    level?: OrderLogLevel;
+    message: string;
+    data?: Record<string, any>;
+    actor?: string;
+  }>): Promise<void> {
+    if (!entries.length) return;
+    try {
+      await this.logModel.insertMany(
+        entries.map(e => ({
+          order_id:    new Types.ObjectId(e.order_id.toString()),
+          step:        e.step,
+          level:       e.level ?? OrderLogLevel.INFO,
+          message:     e.message,
+          data:        e.data ?? {},
+          duration_ms: null,
+          actor:       e.actor ?? 'system',
+        })),
+        { ordered: false },
+      );
+    } catch {
+      // Logging không được làm crash flow chính
+    }
+  }
+
   /** Lấy toàn bộ log của 1 order, sorted theo thời gian */
   async findByOrder(orderId: string) {
     return this.logModel

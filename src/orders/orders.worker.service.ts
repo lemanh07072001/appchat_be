@@ -13,7 +13,7 @@ import { REDIS_CLIENT } from '../redis/redis.module';
 import { PENDING_ORDERS_KEY, PROCESSING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
-import { OrderLogStep } from '../schemas/order-log.schema';
+import { OrderLogStep, OrderLogLevel } from '../schemas/order-log.schema';
 
 
 /** Timeout BRPOP — block tối đa 5 giây chờ order mới */
@@ -285,40 +285,25 @@ export class OrdersWorkerService implements OnModuleInit {
         const received = result.proxies.length;
         const ordered  = order!.quantity;
 
-        void this.orderLogService.info(
-          orderId,
-          OrderLogStep.WORKER_PROXIES_INSERTED,
-          `Đã insert ${received} proxies vào MongoDB`,
-          { received, ordered, batch_size: INSERT_BATCH_SIZE, batches: Math.ceil(proxyDocs.length / INSERT_BATCH_SIZE) },
-        );
-
         if (received < ordered) {
-          // Thiếu số lượng → PARTIAL, chờ admin refund
           const shortage = ordered - received;
           order!.actual_quantity = received;
           order!.status = OrderStatusEnum.PARTIAL;
           order!.admin_note = `Nhận ${received}/${ordered} proxy từ provider, thiếu ${shortage}`;
           await order!.save();
           this.logger.warn(`Order ${orderId} → PARTIAL: nhận ${received}/${ordered}, thiếu ${shortage}`);
-
-          void this.orderLogService.warn(
-            orderId,
-            OrderLogStep.WORKER_STATUS_PARTIAL,
-            `Order → PARTIAL: nhận ${received}/${ordered} proxies, thiếu ${shortage}`,
-            { received, ordered, shortage },
-          );
+          void this.orderLogService.bulkLog([
+            { order_id: orderId, step: OrderLogStep.WORKER_PROXIES_INSERTED, message: `Insert ${received} proxies`, data: { received, ordered } },
+            { order_id: orderId, step: OrderLogStep.WORKER_STATUS_PARTIAL, level: OrderLogLevel.WARN, message: `Order → PARTIAL: nhận ${received}/${ordered}`, data: { received, ordered, shortage } },
+          ]);
         } else {
           order!.status = OrderStatusEnum.ACTIVE;
           await order!.save();
           this.logger.log(`Order ${orderId} → ACTIVE, inserted ${received} proxies`);
-
-          void this.orderLogService.info(
-            orderId,
-            OrderLogStep.WORKER_STATUS_ACTIVE,
-            `Order → ACTIVE: ${received} proxies sẵn sàng sử dụng`,
-            { received, duration_ms: Date.now() - t0 },
-          );
-
+          void this.orderLogService.bulkLog([
+            { order_id: orderId, step: OrderLogStep.WORKER_PROXIES_INSERTED, message: `Insert ${received} proxies`, data: { received, ordered } },
+            { order_id: orderId, step: OrderLogStep.WORKER_STATUS_ACTIVE, message: `Order → ACTIVE`, data: { received, duration_ms: Date.now() - t0 } },
+          ]);
           void this.affiliateService.handleOrderActive(order!);
         }
       } else {
@@ -327,7 +312,6 @@ export class OrdersWorkerService implements OnModuleInit {
         await order!.save();
         await this.redis.lpush(PROCESSING_ORDERS_KEY, orderId);
         this.logger.log(`Order ${orderId} → PROCESSING, pushed to ${PROCESSING_ORDERS_KEY}`);
-
         void this.orderLogService.info(
           orderId,
           OrderLogStep.WORKER_STATUS_PROCESSING,
