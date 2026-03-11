@@ -320,8 +320,12 @@ export class OrdersWorkerService implements OnModuleInit {
       } else {
         // Provider trả proxy async (HomeProxy) → push vào processing queue
         order!.status = OrderStatusEnum.PROCESSING;
+        const tSave = Date.now();
         await order!.save();
+        this.logger.log(`Order ${orderId}: [STEP 3a] order.save() took ${Date.now() - tSave}ms`);
+        const tPush = Date.now();
         await this.redis.lpush(PROCESSING_ORDERS_KEY, orderId);
+        this.logger.log(`Order ${orderId}: [STEP 3b] redis.lpush took ${Date.now() - tPush}ms`);
         this.logger.log(`Order ${orderId}: [STEP 3] → PROCESSING, pushed to processing queue (provider API took ${Date.now() - tProviderStart}ms, total worker ${Date.now() - t0}ms)`);
         void this.orderLogService.info(
           orderId,
