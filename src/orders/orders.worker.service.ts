@@ -184,6 +184,9 @@ export class OrdersWorkerService implements OnModuleInit {
             },
           );
 
+          let bodyApi: any = {};
+          try { bodyApi = JSON.parse(service?.body_api ?? '{}'); } catch {}
+
           result = await provider.buy({
             token_api:        partner.token_api,
             quantity:         order.quantity,
@@ -194,6 +197,7 @@ export class OrdersWorkerService implements OnModuleInit {
             isp:              order.config?.isp             as string | undefined,
             protocol:         order.config?.protocol        as string | undefined,
             rotate_interval:  order.config?.rotate_interval as number | undefined,
+            is_cdk:           bodyApi?.isCdk === true,
           });
 
           const providerCallMs = Date.now() - tAttempt;

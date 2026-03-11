@@ -11,6 +11,7 @@ export interface ProviderBuyParams {
   body_api?: string;         // template body từ service config (nếu có)
   id_service?: string;       // id dịch vụ nhà cung cấp (không phải provider nào cũng cần)
   rotate_interval?: number;  // phút xoay IP (0 = không xoay / proxy tĩnh)
+  is_cdk?: boolean;          // true = mua key xoay (CDK), false = proxy thường
 }
 
 export interface ProviderRenewParams {

@@ -73,12 +73,13 @@ export class HomeproxyProvider implements IProxyProvider {
     const { user, password } = this.generateCredentials();
 
     const rotateInterval = params.rotate_interval ?? 0;
+    const isCdk          = params.is_cdk ?? false;
 
     const raw = await this.request<any>('POST', '/merchant/orders', params.token_api, {
       paymentMethod: 'WALLET',
       products: [
         {
-          isCdk:          false,
+          isCdk,
           dayOfUse:       params.duration_days,
           rotateInterval,
           user,

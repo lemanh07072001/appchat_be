@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { randomBytes } from 'crypto';
 import { Order, OrderDocument } from '../schemas/orders.schema';
 import { Partner, PartnerDocument } from '../schemas/partners.schema';
 import { Proxy, ProxyDocument } from '../schemas/proxies.schema';
@@ -139,6 +140,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
 
         // Batch insert
         const orderObjectId = new Types.ObjectId(order._id as any);
+        const isCdk = (order.config as any)?.is_cdk === true;
         const proxyDocs = proxies.map((p: any) => ({
           order_id:          orderObjectId,
           proxy_type_id:     order.service_id ?? null,
@@ -156,6 +158,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
           country_code:      p.country_code ?? 'VN',
           is_active:         true,
           is_available:      false,
+          cdk_key:           isCdk ? randomBytes(16).toString('hex') : undefined,
         }));
 
         for (let i = 0; i < proxyDocs.length; i += INSERT_BATCH_SIZE) {

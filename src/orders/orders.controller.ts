@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { OrdersService } from './orders.service';
 import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
 import { OrderLogService } from './order-log.service';
+import { ProxyRotateService } from './proxy-rotate.service';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { BuyOrderDto } from '../dto/buy-order.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
@@ -20,6 +21,7 @@ export class OrdersController {
     private readonly ordersService: OrdersService,
     private readonly expirationScheduler: OrdersExpirationScheduler,
     private readonly orderLogService: OrderLogService,
+    private readonly proxyRotateService: ProxyRotateService,
   ) {}
 
   @Post('api/admin/orders/run-expiration')
@@ -51,6 +53,14 @@ export class OrdersController {
   buySyncExternal(@Req() req: Request, @Body() dto: BuyOrderDto) {
     const userId = (req as any).user.sub as string;
     return this.ordersService.buySync(userId, dto);
+  }
+
+  // ─── CDK: xoay proxy theo key ─────────────────────────────
+  @Get('api/proxy/rotate/:key')
+  @Public()
+  @UseGuards(ApiTokenGuard)
+  rotateCdk(@Param('key') key: string) {
+    return this.proxyRotateService.rotateByCdkKey(key);
   }
 
   @Get('api/orders/my')

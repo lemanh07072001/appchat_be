@@ -132,13 +132,16 @@ export class OrdersService {
       status:         OrderStatusEnum.PENDING,
       start_date:     now,
       end_date:       endDate,
-      config: {
-        protocol:         dto.protocol ?? null,
-        isp:              dto.isp      ?? null,
-        rotate_interval:  dto.rotate_interval
-          ?? (() => { try { return JSON.parse(service.body_api ?? '{}')?.rotate_interval ?? null; } catch { return null; } })()
-          ?? null,
-      },
+      config: (() => {
+        let bodyApi: any = {};
+        try { bodyApi = JSON.parse(service.body_api ?? '{}'); } catch {}
+        return {
+          protocol:        dto.protocol ?? null,
+          isp:             dto.isp      ?? null,
+          rotate_interval: dto.rotate_interval ?? bodyApi?.rotate_interval ?? null,
+          is_cdk:          bodyApi?.isCdk === true,
+        };
+      })(),
     };
 
     const order = new this.orderModel(dataOrder);
@@ -526,12 +529,15 @@ export class OrdersService {
       if (order.status === OrderStatusEnum.ACTIVE || order.status === OrderStatusEnum.PARTIAL) {
         const proxies = await this.proxyModel
           .find({ order_id: new Types.ObjectId(orderId) })
-          .select('ip_address port auth_username auth_password')
+          .select('ip_address port auth_username auth_password cdk_key')
           .lean()
           .exec();
 
-        const proxiesip = proxies.map(
-          p => `${p.ip_address}:${p.port}:${p.auth_username}:${p.auth_password}`,
+        // CDK proxy → trả cdk_key; proxy thường → trả ip:port:user:pass
+        const proxiesip = proxies.map(p =>
+          (p as any).cdk_key
+            ? (p as any).cdk_key
+            : `${p.ip_address}:${p.port}:${p.auth_username}:${p.auth_password}`,
         );
 
         return {
