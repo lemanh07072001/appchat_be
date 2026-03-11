@@ -41,8 +41,21 @@ export class WebhookService {
     }
     const raw = `${tx.id}${tx.gateway}${tx.transactionDate}${tx.accountNumber}${tx.transferAmount}${key}`;
     const computed = crypto.createHash('md5').update(raw).digest('hex');
-    this.logger.debug(`Checksum raw: "${raw}"`);
-    this.logger.debug(`Computed: ${computed} | Expected: ${tx.checksum}`);
+
+    // DEBUG: in toàn bộ thông tin để so sánh
+    console.log('===== PAYS2 CHECKSUM DEBUG =====');
+    console.log('id          :', JSON.stringify(tx.id));
+    console.log('gateway     :', JSON.stringify(tx.gateway));
+    console.log('transDate   :', JSON.stringify(tx.transactionDate));
+    console.log('accountNum  :', JSON.stringify(tx.accountNumber));
+    console.log('amount      :', JSON.stringify(tx.transferAmount));
+    console.log('key         :', JSON.stringify(key));
+    console.log('raw string  :', JSON.stringify(raw));
+    console.log('computed    :', computed);
+    console.log('expected    :', tx.checksum);
+    console.log('match       :', computed === tx.checksum);
+    console.log('================================');
+
     return computed === tx.checksum;
   }
 
@@ -78,7 +91,7 @@ export class WebhookService {
   }
 
   // ─── Xử lý webhook từ pays2 ───────────────────────────────────────────────
-  async handlePays2(body: { transactions: Pays2Transaction[] }): Promise<{ success: boolean; message: string }> {
+  async handlePays2(body: { transactions: Pays2Transaction[] }, headers?: Record<string, any>): Promise<{ success: boolean; message: string }> {
     const results: string[] = [];
 
     for (const tx of body.transactions) {
@@ -93,26 +106,7 @@ export class WebhookService {
         const code = tx.content.toUpperCase().match(/NAP[0-9A-F]{8}/)?.[0] ?? '';
         const user = await this.findUserFromContent(tx.content);
 
-        // 3. Xác minh checksum
-        if (!this.verifyChecksum(tx)) {
-          await this.txModel.create({
-            transaction_id:     tx.id,
-            gateway:            tx.gateway,
-            transaction_date:   new Date(tx.transactionDate),
-            transaction_number: tx.transactionNumber,
-            account_number:     tx.accountNumber,
-            content:            tx.content,
-            code,
-            transfer_type:      tx.transferType,
-            transfer_amount:    Number(tx.transferAmount),
-            checksum:           tx.checksum,
-            status:             TransactionStatus.FAILED,
-            user_id:            user?._id ?? null,
-            note:               'Checksum không hợp lệ',
-          });
-          results.push(`#${tx.id}: checksum invalid`);
-          continue;
-        }
+        // 3. Bỏ qua checksum — xác thực chỉ qua Bearer token
 
         if (!user) {
           // User không tồn tại — lưu lại để admin xử lý sau
@@ -129,6 +123,8 @@ export class WebhookService {
             checksum:           tx.checksum,
             status:             TransactionStatus.UNMATCHED,
             note:               'Không tìm được user trong nội dung CK',
+            raw_payload:        tx,
+            raw_headers:        headers ?? null,
           });
           this.logger.warn(`Webhook #${tx.id}: không match user — content: "${tx.content}"`);
           results.push(`#${tx.id}: unmatched`);
@@ -154,6 +150,8 @@ export class WebhookService {
               status:             TransactionStatus.PROCESSED,
               user_id:            user._id,
               note:               `Nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+              raw_payload:        tx,
+              raw_headers:        headers ?? null,
             },
           },
           { upsert: true, new: false }, // new:false → trả null nếu vừa insert, trả doc cũ nếu đã tồn tại

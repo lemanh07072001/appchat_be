@@ -15,6 +15,8 @@ import { OrderStatusEnum, PaymentMethodEnum, PaymentStatusEnum } from '../enum/o
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { PENDING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
+import { OrderLogService } from './order-log.service';
+import { OrderLogStep } from '../schemas/order-log.schema';
 
 @Injectable()
 export class OrdersService {
@@ -31,6 +33,7 @@ export class OrdersService {
     private proxyModel: Model<ProxyDocument>,
     @Inject(REDIS_CLIENT)
     private readonly redis: Redis,
+    private readonly orderLogService: OrderLogService,
   ) {}
 
   private toObjectId(id?: string): Types.ObjectId | null {
@@ -52,6 +55,8 @@ export class OrdersService {
   }
 
   async buy(userId: string, dto: BuyOrderDto): Promise<OrderDocument> {
+    const t0 = Date.now();
+
     // 1. Validate service
     const service = await this.serviceModel.findById(dto.service_id).exec();
     if (!service || !service.status) {
@@ -117,10 +122,49 @@ export class OrdersService {
     const order = new this.orderModel(dataOrder);
     await order.save();
 
+    const orderId = (order._id as Types.ObjectId).toString();
+
+    // Log: order đã tạo xong
+    void this.orderLogService.info(
+      orderId,
+      OrderLogStep.BUY_ORDER_CREATED,
+      `Order ${order.order_code} tạo thành công`,
+      {
+        order_code:     order.order_code,
+        service_id:     dto.service_id,
+        service_name:   service.name,
+        partner_id:     service.partner?.toString() ?? null,
+        quantity,
+        duration_days:  dto.duration_days,
+        price_per_unit: pricePerUnit,
+        total_price:    totalPrice,
+        payment_method: PaymentMethodEnum.BALANCE,
+        balance_after:  user.money,
+        start_date:     now,
+        end_date:       endDate,
+        config:         dataOrder.config,
+        duration_ms:    Date.now() - t0,
+      },
+      userId,
+    );
+
     // 6. Push order ID vào Redis List — worker BRPOP sẽ nhận ngay
     if (service.partner) {
-      const orderId = (order._id as Types.ObjectId).toString();
       await this.redis.lpush(PENDING_ORDERS_KEY, orderId);
+
+      void this.orderLogService.info(
+        orderId,
+        OrderLogStep.BUY_QUEUED,
+        `Order đã được đẩy vào hàng đợi Redis (${PENDING_ORDERS_KEY})`,
+        { redis_key: PENDING_ORDERS_KEY },
+        userId,
+      );
+    } else {
+      void this.orderLogService.warn(
+        orderId,
+        OrderLogStep.BUY_QUEUED,
+        'Order không có partner, không đẩy vào queue',
+      );
     }
 
     return order;
@@ -282,21 +326,39 @@ export class OrdersService {
     return order.save();
   }
 
-  async updateStatus(id: string, status: OrderStatusEnum): Promise<OrderDocument> {
+  async updateStatus(id: string, status: OrderStatusEnum, actor = 'admin'): Promise<OrderDocument> {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+    const prevStatus = order.status;
     order.status = status;
-    return order.save();
+    const saved = await order.save();
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_STATUS_UPDATED,
+      `Trạng thái order thay đổi: ${prevStatus} → ${status}`,
+      { prev_status: prevStatus, new_status: status },
+      actor,
+    );
+    return saved;
   }
 
-  async updatePaymentStatus(id: string, status: PaymentStatusEnum): Promise<OrderDocument> {
+  async updatePaymentStatus(id: string, status: PaymentStatusEnum, actor = 'admin'): Promise<OrderDocument> {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+    const prevStatus = order.payment_status;
     order.payment_status = status;
-    return order.save();
+    const saved = await order.save();
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_PAYMENT_UPDATED,
+      `Payment status thay đổi: ${prevStatus} → ${status}`,
+      { prev_status: prevStatus, new_status: status },
+      actor,
+    );
+    return saved;
   }
 
-  async renew(id: string): Promise<OrderDocument> {
+  async renew(id: string, actor = 'admin'): Promise<OrderDocument> {
     const original = await this.orderModel.findById(id).exec();
     if (!original) throw new BadRequestException('Order not found');
 
@@ -326,10 +388,26 @@ export class OrdersService {
     original.renewed_to = saved._id as Types.ObjectId;
     await original.save();
 
+    const newOrderId = (saved._id as Types.ObjectId).toString();
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_ORDER_RENEWED,
+      `Order được gia hạn → order mới ${newOrder.order_code}`,
+      { new_order_id: newOrderId, new_order_code: newOrder.order_code },
+      actor,
+    );
+    void this.orderLogService.info(
+      newOrderId,
+      OrderLogStep.ADMIN_ORDER_RENEWED,
+      `Order gia hạn từ order gốc ${original.order_code}`,
+      { source_order_id: id, source_order_code: original.order_code },
+      actor,
+    );
+
     return saved;
   }
 
-  async approveRefund(id: string): Promise<OrderDocument> {
+  async approveRefund(id: string, actor = 'admin'): Promise<OrderDocument> {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
 
@@ -344,20 +422,44 @@ export class OrdersService {
     const refundAmount = order.total_price ?? 0;
     if (refundAmount <= 0) throw new BadRequestException('Số tiền hoàn không hợp lệ');
 
-    await this.userModel.findByIdAndUpdate(
+    const user = await this.userModel.findByIdAndUpdate(
       order.user_id,
       { $inc: { money: refundAmount } },
+      { new: true },
     ).exec();
 
     order.refunded_amount = refundAmount;
     order.status = OrderStatusEnum.FAILED;
     order.payment_status = PaymentStatusEnum.REFUNDED;
-    return order.save();
+    const saved = await order.save();
+
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_REFUND_APPROVED,
+      `Hoàn tiền ${refundAmount.toLocaleString()} VND cho user ${order.user_id}`,
+      {
+        refund_amount:   refundAmount,
+        user_id:         order.user_id?.toString(),
+        balance_after:   user?.money ?? null,
+        new_order_status: OrderStatusEnum.FAILED,
+        new_payment_status: PaymentStatusEnum.REFUNDED,
+      },
+      actor,
+    );
+
+    return saved;
   }
 
-  async delete(id: string) {
+  async delete(id: string, actor = 'admin') {
     const order = await this.orderModel.findByIdAndDelete(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_ORDER_DELETED,
+      `Order ${order.order_code} bị xóa`,
+      { order_code: order.order_code },
+      actor,
+    );
     return { message: 'Order deleted successfully' };
   }
 }

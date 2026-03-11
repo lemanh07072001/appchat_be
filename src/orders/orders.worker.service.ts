@@ -12,6 +12,8 @@ import { AffiliateService } from '../affiliate/affiliate.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { PENDING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
+import { OrderLogService } from './order-log.service';
+import { OrderLogStep } from '../schemas/order-log.schema';
 
 
 /** Timeout BRPOP — block tối đa 5 giây chờ order mới */
@@ -45,6 +47,7 @@ export class OrdersWorkerService implements OnModuleInit {
     @Inject(REDIS_CLIENT)      private readonly redis:        Redis,
     private readonly providerFactory: ProxyProviderFactory,
     private readonly affiliateService: AffiliateService,
+    private readonly orderLogService: OrderLogService,
   ) {}
 
   onModuleInit() {
@@ -81,13 +84,18 @@ export class OrdersWorkerService implements OnModuleInit {
   }
 
   private async processOrder(orderId: string): Promise<void> {
+    const t0 = Date.now();
+
     // Claim lock per order — chỉ 1 worker xử lý 1 order
     const lockKey = `lock:order:${orderId}`;
     const claimed = await this.redis.set(lockKey, '1', 'EX', ORDER_LOCK_TTL_SECONDS, 'NX');
     if (!claimed) {
       this.logger.debug(`Order ${orderId}: lock đang bị giữ, bỏ qua`);
+      void this.orderLogService.warn(orderId, OrderLogStep.WORKER_LOCK_SKIPPED, 'Lock đang bị giữ bởi worker khác, bỏ qua');
       return;
     }
+
+    void this.orderLogService.info(orderId, OrderLogStep.WORKER_LOCK_ACQUIRED, 'Worker đã giữ lock và bắt đầu xử lý');
 
     try {
       // Re-fetch từ DB để xác nhận vẫn còn PENDING (tránh race condition)
@@ -96,7 +104,12 @@ export class OrdersWorkerService implements OnModuleInit {
         status: OrderStatusEnum.PENDING,
       }).exec();
 
-      if (!order) return;
+      if (!order) {
+        void this.orderLogService.warn(orderId, OrderLogStep.WORKER_ORDER_VERIFIED, 'Order không còn ở trạng thái PENDING, bỏ qua');
+        return;
+      }
+
+      void this.orderLogService.info(orderId, OrderLogStep.WORKER_ORDER_VERIFIED, 'Order xác nhận PENDING, tiếp tục xử lý');
 
       const [partner, service] = await Promise.all([
         order.partner_id ? this.partnerModel.findById(order.partner_id).exec() : null,
@@ -105,6 +118,7 @@ export class OrdersWorkerService implements OnModuleInit {
 
       if (!partner || !partner.code) {
         this.logger.warn(`Order ${orderId}: không có partner, bỏ qua`);
+        void this.orderLogService.warn(orderId, OrderLogStep.WORKER_ORDER_VERIFIED, 'Order không có partner hợp lệ, bỏ qua');
         return;
       }
 
@@ -132,7 +146,23 @@ export class OrdersWorkerService implements OnModuleInit {
       let result: any = null;
 
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        const tAttempt = Date.now();
         try {
+          void this.orderLogService.info(
+            orderId,
+            OrderLogStep.WORKER_PROVIDER_CALL,
+            `Gọi provider.buy() lần ${attempt}/${MAX_RETRIES}`,
+            {
+              attempt,
+              partner_code: partner.code,
+              id_service:   idService,
+              quantity:     order.quantity,
+              duration_days: order.duration_days,
+              isp:          order.config?.isp,
+              protocol:     order.config?.protocol,
+            },
+          );
+
           result = await provider.buy({
             token_api:     partner.token_api,
             quantity:      order.quantity,
@@ -143,10 +173,31 @@ export class OrdersWorkerService implements OnModuleInit {
             isp:           order.config?.isp      as string | undefined,
             protocol:      order.config?.protocol as string | undefined,
           });
+
+          void this.orderLogService.info(
+            orderId,
+            OrderLogStep.WORKER_PROVIDER_OK,
+            `provider.buy() thành công lần ${attempt}`,
+            {
+              attempt,
+              duration_ms:       Date.now() - tAttempt,
+              provider_order_id: result?.provider_order_id,
+              proxies_returned:  result?.proxies?.length ?? 0,
+            },
+          );
+
           break; // Thành công — thoát loop
         } catch (err: any) {
           retryErrors.push(`[${attempt}/${MAX_RETRIES}] ${err?.message ?? 'Unknown error'}`);
           this.logger.warn(`Order ${orderId}: lần thử ${attempt}/${MAX_RETRIES} thất bại — ${err?.message}`);
+
+          void this.orderLogService.warn(
+            orderId,
+            OrderLogStep.WORKER_PROVIDER_RETRY,
+            `provider.buy() thất bại lần ${attempt}/${MAX_RETRIES}: ${err?.message}`,
+            { attempt, error: err?.message, duration_ms: Date.now() - tAttempt },
+          );
+
           if (attempt < MAX_RETRIES) await this.sleep(RETRY_DELAY_MS);
         }
       }
@@ -161,6 +212,13 @@ export class OrdersWorkerService implements OnModuleInit {
         const failCount = await this.redis.incr(failKey);
         await this.redis.expire(failKey, PARTNER_FAIL_TTL_SECONDS);
 
+        void this.orderLogService.warn(
+          orderId,
+          OrderLogStep.WORKER_PARTNER_FAIL_COUNT,
+          `Partner "${partner.code}" fail count: ${failCount}/${PARTNER_FAIL_THRESHOLD}`,
+          { partner_id: partner._id?.toString(), partner_code: partner.code, fail_count: failCount, threshold: PARTNER_FAIL_THRESHOLD },
+        );
+
         if (failCount >= PARTNER_FAIL_THRESHOLD) {
           this.logger.error(`Partner "${partner.code}": ${failCount} order fail liên tiếp → disable partner + services`);
           await Promise.all([
@@ -168,9 +226,23 @@ export class OrdersWorkerService implements OnModuleInit {
             this.serviceModel.updateMany({ partner: partner._id }, { status: false }).exec(),
             this.redis.del(failKey),
           ]);
+
+          void this.orderLogService.error(
+            orderId,
+            OrderLogStep.WORKER_PARTNER_DISABLED,
+            `Partner "${partner.code}" bị disable do vượt ngưỡng lỗi ${PARTNER_FAIL_THRESHOLD}`,
+            { partner_id: partner._id?.toString(), partner_code: partner.code, fail_count: failCount },
+          );
         } else {
           this.logger.warn(`Order ${orderId}: fail (${failCount}/${PARTNER_FAIL_THRESHOLD}) — ${errorSummary}`);
         }
+
+        void this.orderLogService.error(
+          orderId,
+          OrderLogStep.WORKER_PROVIDER_FAIL,
+          `provider.buy() thất bại tất cả ${MAX_RETRIES} lần: ${errorSummary}`,
+          { retries: MAX_RETRIES, errors: retryErrors },
+        );
 
         throw new Error(errorSummary);
       }
@@ -213,6 +285,13 @@ export class OrdersWorkerService implements OnModuleInit {
         const received = result.proxies.length;
         const ordered  = order!.quantity;
 
+        void this.orderLogService.info(
+          orderId,
+          OrderLogStep.WORKER_PROXIES_INSERTED,
+          `Đã insert ${received} proxies vào MongoDB`,
+          { received, ordered, batch_size: INSERT_BATCH_SIZE, batches: Math.ceil(proxyDocs.length / INSERT_BATCH_SIZE) },
+        );
+
         if (received < ordered) {
           // Thiếu số lượng → PARTIAL, chờ admin refund
           const shortage = ordered - received;
@@ -221,10 +300,25 @@ export class OrdersWorkerService implements OnModuleInit {
           order!.admin_note = `Nhận ${received}/${ordered} proxy từ provider, thiếu ${shortage}`;
           await order!.save();
           this.logger.warn(`Order ${orderId} → PARTIAL: nhận ${received}/${ordered}, thiếu ${shortage}`);
+
+          void this.orderLogService.warn(
+            orderId,
+            OrderLogStep.WORKER_STATUS_PARTIAL,
+            `Order → PARTIAL: nhận ${received}/${ordered} proxies, thiếu ${shortage}`,
+            { received, ordered, shortage },
+          );
         } else {
           order!.status = OrderStatusEnum.ACTIVE;
           await order!.save();
           this.logger.log(`Order ${orderId} → ACTIVE, inserted ${received} proxies`);
+
+          void this.orderLogService.info(
+            orderId,
+            OrderLogStep.WORKER_STATUS_ACTIVE,
+            `Order → ACTIVE: ${received} proxies sẵn sàng sử dụng`,
+            { received, duration_ms: Date.now() - t0 },
+          );
+
           void this.affiliateService.handleOrderActive(order!);
         }
       } else {
@@ -232,6 +326,13 @@ export class OrdersWorkerService implements OnModuleInit {
         order!.status = OrderStatusEnum.PROCESSING;
         await order!.save();
         this.logger.log(`Order ${orderId} → PROCESSING (provider_order_id: ${result.provider_order_id})`);
+
+        void this.orderLogService.info(
+          orderId,
+          OrderLogStep.WORKER_STATUS_PROCESSING,
+          `Order → PROCESSING: provider đang xử lý async, chờ polling`,
+          { provider_order_id: result.provider_order_id, partner_code: partner.code },
+        );
       }
     } catch (err) {
       this.logger.error(`Order ${orderId} thất bại: ${err?.message}`);
@@ -239,6 +340,13 @@ export class OrdersWorkerService implements OnModuleInit {
         status:        OrderStatusEnum.PENDING_REFUND,
         error_message: err?.message ?? 'Worker error',
       }).exec();
+
+      void this.orderLogService.error(
+        orderId,
+        OrderLogStep.WORKER_STATUS_PENDING_REFUND,
+        `Order → PENDING_REFUND do lỗi: ${err?.message}`,
+        { error: err?.message, duration_ms: Date.now() - t0 },
+      );
     } finally {
       await this.redis.del(lockKey);
     }

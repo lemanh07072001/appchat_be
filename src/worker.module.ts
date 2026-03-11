@@ -5,10 +5,12 @@ import { Order, OrderSchema } from './schemas/orders.schema';
 import { Partner, PartnerSchema } from './schemas/partners.schema';
 import { Service, ServiceSchema } from './schemas/services.schema';
 import { Proxy, ProxySchema } from './schemas/proxies.schema';
+import { OrderLog, OrderLogSchema } from './schemas/order-log.schema';
 import { RedisModule } from './redis/redis.module';
 import { ProxyProvidersModule } from './proxy-providers/proxy-providers.module';
 import { AffiliateModule } from './affiliate/affiliate.module';
 import { OrdersWorkerService } from './orders/orders.worker.service';
+import { OrderLogService } from './orders/order-log.service';
 
 /**
  * Module tối giản cho worker process — không có HTTP server.
@@ -31,12 +33,13 @@ import { OrdersWorkerService } from './orders/orders.worker.service';
       { name: Partner.name, schema: PartnerSchema },
       { name: Service.name, schema: ServiceSchema },
       { name: Proxy.name,   schema: ProxySchema },
+      { name: OrderLog.name, schema: OrderLogSchema },
     ]),
 
     RedisModule,
     ProxyProvidersModule,
     AffiliateModule,
   ],
-  providers: [OrdersWorkerService],
+  providers: [OrdersWorkerService, OrderLogService],
 })
 export class WorkerModule {}

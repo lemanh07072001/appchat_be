@@ -66,6 +66,12 @@ export class Transaction {
 
   @Prop({ default: '' })
   note: string;                     // Ghi chú xử lý (lỗi, lý do, ...)
+
+  @Prop({ type: Object, default: null })
+  raw_payload: Record<string, any> | null;  // Toàn bộ dữ liệu gốc từ pays2
+
+  @Prop({ type: Object, default: null })
+  raw_headers: Record<string, any> | null;  // Headers từ request pays2
 }
 
 export const TransactionSchema = SchemaFactory.createForClass(Transaction);

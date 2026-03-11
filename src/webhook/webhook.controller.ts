@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Param, Query, Req, UseGuards, Headers, UnauthorizedException } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, Query, Req, UseGuards, Headers, UnauthorizedException, Request } from '@nestjs/common';
 import { WebhookService } from './webhook.service';
 import { AuthGuard } from '../guards/auth.guard';
 import { AdminGuard } from '../guards/admin.guard';
@@ -40,13 +40,14 @@ export class WebhookController {
   @Post('webhook/pays2')
   handlePays2(
     @Headers('authorization') authorization: string,
+    @Req() req: any,
     @Body() body: { transactions: any[] },
   ) {
     const token = process.env.PAYS2_WEBHOOK_TOKEN;
     if (!token) throw new UnauthorizedException('Webhook token not configured');
     const bearer = (authorization ?? '').replace('Bearer ', '').trim();
     if (bearer !== token) throw new UnauthorizedException('Invalid webhook token');
-    return this.webhookService.handlePays2(body);
+    return this.webhookService.handlePays2(body, req.headers);
   }
 
   // ─── Admin: dashboard ──────────────────────────────────────────────────

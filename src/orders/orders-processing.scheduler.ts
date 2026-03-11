@@ -9,6 +9,8 @@ import { OrderStatusEnum } from '../enum/order.enum';
 import { ProxyProtocolEnum } from '../enum/proxy.enum';
 import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 import { AffiliateService } from '../affiliate/affiliate.service';
+import { OrderLogService } from './order-log.service';
+import { OrderLogStep } from '../schemas/order-log.schema';
 
 /** Số order xử lý song song mỗi batch — tránh rate limit */
 const BATCH_SIZE = 20;
@@ -24,6 +26,7 @@ export class OrdersProcessingScheduler implements OnModuleInit {
     @InjectModel(Proxy.name)   private readonly proxyModel:   Model<ProxyDocument>,
     private readonly providerFactory: ProxyProviderFactory,
     private readonly affiliateService: AffiliateService,
+    private readonly orderLogService: OrderLogService,
   ) {}
 
   onModuleInit() {
@@ -73,6 +76,9 @@ export class OrdersProcessingScheduler implements OnModuleInit {
   }
 
   private async fetchAndActivate(order: any, partnerMap: Map<string, any>): Promise<void> {
+    const t0 = Date.now();
+    const orderId = order._id.toString();
+
     try {
       const partner = partnerMap.get(order.partner_id?.toString());
 
@@ -82,25 +88,46 @@ export class OrdersProcessingScheduler implements OnModuleInit {
 
       if (!provider.fetchOrderProxies) return; // Provider không hỗ trợ async fetch
 
+      void this.orderLogService.info(
+        orderId,
+        OrderLogStep.POLLING_STARTED,
+        `Polling provider "${partner.code}" cho order PROCESSING`,
+        { provider_order_id: order.provider_order_id, partner_code: partner.code },
+      );
+
       const proxies = await provider.fetchOrderProxies(
         partner.token_api,
         order.provider_order_id,
       );
 
-      if (!proxies || proxies.length === 0) return; // Chưa có proxy — chờ cycle sau
+      if (!proxies || proxies.length === 0) {
+        void this.orderLogService.info(
+          orderId,
+          OrderLogStep.POLLING_NO_PROXIES,
+          'Provider chưa trả proxy, chờ cycle sau',
+          { provider_order_id: order.provider_order_id, duration_ms: Date.now() - t0 },
+        );
+        return; // Chưa có proxy — chờ cycle sau
+      }
 
       // Idempotent: skip nếu proxy đã được insert cho order này
       const existing = await this.proxyModel.countDocuments({ order_id: order._id }).exec();
       if (existing > 0) {
         // Proxy đã có, chỉ đảm bảo status ACTIVE
         await this.orderModel.findByIdAndUpdate(order._id, { status: OrderStatusEnum.ACTIVE }).exec();
+        void this.orderLogService.info(
+          orderId,
+          OrderLogStep.POLLING_PROXIES_OK,
+          `Proxy đã tồn tại (${existing}), đảm bảo status ACTIVE`,
+          { existing_count: existing },
+        );
         return;
       }
 
-      const orderId      = new Types.ObjectId(order._id);
-      const serviceId    = order.service_id ? new Types.ObjectId(order.service_id) : null;
+      const orderObjectId = new Types.ObjectId(order._id);
+      const serviceId     = order.service_id ? new Types.ObjectId(order.service_id) : null;
       const proxyDocs = proxies.map((p: any) => ({
-        order_id:          orderId,
+        order_id:          orderObjectId,
         proxy_type_id:     serviceId,
         ip_address:        p.host,
         port:              Number(p.port),
@@ -126,9 +153,23 @@ export class OrdersProcessingScheduler implements OnModuleInit {
       }).exec();
 
       this.logger.log(`Order ${order._id} → ACTIVE, inserted ${proxies.length} proxies`);
+
+      void this.orderLogService.info(
+        orderId,
+        OrderLogStep.POLLING_PROXIES_OK,
+        `Polling thành công: ${proxies.length} proxies inserted → ACTIVE`,
+        { proxies_inserted: proxies.length, duration_ms: Date.now() - t0 },
+      );
+
       void this.affiliateService.handleOrderActive(order as any);
     } catch (err) {
       this.logger.error(`fetchAndActivate ${order._id}: ${err?.message}`);
+      void this.orderLogService.error(
+        orderId,
+        OrderLogStep.POLLING_FAILED,
+        `Polling thất bại: ${err?.message}`,
+        { error: err?.message, duration_ms: Date.now() - t0 },
+      );
     }
   }
 }

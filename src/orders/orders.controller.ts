@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuard
 import type { Request } from 'express';
 import { OrdersService } from './orders.service';
 import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
+import { OrderLogService } from './order-log.service';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { BuyOrderDto } from '../dto/buy-order.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
@@ -16,6 +17,7 @@ export class OrdersController {
   constructor(
     private readonly ordersService: OrdersService,
     private readonly expirationScheduler: OrdersExpirationScheduler,
+    private readonly orderLogService: OrderLogService,
   ) {}
 
   @Post('api/admin/orders/run-expiration')
@@ -90,5 +92,12 @@ export class OrdersController {
   @UseGuards(AdminGuard)
   delete(@Param('id') id: string) {
     return this.ordersService.delete(id);
+  }
+
+  // ─── Order Logs ───────────────────────────────────────────
+  @Get('api/admin/orders/:id/logs')
+  @UseGuards(AdminGuard)
+  getOrderLogs(@Param('id') id: string) {
+    return this.orderLogService.findByOrder(id);
   }
 }
