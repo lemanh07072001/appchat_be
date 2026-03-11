@@ -9,7 +9,8 @@ export interface ProviderBuyParams {
   protocol?: string;         // http | socks5 | ...
   isp?: string;
   body_api?: string;         // template body từ service config (nếu có)
-  id_service?: string;               // id dịch vụ nhà cung cấp (không phải provider nào cũng cần)
+  id_service?: string;       // id dịch vụ nhà cung cấp (không phải provider nào cũng cần)
+  rotate_interval?: number;  // phút xoay IP (0 = không xoay / proxy tĩnh)
 }
 
 export interface ProviderRenewParams {

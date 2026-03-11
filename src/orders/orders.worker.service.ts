@@ -125,9 +125,7 @@ export class OrdersWorkerService implements OnModuleInit {
       ]);
 
       if (!partner || !partner.code) {
-        this.logger.warn(`Order ${orderId}: không có partner, bỏ qua`);
-        void this.orderLogService.warn(orderId, OrderLogStep.WORKER_ORDER_VERIFIED, 'Order không có partner hợp lệ, bỏ qua');
-        return;
+        throw new Error('Order không có partner hợp lệ');
       }
 
       const provider = this.providerFactory.getProvider(partner.code);
@@ -136,15 +134,28 @@ export class OrdersWorkerService implements OnModuleInit {
       const isp = (order.config?.isp as string) ?? '';
 
       if (partner.code === 'homeproxy') {
-        // HomeProxy dùng UUID product ID
-        switch (isp.toLowerCase()) {
-          case 'vnpt':    idService = '528d39a9-f826-4c65-989c-4591d9f0dce3'; break;
-          case 'viettel': idService = 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd'; break;
-          case 'fpt':     idService = 'f0be21c6-2deb-499c-9d5d-7bba3f765a26'; break;
+        const isRotating = (order.config?.rotate_interval as number) > 0;
+        if (isRotating) {
+          // Proxy xoay — chọn theo duration_days
+          switch (order.duration_days) {
+            case 1:  idService = '7d57163a-9e09-4ee1-b52f-8c99dff60aa9'; break;
+            case 7:  idService = '604b3b98-cb4c-4e48-aadb-0557dcffa48d'; break;
+            case 30: idService = 'f792c198-380a-4851-89f7-408b432e46fa'; break;
+            default: throw new Error(`Service không hỗ trợ gói ${order.duration_days} ngày`);
+          }
+        } else {
+          // Proxy tĩnh — chọn theo ISP
+          switch (isp.toLowerCase()) {
+            case 'vnpt':    idService = '528d39a9-f826-4c65-989c-4591d9f0dce3'; break;
+            case 'viettel': idService = 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd'; break;
+            case 'fpt':     idService = 'f0be21c6-2deb-499c-9d5d-7bba3f765a26'; break;
+            default: throw new Error(`Service không hỗ trợ ISP "${isp}"`);
+          }
         }
       } else if (partner.code === 'proxyvn') {
-        // ProxyVN dùng tên loại proxy trực tiếp
-        idService = service?.id_service || isp;
+        // ProxyVN dùng tên loại proxy — capitalize chữ đầu (VD: viettel → Viettel)
+        const raw = service?.id_service || isp;
+        idService = raw ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase() : '';
       } else {
         idService = service?.id_service || '';
       }
@@ -174,14 +185,15 @@ export class OrdersWorkerService implements OnModuleInit {
           );
 
           result = await provider.buy({
-            token_api:     partner.token_api,
-            quantity:      order.quantity,
-            duration_days: order.duration_days,
-            proxy_type:    order.proxy_type,
-            body_api:      service?.body_api,
-            id_service:    idService,
-            isp:           order.config?.isp      as string | undefined,
-            protocol:      order.config?.protocol as string | undefined,
+            token_api:        partner.token_api,
+            quantity:         order.quantity,
+            duration_days:    order.duration_days,
+            proxy_type:       order.proxy_type,
+            body_api:         service?.body_api,
+            id_service:       idService,
+            isp:              order.config?.isp             as string | undefined,
+            protocol:         order.config?.protocol        as string | undefined,
+            rotate_interval:  order.config?.rotate_interval as number | undefined,
           });
 
           const providerCallMs = Date.now() - tAttempt;

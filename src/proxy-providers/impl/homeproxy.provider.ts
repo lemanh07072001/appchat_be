@@ -72,18 +72,23 @@ export class HomeproxyProvider implements IProxyProvider {
   async buy(params: ProviderBuyParams): Promise<BuyResult> {
     const { user, password } = this.generateCredentials();
 
+    const rotateInterval = params.rotate_interval ?? 0;
+
     const raw = await this.request<any>('POST', '/merchant/orders', params.token_api, {
       paymentMethod: 'WALLET',
       products: [
         {
-          dayOfUse:     params.duration_days,
+          isCdk:          false,
+          dayOfUse:       params.duration_days,
+          rotateInterval,
           user,
           password,
-          protocolType: params.protocol?.toLowerCase() === 'socks5' ? 'SOCKS' : 'HTTP',
-          provider:     params.isp?.toUpperCase(),   // VD: "VIETTEL"
-          quantity:     params.quantity,
+          protocolType:   params.protocol?.toLowerCase() === 'socks5' ? 'SOCKS' : 'HTTP',
+          location:       'random',
+          provider:       params.isp?.toUpperCase(),
+          quantity:       params.quantity,
           product: {
-            id: params.id_service,                     // product.id lưu trong service.body_api
+            id: params.id_service,
           },
         },
       ],

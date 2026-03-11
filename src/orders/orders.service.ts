@@ -133,8 +133,11 @@ export class OrdersService {
       start_date:     now,
       end_date:       endDate,
       config: {
-        protocol: dto.protocol ?? null,
-        isp:      dto.isp ?? null,
+        protocol:         dto.protocol ?? null,
+        isp:              dto.isp      ?? null,
+        rotate_interval:  dto.rotate_interval
+          ?? (() => { try { return JSON.parse(service.body_api ?? '{}')?.rotate_interval ?? null; } catch { return null; } })()
+          ?? null,
       },
     };
 

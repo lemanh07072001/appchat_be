@@ -12,6 +12,16 @@ export class ServicesService {
     private serviceModel: Model<ServiceDocument>,
   ) {}
 
+  async findApiEnabledList() {
+    return this.serviceModel
+      .find({ status: true, api_enabled: true })
+      .populate('country', 'name code')
+      .select('_id name type proxy_type ip_version protocol isp pricing usage_type')
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec();
+  }
+
   async findPublicList(category?: 'static' | 'rotating', usage_type?: string, ip_version?: string) {
     const filter: any = { status: true };
     if (category) filter.type = category;
@@ -88,6 +98,9 @@ export class ServicesService {
       isp: data.isp ?? [],
       protocol: data.protocol ?? [],
     });
+    service.markModified('pricing');
+    service.markModified('duration_ids');
+    service.markModified('note');
     return service.save();
   }
 
@@ -113,11 +126,14 @@ export class ServicesService {
       partner: service.partner,
       country: service.country,
       body_api: service.body_api,
+      id_service: service.id_service,
       protocol: service.protocol,
       note: service.note,
       isp: service.isp,
       is_show: service.is_show,
+      api_enabled: service.api_enabled,
       pricing: service.pricing,
+      duration_ids: service.duration_ids,
     });
     return newService.save();
   }
