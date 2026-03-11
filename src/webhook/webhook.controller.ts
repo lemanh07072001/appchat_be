@@ -38,15 +38,27 @@ export class WebhookController {
   // ─── Pays2 gọi vào đây khi có giao dịch ─────────────────────────────────
   @Public()
   @Post('webhook/pays2')
-  handlePays2(
+  async handlePays2(
     @Headers('authorization') authorization: string,
     @Req() req: any,
     @Body() body: { transactions: any[] },
   ) {
     const token = process.env.PAYS2_WEBHOOK_TOKEN;
-    if (!token) throw new UnauthorizedException('Webhook token not configured');
+
+    // Token chưa cấu hình — lưu log lỗi rồi mới throw
+    if (!token) {
+      await this.webhookService.saveErrorLog(body, req.headers, req.ip, 'Webhook token not configured');
+      throw new UnauthorizedException('Webhook token not configured');
+    }
+
     const bearer = (authorization ?? '').replace('Bearer ', '').trim();
-    if (bearer !== token) throw new UnauthorizedException('Invalid webhook token');
+
+    // Token sai — lưu log lỗi rồi mới throw
+    if (bearer !== token) {
+      await this.webhookService.saveErrorLog(body, req.headers, req.ip, 'Invalid webhook token');
+      throw new UnauthorizedException('Invalid webhook token');
+    }
+
     return this.webhookService.handlePays2(body, req.headers, req.ip);
   }
 

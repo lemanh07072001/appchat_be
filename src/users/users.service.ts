@@ -271,4 +271,28 @@ export class UsersService {
 
     return { topup_code, message: 'Tạo mã nạp thành công' };
   }
+
+  // ─── User: tạo/reset API token ────────────────────────────────────────
+  async generateApiToken(userId: string) {
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) throw new BadRequestException('Không tìm thấy người dùng');
+
+    const api_token = 'apt_' + crypto.randomBytes(24).toString('hex');
+    user.api_token = api_token;
+    await user.save();
+
+    return { api_token, message: 'API token đã được tạo thành công' };
+  }
+
+  // ─── User: lấy API token hiện tại ───────────────────────────────────────
+  async getApiToken(userId: string) {
+    const user = await this.userModel.findById(userId).select('api_token').exec();
+    if (!user) throw new BadRequestException('Không tìm thấy người dùng');
+    return { api_token: user.api_token || null };
+  }
+
+  // ─── Xác thực API token ────────────────────────────────────────────────
+  async findByApiToken(token: string): Promise<UserDocument | null> {
+    return this.userModel.findOne({ api_token: token }).select('_id email money status role').exec();
+  }
 }

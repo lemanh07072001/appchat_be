@@ -10,10 +10,12 @@ import { Proxy, ProxySchema } from '../schemas/proxies.schema';
 import { OrderLog, OrderLogSchema } from '../schemas/order-log.schema';
 import { OrdersService } from './orders.service';
 import { OrdersController } from './orders.controller';
+import { ApiTokenGuard } from '../guards/api-token.guard';
 import { OrdersScheduler } from './orders.scheduler';
 import { OrdersProcessingScheduler } from './orders-processing.scheduler';
 import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
 import { OrdersWorkerService } from './orders.worker.service';
+import { OrdersProcessingWorkerService } from './orders-processing.worker.service';
 import { OrderLogService } from './order-log.service';
 import { ProxyProvidersModule } from '../proxy-providers/proxy-providers.module';
 import { AffiliateModule } from '../affiliate/affiliate.module';
@@ -34,7 +36,7 @@ import { AffiliateModule } from '../affiliate/affiliate.module';
     AffiliateModule,
   ],
   controllers: [OrdersController],
-  providers: [OrdersService, OrdersWorkerService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler, OrderLogService],
+  providers: [OrdersService, OrdersWorkerService, OrdersProcessingWorkerService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler, OrderLogService, ApiTokenGuard],
   exports: [OrdersService],
 })
 export class OrdersModule {}

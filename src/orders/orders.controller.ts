@@ -9,6 +9,7 @@ import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { UserOrderQueryDto } from '../dto/user-order-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
 import { AdminGuard } from '../guards/admin.guard';
+import { ApiTokenGuard } from '../guards/api-token.guard';
 import { OrderStatusEnum, PaymentStatusEnum } from '../enum/order.enum';
 
 @Controller()
@@ -26,9 +27,17 @@ export class OrdersController {
     return this.expirationScheduler.checkExpiredOrders();
   }
 
-  // ─── User: mua dịch vụ ────────────────────────────────────
+  // ─── User: mua dịch vụ (qua JWT) ─────────────────────────
   @Post('api/orders/buy')
   buy(@Req() req: Request, @Body() dto: BuyOrderDto) {
+    const userId = (req as any).user.sub as string;
+    return this.ordersService.buy(userId, dto);
+  }
+
+  // ─── User: mua dịch vụ (qua API token) ───────────────────
+  @Post('api/orders/buy-external')
+  @UseGuards(ApiTokenGuard)
+  buyExternal(@Req() req: Request, @Body() dto: BuyOrderDto) {
     const userId = (req as any).user.sub as string;
     return this.ordersService.buy(userId, dto);
   }

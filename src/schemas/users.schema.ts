@@ -53,6 +53,10 @@ export class User {
   @Prop({ type: Number, default: 0 })
   affiliate_balance: number;
 
+  // ─── API Token (dùng để mua proxy qua API bên ngoài) ─────
+  @Prop({ default: null, unique: true, sparse: true })
+  api_token: string;
+
   // ─── Thông tin ngân hàng (để rút hoa hồng) ───────────────
   @Prop({ default: '' })
   bank_name: string;

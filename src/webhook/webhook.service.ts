@@ -265,6 +265,26 @@ export class WebhookService {
     return response;
   }
 
+  // ─── Lưu log lỗi (token sai, server lỗi...) ─────────────────────────────
+  async saveErrorLog(body: any, headers?: Record<string, any>, ip?: string, error?: string): Promise<void> {
+    try {
+      await this.webhookLogModel.create({
+        source:      'pays2',
+        headers:     headers ?? null,
+        payload:     body,
+        response:    { success: false, message: error ?? 'Unknown error' },
+        steps: [{
+          step:   1,
+          title:  'Hệ thống nhận webhook từ ngân hàng',
+          detail: `Lỗi xác thực: ${error ?? 'Unknown error'}`,
+          status: WebhookStepStatus.ERROR,
+        }],
+        status_code: 401,
+        ip:          ip ?? '',
+      });
+    } catch { /* không được làm crash flow */ }
+  }
+
   // ─── Admin: danh sách webhook log ────────────────────────────────────────
   async getWebhookLogs(page = 1, limit = 20, from_date?: string, to_date?: string) {
     const filter: any = {};

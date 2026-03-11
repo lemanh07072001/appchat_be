@@ -10,6 +10,7 @@ import { RedisModule } from './redis/redis.module';
 import { ProxyProvidersModule } from './proxy-providers/proxy-providers.module';
 import { AffiliateModule } from './affiliate/affiliate.module';
 import { OrdersWorkerService } from './orders/orders.worker.service';
+import { OrdersProcessingWorkerService } from './orders/orders-processing.worker.service';
 import { OrderLogService } from './orders/order-log.service';
 
 /**
@@ -40,6 +41,6 @@ import { OrderLogService } from './orders/order-log.service';
     ProxyProvidersModule,
     AffiliateModule,
   ],
-  providers: [OrdersWorkerService, OrderLogService],
+  providers: [OrdersWorkerService, OrdersProcessingWorkerService, OrderLogService],
 })
 export class WorkerModule {}

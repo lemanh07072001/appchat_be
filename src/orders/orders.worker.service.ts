@@ -10,7 +10,7 @@ import { ProxyProtocolEnum } from '../enum/proxy.enum';
 import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 import { AffiliateService } from '../affiliate/affiliate.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
-import { PENDING_ORDERS_KEY } from './orders.scheduler';
+import { PENDING_ORDERS_KEY, PROCESSING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
 import { OrderLogStep } from '../schemas/order-log.schema';
@@ -322,15 +322,16 @@ export class OrdersWorkerService implements OnModuleInit {
           void this.affiliateService.handleOrderActive(order!);
         }
       } else {
-        // Provider trả proxy async (HomeProxy) → chờ scheduler poll
+        // Provider trả proxy async (HomeProxy) → push vào processing queue
         order!.status = OrderStatusEnum.PROCESSING;
         await order!.save();
-        this.logger.log(`Order ${orderId} → PROCESSING (provider_order_id: ${result.provider_order_id})`);
+        await this.redis.lpush(PROCESSING_ORDERS_KEY, orderId);
+        this.logger.log(`Order ${orderId} → PROCESSING, pushed to ${PROCESSING_ORDERS_KEY}`);
 
         void this.orderLogService.info(
           orderId,
           OrderLogStep.WORKER_STATUS_PROCESSING,
-          `Order → PROCESSING: provider đang xử lý async, chờ polling`,
+          `Order → PROCESSING: đã push vào processing queue`,
           { provider_order_id: result.provider_order_id, partner_code: partner.code },
         );
       }

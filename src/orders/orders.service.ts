@@ -54,7 +54,26 @@ export class OrdersService {
     return found ? (found._id as Types.ObjectId) : null;
   }
 
-  async buy(userId: string, dto: BuyOrderDto): Promise<OrderDocument> {
+  async buy(userId: string, dto: BuyOrderDto): Promise<{
+    success: boolean;
+    message: string;
+    data: {
+      order_id: string;
+      order_code: string;
+      status: OrderStatusEnum;
+      service_name: string;
+      proxy_type: string;
+      quantity: number;
+      duration_days: number;
+      start_date: Date;
+      end_date: Date;
+      price_per_unit: number;
+      total_price: number;
+      balance_before: number;
+      balance_after: number;
+      config: Record<string, any>;
+    };
+  }> {
     const t0 = Date.now();
 
     // 1. Validate service
@@ -167,7 +186,29 @@ export class OrdersService {
       );
     }
 
-    return order;
+    const balanceBefore = Number(user.money) + totalPrice;
+    const balanceAfter  = Number(user.money);
+
+    return {
+      success: true,
+      message: 'Đặt hàng thành công, đang xử lý proxy',
+      data: {
+        order_id:       orderId,
+        order_code:     order.order_code,
+        status:         order.status,
+        service_name:   service.name,
+        proxy_type:     order.proxy_type,
+        quantity,
+        duration_days:  dto.duration_days,
+        start_date:     now,
+        end_date:       endDate,
+        price_per_unit: pricePerUnit,
+        total_price:    totalPrice,
+        balance_before: balanceBefore,
+        balance_after:  balanceAfter,
+        config:         dataOrder.config,
+      },
+    };
   }
 
   async findAllPaginated(query: PaginationQueryDto) {
