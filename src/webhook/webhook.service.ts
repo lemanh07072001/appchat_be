@@ -5,7 +5,7 @@ import * as crypto from 'crypto';
 import { Transaction, TransactionDocument, TransactionStatus } from '../schemas/transactions.schema';
 import { User, UserDocument } from '../schemas/users.schema';
 import { Order, OrderDocument } from '../schemas/orders.schema';
-import { WebhookLog, WebhookLogDocument } from '../schemas/webhook-log.schema';
+import { WebhookLog, WebhookLogDocument, WebhookStep, WebhookStepStatus } from '../schemas/webhook-log.schema';
 import { OrderStatusEnum } from '../enum/order.enum';
 import { NotificationGateway } from './notification.gateway';
 
@@ -95,23 +95,54 @@ export class WebhookService {
   // ─── Xử lý webhook từ pays2 ───────────────────────────────────────────────
   async handlePays2(body: { transactions: Pays2Transaction[] }, headers?: Record<string, any>, ip?: string): Promise<{ success: boolean; message: string }> {
     const results: string[] = [];
+    const allSteps: WebhookStep[] = [];
 
     for (const tx of body.transactions) {
+      const steps: WebhookStep[] = [];
+      const ok  = WebhookStepStatus.OK;
+      const warn = WebhookStepStatus.WARN;
+      const err  = WebhookStepStatus.ERROR;
+
       try {
+        // Bước 1: Nhận webhook
+        steps.push({
+          step:   1,
+          title:  'Hệ thống nhận webhook từ ngân hàng',
+          detail: `Webhook từ pay2s lúc ${new Date().toLocaleTimeString('vi-VN')} ${new Date().toLocaleDateString('vi-VN')}, 1 giao dịch`,
+          status: ok,
+          data:   { ip, transaction_id: tx.id },
+        });
+
         // 1. Chỉ xử lý giao dịch tiền vào
         if (tx.transferType !== 'IN') {
+          steps.push({ step: 2, title: 'Loại giao dịch', detail: `Bỏ qua — loại ${tx.transferType}`, status: warn });
+          allSteps.push(...steps);
           results.push(`#${tx.id}: bỏ qua (${tx.transferType})`);
           continue;
         }
 
-        // 2. Tìm user từ nội dung CK (trước checksum để có user_id khi log)
+        // Bước 2: Thông tin giao dịch ngân hàng
+        const amount = Number(tx.transferAmount);
+        steps.push({
+          step:   2,
+          title:  'Giao dịch ngân hàng',
+          detail: `+${amount.toLocaleString('vi-VN')}đ từ ${tx.gateway}, mã: ${tx.transactionNumber}`,
+          status: ok,
+          data:   { gateway: tx.gateway, amount, account_number: tx.accountNumber, transaction_number: tx.transactionNumber },
+        });
+
+        // 2. Tìm user từ nội dung CK
         const code = tx.content.toUpperCase().match(/NAP[0-9A-F]{8}/)?.[0] ?? '';
         const user = await this.findUserFromContent(tx.content);
 
-        // 3. Bỏ qua checksum — xác thực chỉ qua Bearer token
-
+        // Bước 3: Khớp nội dung CK với user
         if (!user) {
-          // User không tồn tại — lưu lại để admin xử lý sau
+          steps.push({
+            step:   3,
+            title:  'Nội dung CK khớp với user',
+            detail: `Không tìm được user trong nội dung: "${tx.content}"`,
+            status: err,
+          });
           await this.txModel.create({
             transaction_id:     tx.id,
             gateway:            tx.gateway,
@@ -121,20 +152,27 @@ export class WebhookService {
             content:            tx.content,
             code,
             transfer_type:      tx.transferType,
-            transfer_amount:    tx.transferAmount,
+            transfer_amount:    amount,
             checksum:           tx.checksum,
             status:             TransactionStatus.UNMATCHED,
             note:               'Không tìm được user trong nội dung CK',
             raw_payload:        tx,
             raw_headers:        headers ?? null,
           });
-          this.logger.warn(`Webhook #${tx.id}: không match user — content: "${tx.content}"`);
+          allSteps.push(...steps);
           results.push(`#${tx.id}: unmatched`);
           continue;
         }
 
-        // 4. Atomic: kiểm tra trùng + tạo transaction trong 1 bước
-        const amount = Number(tx.transferAmount);
+        steps.push({
+          step:   3,
+          title:  'Nội dung CK khớp với user',
+          detail: `Khớp user ${user.email.split('@')[0]} (${user.email})`,
+          status: ok,
+          data:   { user_id: user._id, email: user.email, code },
+        });
+
+        // 4. Atomic: kiểm tra trùng + tạo transaction
         const existing = await this.txModel.findOneAndUpdate(
           { transaction_id: tx.id },
           {
@@ -156,50 +194,70 @@ export class WebhookService {
               raw_headers:        headers ?? null,
             },
           },
-          { upsert: true, new: false }, // new:false → trả null nếu vừa insert, trả doc cũ nếu đã tồn tại
+          { upsert: true, new: false },
         ).exec();
 
-        // Nếu trả về doc cũ → trùng giao dịch
         if (existing) {
-          this.logger.warn(`Webhook #${tx.id}: trùng giao dịch — user: ${user.email}`);
+          steps.push({ step: 4, title: 'Lệnh nạp tiền', detail: `Trùng giao dịch #${tx.id} — bỏ qua`, status: warn });
+          allSteps.push(...steps);
           results.push(`#${tx.id}: duplicate → skipped`);
           continue;
         }
 
-        // 5. Cộng tiền atomic + lấy balance mới
+        // Bước 4: Lệnh nạp tiền
+        steps.push({
+          step:   4,
+          title:  'Lệnh nạp tiền',
+          detail: `Lệnh nạp #${tx.id}: ${amount.toLocaleString('vi-VN')}đ (pay2s)`,
+          status: ok,
+          data:   { transaction_id: tx.id, amount },
+        });
+
+        // 5. Cộng tiền atomic
         const updatedUser = await this.userModel.findByIdAndUpdate(
           user._id,
           { $inc: { money: amount } },
           { new: true },
         ).exec();
 
-        const balanceAfter = Number(updatedUser?.money ?? 0);
+        const balanceAfter  = Number(updatedUser?.money ?? 0);
         const balanceBefore = balanceAfter - amount;
 
-        // Cập nhật balance vào transaction record
         await this.txModel.findOneAndUpdate(
           { transaction_id: tx.id },
           { balance_before: balanceBefore, balance_after: balanceAfter },
         ).exec();
 
-        this.logger.log(`Webhook #${tx.id}: nạp ${tx.transferAmount}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
+        // Bước 5: Tiền đã cộng
+        steps.push({
+          step:   5,
+          title:  'Tiền đã cộng vào tài khoản',
+          detail: `Cộng ${amount.toLocaleString('vi-VN')}đ. Số dư: ${balanceBefore.toLocaleString('vi-VN')} → ${balanceAfter.toLocaleString('vi-VN')}đ`,
+          status: ok,
+          data:   { balance_before: balanceBefore, balance_after: balanceAfter },
+        });
+
+        this.logger.log(`Webhook #${tx.id}: nạp ${amount}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
         this.notification.sendTopupSuccess(user._id.toString(), { amount, balance: balanceAfter });
+        allSteps.push(...steps);
         results.push(`#${tx.id}: processed → ${user.email}`);
 
-      } catch (err: any) {
-        this.logger.error(`Webhook #${tx.id}: lỗi — ${err?.message}`);
-        results.push(`#${tx.id}: error — ${err?.message}`);
+      } catch (e: any) {
+        steps.push({ step: steps.length + 1, title: 'Lỗi hệ thống', detail: e?.message ?? 'Unknown error', status: WebhookStepStatus.ERROR });
+        allSteps.push(...steps);
+        this.logger.error(`Webhook #${tx.id}: lỗi — ${e?.message}`);
+        results.push(`#${tx.id}: error — ${e?.message}`);
       }
     }
 
     const response = { success: true, message: results.join(', ') };
 
-    // Lưu webhook log
     await this.webhookLogModel.create({
       source:      'pays2',
       headers:     headers ?? null,
       payload:     body,
       response,
+      steps:       allSteps,
       status_code: 200,
       ip:          ip ?? '',
     });
@@ -223,20 +281,21 @@ export class WebhookService {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .select('source ip payload response status_code createdAt')
+        .select('source ip payload response steps status_code createdAt')
         .exec(),
       this.webhookLogModel.countDocuments(filter),
     ]);
 
     return {
       data: data.map(log => ({
-        _id:               log._id,
-        source:            log.source,
-        ip:                log.ip,
+        _id:                log._id,
+        source:             log.source,
+        ip:                 log.ip,
         transactions_count: (log.payload as any)?.transactions?.length ?? 0,
-        response:          log.response,
-        status_code:       log.status_code,
-        received_at:       (log as any).createdAt,
+        response:           log.response,
+        steps:              log.steps,
+        status_code:        log.status_code,
+        received_at:        (log as any).createdAt,
       })),
       pagination: { total, page, limit, total_pages: Math.ceil(total / limit) },
     };

@@ -6,6 +6,20 @@ export type WebhookLogDocument = WebhookLog & Document & {
   updatedAt: Date;
 };
 
+export enum WebhookStepStatus {
+  OK    = 'ok',
+  WARN  = 'warn',
+  ERROR = 'error',
+}
+
+export interface WebhookStep {
+  step:   number;
+  title:  string;
+  detail: string;
+  status: WebhookStepStatus;
+  data?:  Record<string, any>;
+}
+
 @Schema({ timestamps: true })
 export class WebhookLog {
   @Prop({ required: true })
@@ -19,6 +33,10 @@ export class WebhookLog {
 
   @Prop({ type: Object, default: null })
   response: Record<string, any> | null;
+
+  /** Các bước xử lý từng transaction — hiển thị "Điều tra nạp tiền" */
+  @Prop({ type: [Object], default: [] })
+  steps: WebhookStep[];
 
   @Prop({ default: 200 })
   status_code: number;
