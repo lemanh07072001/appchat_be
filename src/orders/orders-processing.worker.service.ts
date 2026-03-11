@@ -8,7 +8,7 @@ import { OrderStatusEnum } from '../enum/order.enum';
 import { ProxyProtocolEnum } from '../enum/proxy.enum';
 import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 import { AffiliateService } from '../affiliate/affiliate.service';
-import { REDIS_CLIENT } from '../redis/redis.module';
+import { REDIS_CLIENT, REDIS_BLOCKING_CLIENT } from '../redis/redis.module';
 import { PROCESSING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
@@ -35,7 +35,8 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
     @InjectModel(Order.name)   private readonly orderModel:   Model<OrderDocument>,
     @InjectModel(Partner.name) private readonly partnerModel: Model<PartnerDocument>,
     @InjectModel(Proxy.name)   private readonly proxyModel:   Model<ProxyDocument>,
-    @Inject(REDIS_CLIENT)      private readonly redis:        Redis,
+    @Inject(REDIS_CLIENT)          private readonly redis:         Redis,
+    @Inject(REDIS_BLOCKING_CLIENT) private readonly blockingRedis: Redis,
     private readonly providerFactory: ProxyProviderFactory,
     private readonly affiliateService: AffiliateService,
     private readonly orderLogService:  OrderLogService,
@@ -55,7 +56,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
           continue;
         }
 
-        const result = await this.redis.brpop(PROCESSING_ORDERS_KEY, BRPOP_TIMEOUT_SECONDS);
+        const result = await this.blockingRedis.brpop(PROCESSING_ORDERS_KEY, BRPOP_TIMEOUT_SECONDS);
         if (!result) continue;
 
         const [, orderId] = result;

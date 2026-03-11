@@ -9,7 +9,7 @@ import { OrderStatusEnum } from '../enum/order.enum';
 import { ProxyProtocolEnum } from '../enum/proxy.enum';
 import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 import { AffiliateService } from '../affiliate/affiliate.service';
-import { REDIS_CLIENT } from '../redis/redis.module';
+import { REDIS_CLIENT, REDIS_BLOCKING_CLIENT } from '../redis/redis.module';
 import { PENDING_ORDERS_KEY, PROCESSING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
@@ -44,7 +44,8 @@ export class OrdersWorkerService implements OnModuleInit {
     @InjectModel(Partner.name) private readonly partnerModel: Model<PartnerDocument>,
     @InjectModel(Service.name) private readonly serviceModel: Model<ServiceDocument>,
     @InjectModel(Proxy.name)   private readonly proxyModel:   Model<ProxyDocument>,
-    @Inject(REDIS_CLIENT)      private readonly redis:        Redis,
+    @Inject(REDIS_CLIENT)          private readonly redis:         Redis,
+    @Inject(REDIS_BLOCKING_CLIENT) private readonly blockingRedis: Redis,
     private readonly providerFactory: ProxyProviderFactory,
     private readonly affiliateService: AffiliateService,
     private readonly orderLogService: OrderLogService,
@@ -65,8 +66,8 @@ export class OrdersWorkerService implements OnModuleInit {
           continue;
         }
 
-        // BRPOP block chờ order mới — trả về ngay khi có LPUSH
-        const result = await this.redis.brpop(PENDING_ORDERS_KEY, BRPOP_TIMEOUT_SECONDS);
+        // BRPOP block chờ order mới — dùng blockingRedis riêng, tránh block lệnh thường
+        const result = await this.blockingRedis.brpop(PENDING_ORDERS_KEY, BRPOP_TIMEOUT_SECONDS);
 
         if (!result) continue; // Timeout — không có order, loop lại
 
