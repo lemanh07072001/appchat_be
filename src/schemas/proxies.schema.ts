@@ -39,8 +39,8 @@ export class Proxy {
   @Prop({ default: '' })
   city: string;
 
-  @Prop()
-  provider_proxy_id: number;
+  @Prop({ type: String })
+  provider_proxy_id: string;
 
   @Prop({ default: '' })
   domain: string;

@@ -38,7 +38,7 @@ export interface ProxyCredential {
   password:          string;
   protocol:          string;
   // optional — provider-specific fields
-  provider_proxy_id?: number;   // numeric id từ provider (HomeProxy: item.id)
+  provider_proxy_id?: string;   // id từ provider (HomeProxy: item.id)
   domain?:            string;   // domain của proxy
   prev_ip?:           string;   // IP trước khi rotate
   location?:          string;   // location code (VD: HNI)

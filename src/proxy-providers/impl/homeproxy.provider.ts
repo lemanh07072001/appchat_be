@@ -127,12 +127,12 @@ export class HomeproxyProvider implements IProxyProvider {
     }
 
     return allItems.map((p: any) => ({
-      host:              p.proxy?.ipaddress?.domain ?? p.proxy?.ipaddress?.ip ?? '',
+      host:              p.proxy?.ipaddress?.ip ?? p.proxy?.ipaddress?.domain ?? '',
       port:              Number(p.proxy?.port ?? 0),
       username:          p.proxy?.username ?? '',
       password:          p.proxy?.password ?? '',
       protocol:          (p.protocol ?? 'http').toLowerCase(),
-      provider_proxy_id: typeof p.id === 'number' ? p.id : undefined,
+      provider_proxy_id: p.id != null ? String(p.id) : undefined,
       domain:            p.proxy?.ipaddress?.domain ?? undefined,
       prev_ip:           p.proxy?.ipaddress?.prevIp ?? undefined,
       location:          p.proxy?.ipaddress?.location ?? undefined,
