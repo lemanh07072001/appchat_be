@@ -10,6 +10,7 @@ import { UserOrderQueryDto } from '../dto/user-order-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
 import { AdminGuard } from '../guards/admin.guard';
 import { ApiTokenGuard } from '../guards/api-token.guard';
+import { Public } from '../guards/public.decorator';
 import { OrderStatusEnum, PaymentStatusEnum } from '../enum/order.enum';
 
 @Controller()
@@ -36,6 +37,7 @@ export class OrdersController {
 
   // ─── User: mua dịch vụ (qua API token) ───────────────────
   @Post('api/orders/buy-external')
+  @Public()
   @UseGuards(ApiTokenGuard)
   buyExternal(@Req() req: Request, @Body() dto: BuyOrderDto) {
     const userId = (req as any).user.sub as string;
@@ -44,6 +46,7 @@ export class OrdersController {
 
   // ─── User: mua dịch vụ đồng bộ — trả về proxy ngay khi sẵn sàng ──
   @Post('api/orders/buy-sync')
+  @Public()
   @UseGuards(ApiTokenGuard)
   buySyncExternal(@Req() req: Request, @Body() dto: BuyOrderDto) {
     const userId = (req as any).user.sub as string;
