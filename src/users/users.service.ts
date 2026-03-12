@@ -285,6 +285,25 @@ export class UsersService {
     };
   }
 
+  // ─── Admin: set % hoa hồng riêng cho user ────────────────────────────
+  async setCommissionRate(userId: string, rate: number | null) {
+    if (rate !== null && (rate < 0 || rate > 100)) {
+      throw new BadRequestException('commission_rate phải trong khoảng 0 – 100');
+    }
+    const user = await this.userModel.findByIdAndUpdate(
+      userId,
+      { commission_rate: rate },
+      { new: true },
+    ).select('_id email commission_rate').exec();
+    if (!user) throw new BadRequestException('Không tìm thấy người dùng');
+    return {
+      message: rate === null
+        ? `Đã xoá tỉ lệ riêng, ${user.email} sẽ dùng tỉ lệ global`
+        : `Đã set hoa hồng ${rate}% cho ${user.email}`,
+      commission_rate: user.commission_rate,
+    };
+  }
+
   // ─── Admin: tạo/đổi mã nạp tiền ─────────────────────────────────────
   async generateTopupCode(userId: string) {
     const user = await this.userModel.findById(userId).exec();

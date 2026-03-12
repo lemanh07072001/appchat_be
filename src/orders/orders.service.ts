@@ -620,6 +620,95 @@ export class OrdersService {
     };
   }
 
+  /**
+   * Admin hoàn tiền thủ công cho bất kỳ đơn nào.
+   * - amount: số tiền hoàn (mặc định = total_price - refunded_amount đã hoàn trước đó)
+   * - cancelOrder: nếu true → đổi status sang CANCELLED sau khi hoàn
+   */
+  async adminRefund(
+    id: string,
+    amount?: number,
+    note?: string,
+    cancelOrder = true,
+    actor = 'admin',
+  ): Promise<{ refunded_amount: number; balance_after: number; order: OrderDocument }> {
+    const order = await this.orderModel.findById(id).exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    const BLOCKED_STATUSES = [OrderStatusEnum.ACTIVE, OrderStatusEnum.COMPLETED];
+    if (BLOCKED_STATUSES.includes(order.status)) {
+      throw new BadRequestException(
+        `Không thể hoàn tiền đơn đang ở trạng thái "${order.status === OrderStatusEnum.ACTIVE ? 'Đang chạy' : 'Hoàn thành'}"`,
+      );
+    }
+
+    const alreadyRefunded = order.refunded_amount ?? 0;
+    const maxRefund       = (order.total_price ?? 0) - alreadyRefunded;
+
+    const refundAmount = amount != null ? amount : maxRefund;
+
+    if (refundAmount <= 0) {
+      throw new BadRequestException('Số tiền hoàn không hợp lệ hoặc đơn đã được hoàn toàn bộ');
+    }
+    if (refundAmount > maxRefund) {
+      throw new BadRequestException(
+        `Số tiền hoàn vượt quá giới hạn. Tối đa còn có thể hoàn: ${maxRefund.toLocaleString()} VND`,
+      );
+    }
+
+    // Cộng tiền vào ví user
+    const user = await this.userModel.findByIdAndUpdate(
+      order.user_id,
+      { $inc: { money: refundAmount } },
+      { new: true },
+    ).exec();
+
+    if (!user) throw new BadRequestException('Không tìm thấy user của đơn hàng');
+
+    // Cập nhật order
+    order.refunded_amount = alreadyRefunded + refundAmount;
+    if (cancelOrder) {
+      order.status = OrderStatusEnum.CANCELLED;
+      order.payment_status = PaymentStatusEnum.REFUNDED;
+    }
+    if (note) order.admin_note = note;
+    const saved = await order.save();
+
+    // Ghi wallet transaction
+    const balanceAfter  = Number(user.money ?? 0);
+    const balanceBefore = balanceAfter - refundAmount;
+    void this.walletTxService.log({
+      user_id:        order.user_id.toString(),
+      type:           WalletTxType.REFUND,
+      amount:         refundAmount,
+      direction:      'in',
+      balance_before: balanceBefore,
+      balance_after:  balanceAfter,
+      description:    `Admin hoàn tiền đơn ${order.order_code ?? id}${note ? ': ' + note : ''}`,
+      ref_id:         id,
+      ref_type:       'order',
+      created_by:     actor,
+    });
+
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_REFUND_APPROVED,
+      `Admin hoàn ${refundAmount.toLocaleString()} VND cho user ${order.user_id}`,
+      {
+        refund_amount:       refundAmount,
+        already_refunded:    alreadyRefunded,
+        total_refunded:      order.refunded_amount,
+        user_id:             order.user_id?.toString(),
+        balance_after:       balanceAfter,
+        cancel_order:        cancelOrder,
+        note:                note ?? null,
+      },
+      actor,
+    );
+
+    return { refunded_amount: refundAmount, balance_after: balanceAfter, order: saved };
+  }
+
   async delete(id: string, actor = 'admin') {
     const order = await this.orderModel.findByIdAndDelete(id).exec();
     if (!order) throw new BadRequestException('Order not found');

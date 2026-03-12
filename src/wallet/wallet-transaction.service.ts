@@ -60,14 +60,26 @@ export class WalletTransactionService {
     if (type) filter.type = type;
 
     const skip = (page - 1) * limit;
-    const [data, total] = await Promise.all([
+    const baseFilter = { user_id: new Types.ObjectId(userId) };
+    const [data, total, typeTotals] = await Promise.all([
       this.model.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
       this.model.countDocuments(filter).exec(),
+      this.model.aggregate([
+        { $match: baseFilter },
+        { $group: { _id: '$type', total: { $sum: '$amount' } } },
+      ]).exec(),
     ]);
+
+    const totalsMap: Record<string, number> = {};
+    for (const r of typeTotals) totalsMap[r._id] = r.total;
+
+    const total_topup = (totalsMap['topup'] ?? 0) + (totalsMap['deposit'] ?? 0);
+    const total_payment = (totalsMap['payment'] ?? 0) + (totalsMap['deduction'] ?? 0);
+    const total_refund = totalsMap['refund'] ?? 0;
 
     return {
       data,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit), total_topup, total_payment, total_refund },
     };
   }
 

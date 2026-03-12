@@ -118,6 +118,20 @@ export class OrdersController {
     return this.ordersService.approveRefund(id);
   }
 
+  // ─── Admin: hoàn tiền thủ công (linh hoạt hơn approve-refund) ────────
+  @Post('api/admin/orders/:id/refund')
+  @UseGuards(AdminGuard)
+  adminRefund(
+    @Param('id') id: string,
+    @Body('amount') amount?: number,
+    @Body('note') note?: string,
+    @Body('cancel_order') cancelOrder = true,
+    @Req() req?: Request,
+  ) {
+    const actor = (req as any)?.user?.sub ?? 'admin';
+    return this.ordersService.adminRefund(id, amount, note, cancelOrder, actor);
+  }
+
   @Delete('api/admin/orders/:id')
   @UseGuards(AdminGuard)
   delete(@Param('id') id: string) {

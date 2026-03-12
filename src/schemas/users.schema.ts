@@ -53,6 +53,10 @@ export class User {
   @Prop({ type: Number, default: 0 })
   affiliate_balance: number;
 
+  /** % hoa hồng riêng cho user này. null = dùng tỉ lệ global */
+  @Prop({ type: Number, default: null })
+  commission_rate: number | null;
+
   // ─── API Token (dùng để mua proxy qua API bên ngoài) ─────
   @Prop({ default: null, unique: true, sparse: true })
   api_token: string;
