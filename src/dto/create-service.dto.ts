@@ -67,6 +67,10 @@ export class CreateServiceDto {
   pricing?: Record<string, any>;
 
   @IsOptional()
+  @IsString()
+  badge?: string;
+
+  @IsOptional()
   @IsObject()
   duration_ids?: Record<string, string>;
 }

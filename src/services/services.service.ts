@@ -133,6 +133,7 @@ export class ServicesService {
       is_show: service.is_show,
       api_enabled: service.api_enabled,
       pricing: service.pricing,
+      badge: service.badge,
       duration_ids: service.duration_ids,
     });
     return newService.save();
