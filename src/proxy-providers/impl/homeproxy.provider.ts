@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import {
   IProxyProvider,
@@ -13,6 +13,7 @@ import {
 
 @Injectable()
 export class HomeproxyProvider implements IProxyProvider {
+  private readonly logger      = new Logger(HomeproxyProvider.name);
   private readonly BASE_URL    = 'https://api.homeproxy.vn/api';
   private readonly TIMEOUT_MS  = 30_000;
   private readonly MAX_PAGES   = 50;
@@ -25,12 +26,16 @@ export class HomeproxyProvider implements IProxyProvider {
     token: string,
     body?: Record<string, any>,
   ): Promise<T> {
+    const url = `${this.BASE_URL}${path}`;
+    this.logger.log(`[${method}] → ${url}`);
+    if (body) this.logger.debug(`[${method}] body: ${JSON.stringify(body)}`);
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
 
     let res: Response;
     try {
-      res = await fetch(`${this.BASE_URL}${path}`, {
+      res = await fetch(url, {
         method,
         signal: controller.signal,
         headers: {
@@ -50,6 +55,7 @@ export class HomeproxyProvider implements IProxyProvider {
     }
 
     const data = await res.json().catch(() => ({}));
+    this.logger.debug(`[${method}] ← ${res.status} ${path}: ${JSON.stringify(data)}`);
 
     if (!res.ok) {
       const raw = data?.message ?? JSON.stringify(data);
