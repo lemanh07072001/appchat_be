@@ -17,6 +17,8 @@ import { PENDING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
 import { OrderLogStep } from '../schemas/order-log.schema';
+import { WalletTransactionService } from '../wallet/wallet-transaction.service';
+import { WalletTxType } from '../schemas/wallet-transaction.schema';
 
 @Injectable()
 export class OrdersService {
@@ -34,6 +36,7 @@ export class OrdersService {
     @Inject(REDIS_CLIENT)
     private readonly redis: Redis,
     private readonly orderLogService: OrderLogService,
+    private readonly walletTxService: WalletTransactionService,
   ) {}
 
   private toObjectId(id?: string): Types.ObjectId | null {
@@ -75,7 +78,9 @@ export class OrdersService {
     };
   }> {
     const t0 = Date.now();
+    let orderId: string | null = null;
 
+    try {
     // 1. Validate service
     const service = await this.serviceModel.findById(dto.service_id).exec();
     if (!service || !service.status) {
@@ -147,7 +152,7 @@ export class OrdersService {
     const order = new this.orderModel(dataOrder);
     await order.save();
 
-    const orderId = (order._id as Types.ObjectId).toString();
+    orderId = (order._id as Types.ObjectId).toString();
 
     // Log: order đã tạo xong
     void this.orderLogService.info(
@@ -195,6 +200,19 @@ export class OrdersService {
     const balanceBefore = Number(user.money) + totalPrice;
     const balanceAfter  = Number(user.money);
 
+    void this.walletTxService.log({
+      user_id:        userId,
+      type:           WalletTxType.PURCHASE,
+      amount:         totalPrice,
+      direction:      'out',
+      balance_before: balanceBefore,
+      balance_after:  balanceAfter,
+      description:    `Mua proxy: ${service.name} x${quantity} (${dto.duration_days} ngày)`,
+      ref_id:         orderId,
+      ref_type:       'order',
+      created_by:     'system',
+    });
+
     return {
       success: true,
       message: 'Đặt hàng thành công, đang xử lý proxy',
@@ -215,6 +233,19 @@ export class OrdersService {
         config:         dataOrder.config,
       },
     };
+    } catch (err: any) {
+      // Nếu order đã được tạo thì ghi lỗi vào order_logs trước khi throw
+      if (orderId) {
+        await this.orderLogService.error(
+          orderId,
+          OrderLogStep.BUY_FAILED,
+          `Đặt hàng thất bại tại bước sau khi tạo order: ${err?.message ?? 'Unknown error'}`,
+          { error: err?.message, duration_ms: Date.now() - t0 },
+          userId,
+        );
+      }
+      throw err;
+    }
   }
 
   async findAllPaginated(query: PaginationQueryDto) {
@@ -479,6 +510,23 @@ export class OrdersService {
     order.status = OrderStatusEnum.FAILED;
     order.payment_status = PaymentStatusEnum.REFUNDED;
     const saved = await order.save();
+
+    if (user && order.user_id) {
+      const balanceAfter  = Number(user.money ?? 0);
+      const balanceBefore = balanceAfter - refundAmount;
+      void this.walletTxService.log({
+        user_id:        order.user_id.toString(),
+        type:           WalletTxType.REFUND,
+        amount:         refundAmount,
+        direction:      'in',
+        balance_before: balanceBefore,
+        balance_after:  balanceAfter,
+        description:    `Hoàn tiền đơn hàng ${order.order_code ?? id}`,
+        ref_id:         id,
+        ref_type:       'order',
+        created_by:     actor,
+      });
+    }
 
     void this.orderLogService.info(
       id,

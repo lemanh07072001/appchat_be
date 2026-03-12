@@ -42,8 +42,8 @@ export class OrderLogService {
     return this.log({ order_id, step, level: OrderLogLevel.WARN, message, data });
   }
 
-  error(order_id: string | Types.ObjectId, step: OrderLogStep, message: string, data?: Record<string, any>) {
-    return this.log({ order_id, step, level: OrderLogLevel.ERROR, message, data });
+  error(order_id: string | Types.ObjectId, step: OrderLogStep, message: string, data?: Record<string, any>, actor?: string) {
+    return this.log({ order_id, step, level: OrderLogLevel.ERROR, message, data, actor });
   }
 
   /** Ghi nhiều log cùng lúc — 1 DB write thay vì N writes */

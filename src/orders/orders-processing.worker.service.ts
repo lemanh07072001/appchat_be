@@ -81,8 +81,18 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
       .select('_id provider_order_id partner_id service_id config user_id total_price quantity status')
       .exec();
 
-    if (!order || order.status !== OrderStatusEnum.PROCESSING) {
-      this.logger.debug(`Order ${orderId}: không còn PROCESSING, bỏ qua`);
+    if (!order) {
+      this.logger.warn(`Order ${orderId}: không tìm thấy trong DB`);
+      return;
+    }
+    if (order.status !== OrderStatusEnum.PROCESSING) {
+      this.logger.debug(`Order ${orderId}: status=${order.status}, không còn PROCESSING → bỏ qua`);
+      void this.orderLogService.warn(
+        orderId,
+        OrderLogStep.POLLING_STARTED,
+        `ProcessingWorker bỏ qua: order status=${order.status}, không phải PROCESSING`,
+        { status: order.status },
+      );
       return;
     }
 
@@ -92,12 +102,32 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
 
     if (!partner?.code || !partner?.token_api) {
       this.logger.warn(`Order ${orderId}: không có partner hợp lệ`);
+      await this.orderModel.findByIdAndUpdate(orderId, {
+        status:        OrderStatusEnum.PENDING_REFUND,
+        error_message: 'Order không có partner hợp lệ',
+      }).exec();
+      void this.orderLogService.error(
+        orderId,
+        OrderLogStep.POLLING_FAILED,
+        'Không tìm thấy partner hợp lệ → PENDING_REFUND',
+        { partner_id: order.partner_id?.toString() },
+      );
       return;
     }
 
     const provider = this.providerFactory.getProvider(partner.code);
     if (!provider.fetchOrderProxies) {
       this.logger.warn(`Order ${orderId}: provider "${partner.code}" không hỗ trợ fetchOrderProxies`);
+      await this.orderModel.findByIdAndUpdate(orderId, {
+        status:        OrderStatusEnum.PENDING_REFUND,
+        error_message: `Provider "${partner.code}" không hỗ trợ lấy proxy`,
+      }).exec();
+      void this.orderLogService.error(
+        orderId,
+        OrderLogStep.POLLING_FAILED,
+        `Provider "${partner.code}" không hỗ trợ fetchOrderProxies → PENDING_REFUND`,
+        { partner_code: partner.code },
+      );
       return;
     }
 
