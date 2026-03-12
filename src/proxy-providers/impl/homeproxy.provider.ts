@@ -77,7 +77,7 @@ export class HomeproxyProvider implements IProxyProvider {
 
     const VALID_PROVIDERS = ['VIETTEL', 'VNPT', 'FPT', 'HOMEPROXY'];
     const ispUpper = params.isp?.toUpperCase() ?? '';
-    const provider = VALID_PROVIDERS.includes(ispUpper) ? ispUpper : 'HOMEPROXY';
+    const provider = VALID_PROVIDERS.includes(ispUpper) ? ispUpper : 'VIETTEL';
 
     const raw = await this.request<any>('POST', '/merchant/orders', params.token_api, {
       paymentMethod: 'WALLET',
