@@ -39,11 +39,11 @@ export class WalletTransaction {
   description: string;
 
   /** ID đơn hàng / mã giao dịch ngân hàng / ... */
-  @Prop({ default: null })
+  @Prop({ type: String, default: null })
   ref_id: string | null;
 
   /** 'order' | 'bank_transaction' | ... */
-  @Prop({ default: null })
+  @Prop({ type: String, default: null })
   ref_type: string | null;
 
   /** 'system' | 'webhook' | 'admin' */
