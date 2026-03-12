@@ -42,9 +42,9 @@ export class Proxy {
   @Prop({ type: String })
   provider_proxy_id: string;
 
-  // Key xoay CDK — chỉ có với proxy isCdk:true (HomeProxy)
-  @Prop({ type: String, default: null })
-  cdk_key: string;
+  // Key xoay CDK — chỉ có với proxy isCdk:true (HomeProxy). Không set default để sparse index hoạt động đúng
+  @Prop({ type: String })
+  cdk_key?: string;
 
   @Prop({ default: '' })
   domain: string;
