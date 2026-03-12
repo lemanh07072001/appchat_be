@@ -125,6 +125,7 @@ export class OrdersService {
       partner_id:     service.partner ?? null,
       country_id:     countryId,
       proxy_type:     dto.proxy_type ?? service.proxy_type,
+      order_type:     service.type ?? '',
       quantity,
       duration_days:  dto.duration_days,
       price_per_unit: pricePerUnit,

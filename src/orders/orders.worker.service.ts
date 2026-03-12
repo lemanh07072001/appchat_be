@@ -134,7 +134,8 @@ export class OrdersWorkerService implements OnModuleInit {
       const isp = (order.config?.isp as string) ?? '';
 
       if (partner.code === 'homeproxy') {
-        const isRotating = (order.config?.rotate_interval as number) > 0;
+        const isRotating = order.order_type === 'rotating';
+
         if (isRotating) {
           // Proxy xoay — chọn theo duration_days
           switch (order.duration_days) {

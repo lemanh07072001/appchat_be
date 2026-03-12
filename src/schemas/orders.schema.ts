@@ -32,6 +32,10 @@ export class Order {
   @Prop({ type: String, default: '' })
   proxy_type: string;
 
+  /** 'static' | 'rotating' — copy từ service.type khi tạo order */
+  @Prop({ type: String, default: '' })
+  order_type: string;
+
   // ─── Số lượng & thời hạn ──────────────────────────────────
   @Prop({ default: 1 })
   quantity: number;                  // số IP (proxy tĩnh), 1 nếu proxy xoay
