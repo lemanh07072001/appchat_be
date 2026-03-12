@@ -75,6 +75,10 @@ export class HomeproxyProvider implements IProxyProvider {
     const rotateInterval = params.rotate_interval ?? 0;
     const isCdk          = params.is_cdk ?? false;
 
+    const VALID_PROVIDERS = ['VIETTEL', 'VNPT', 'FPT', 'HOMEPROXY'];
+    const ispUpper = params.isp?.toUpperCase() ?? '';
+    const provider = VALID_PROVIDERS.includes(ispUpper) ? ispUpper : 'HOMEPROXY';
+
     const raw = await this.request<any>('POST', '/merchant/orders', params.token_api, {
       paymentMethod: 'WALLET',
       products: [
@@ -86,7 +90,7 @@ export class HomeproxyProvider implements IProxyProvider {
           password,
           protocolType:   params.protocol?.toLowerCase() === 'socks5' ? 'SOCKS' : 'HTTP',
           location:       'random',
-          provider:       params.isp?.toUpperCase() || 'HOMEPROXY',
+          provider,
           quantity:       params.quantity,
           product: {
             id: params.id_service,
