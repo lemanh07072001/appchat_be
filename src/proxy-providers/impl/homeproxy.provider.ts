@@ -96,7 +96,6 @@ export class HomeproxyProvider implements IProxyProvider {
           user,
           password,
           protocolType:   params.protocol?.toLowerCase() === 'socks5' ? 'SOCKS' : 'HTTP',
-          location:       'random',
           provider,
           quantity:       params.quantity,
           product: {
