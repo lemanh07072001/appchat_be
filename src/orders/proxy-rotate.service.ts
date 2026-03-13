@@ -89,17 +89,16 @@ export class ProxyRotateService {
     // ── 5. Format response ────────────────────────────────────────────────────
     const result = this.formatResponse(raw, proxy);
 
-    // ── 6. Cache nếu chưa đến giờ xoay ───────────────────────────────────────
-    if (result.timeRemaining && result.timeRemaining > 0) {
-      const entry: RotateCacheEntry = {
-        result,
-        cachedAt:          Date.now(),
-        originalRemaining: result.timeRemaining,
-      };
-      await this.redis.set(cacheKey, JSON.stringify(entry), 'EX', result.timeRemaining);
-      this.logger.debug(`Rotate cached ${result.timeRemaining}s for proxy ${proxyId}`);
-    }
-    // Xoay thành công → không cache
+    // ── 6. Cache để chặn spam — tối thiểu 60s ────────────────────────────────
+    const MIN_COOLDOWN = 70;
+    const cacheTtl = Math.max(result.timeRemaining ?? 0, MIN_COOLDOWN);
+    const entry: RotateCacheEntry = {
+      result,
+      cachedAt:          Date.now(),
+      originalRemaining: cacheTtl,
+    };
+    await this.redis.set(cacheKey, JSON.stringify(entry), 'EX', cacheTtl);
+    this.logger.debug(`Rotate cached ${cacheTtl}s for proxy ${proxyId}`);
 
     return result;
   }
@@ -131,9 +130,10 @@ export class ProxyRotateService {
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
-      throw new BadRequestException(
-        `HomeProxy rotate error [${res.status}]: ${data?.message ?? JSON.stringify(data)}`,
-      );
+      const msg = res.status === 503
+        ? 'Xoay quá nhanh, vui lòng chờ ít nhất 60 giây giữa các lần xoay'
+        : `HomeProxy rotate error [${res.status}]: ${data?.message ?? JSON.stringify(data)}`;
+      throw new BadRequestException(msg);
     }
 
     return data;
