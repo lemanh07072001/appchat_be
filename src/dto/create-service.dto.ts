@@ -59,6 +59,10 @@ export class CreateServiceDto {
   api_enabled?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  show_user_pass?: boolean;
+
+  @IsOptional()
   @IsString()
   id_service?: string;
 

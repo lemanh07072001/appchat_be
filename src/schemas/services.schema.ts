@@ -53,6 +53,9 @@ export class Service {
   @Prop({ default: false })
   api_enabled: boolean;
 
+  @Prop({ default: true })
+  show_user_pass: boolean;
+
   @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
   pricing: Record<string, any>;
 

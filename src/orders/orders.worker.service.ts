@@ -199,6 +199,8 @@ export class OrdersWorkerService implements OnModuleInit {
             protocol:         order.config?.protocol        as string | undefined,
             rotate_interval:  order.config?.rotate_interval as number | undefined,
             is_cdk:           bodyApi?.isCdk === true,
+            username:         order.config?.username as string | undefined,
+            password:         order.config?.password as string | undefined,
           });
 
           const providerCallMs = Date.now() - tAttempt;

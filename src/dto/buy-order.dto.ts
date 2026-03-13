@@ -42,4 +42,13 @@ export class BuyOrderDto {
   @Min(0)
   @Max(1440)
   rotate_interval?: number;
+
+  // Username/password tự chọn — nếu không gửi thì backend tự random
+  @IsOptional()
+  @IsString()
+  username?: string;
+
+  @IsOptional()
+  @IsString()
+  password?: string;
 }

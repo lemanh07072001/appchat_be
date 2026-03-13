@@ -77,7 +77,9 @@ export class HomeproxyProvider implements IProxyProvider {
   // ─── Mua proxy ───────────────────────────────────────────────────────────────
 
   async buy(params: ProviderBuyParams): Promise<BuyResult> {
-    const { user, password } = this.generateCredentials();
+    const { user, password } = params.username && params.password
+      ? { user: params.username, password: params.password }
+      : this.generateCredentials();
 
     const rotateInterval = params.rotate_interval ?? 0;
     const isCdk          = params.is_cdk ?? false;

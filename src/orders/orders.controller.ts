@@ -137,7 +137,14 @@ export class OrdersController {
     return this.ordersService.delete(id);
   }
 
-  // ─── Order Logs ───────────────────────────────────────────
+  // ─── Order Logs (user xem log đơn của mình) ──────────────
+  @Get('api/orders/my/:id/logs')
+  getMyOrderLogs(@Req() req: Request, @Param('id') id: string) {
+    const userId = (req as any).user.sub as string;
+    return this.orderLogService.findByOrderForUser(id, userId);
+  }
+
+  // ─── Order Logs (admin) ───────────────────────────────────
   @Get('api/admin/orders/:id/logs')
   @UseGuards(AdminGuard)
   getOrderLogs(@Param('id') id: string) {

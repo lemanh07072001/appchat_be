@@ -17,4 +17,24 @@ export class PaginationQueryDto {
   @IsOptional()
   @IsString()
   search?: string = '';
+
+  @IsOptional()
+  @IsString()
+  type?: string;
+
+  @IsOptional()
+  @IsString()
+  ip_version?: string;
+
+  @IsOptional()
+  @IsString()
+  proxy_type?: string;
+
+  @IsOptional()
+  @IsString()
+  status?: string; // "true" | "false"
+
+  @IsOptional()
+  @IsString()
+  badge?: string;
 }

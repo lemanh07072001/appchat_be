@@ -42,20 +42,32 @@ export class ServicesService {
     const search = query.search ?? '';
     const skip = (page - 1) * limit;
 
-    const orConditions: any[] = [
-      { name: { $regex: search, $options: 'i' } },
-      { type: { $regex: search, $options: 'i' } },
-    ];
+    const andConditions: any[] = [];
 
-    if (Types.ObjectId.isValid(search)) {
-      orConditions.push(
-        { _id: new Types.ObjectId(search) },
-        { partner: new Types.ObjectId(search) },
-        { country: new Types.ObjectId(search) },
-      );
+    if (search) {
+      const orConditions: any[] = [
+        { name: { $regex: search, $options: 'i' } },
+        { type: { $regex: search, $options: 'i' } },
+      ];
+      if (Types.ObjectId.isValid(search)) {
+        orConditions.push(
+          { _id: new Types.ObjectId(search) },
+          { partner: new Types.ObjectId(search) },
+          { country: new Types.ObjectId(search) },
+        );
+      }
+      andConditions.push({ $or: orConditions });
     }
 
-    const filter = search ? { $or: orConditions } : {};
+    if (query.type) andConditions.push({ type: query.type });
+    if (query.ip_version) andConditions.push({ ip_version: query.ip_version });
+    if (query.proxy_type) andConditions.push({ proxy_type: query.proxy_type });
+    if (query.status !== undefined && query.status !== '') {
+      andConditions.push({ status: query.status === 'true' });
+    }
+    if (query.badge) andConditions.push({ badge: query.badge });
+
+    const filter = andConditions.length > 0 ? { $and: andConditions } : {};
 
     const [data, total] = await Promise.all([
       this.serviceModel.find(filter).skip(skip).limit(limit).sort({ createdAt: -1 }).exec(),
@@ -132,6 +144,7 @@ export class ServicesService {
       isp: service.isp,
       is_show: service.is_show,
       api_enabled: service.api_enabled,
+      show_user_pass: service.show_user_pass,
       pricing: service.pricing,
       badge: service.badge,
       duration_ids: service.duration_ids,

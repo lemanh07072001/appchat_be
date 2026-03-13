@@ -12,6 +12,8 @@ export interface ProviderBuyParams {
   id_service?: string;       // id dịch vụ nhà cung cấp (không phải provider nào cũng cần)
   rotate_interval?: number;  // phút xoay IP (0 = không xoay / proxy tĩnh)
   is_cdk?: boolean;          // true = key xoay (gửi lên HomeProxy để phân biệt), false = proxy xoay thường
+  username?: string;         // username tự chọn — nếu không có thì provider tự random
+  password?: string;         // password tự chọn — nếu không có thì provider tự random
 }
 
 export interface ProviderRenewParams {

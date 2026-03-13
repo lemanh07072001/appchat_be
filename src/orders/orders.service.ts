@@ -146,6 +146,8 @@ export class OrdersService {
           isp:             dto.isp      ?? null,
           rotate_interval: dto.rotate_interval ?? bodyApi?.rotate_interval ?? null,
           is_cdk:          bodyApi?.isCdk === true,
+          ...(dto.username ? { username: dto.username } : {}),
+          ...(dto.password ? { password: dto.password } : {}),
         };
       })(),
     };
@@ -362,7 +364,7 @@ export class OrdersService {
     const [proxies, totalProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password country_code region city isp is_active health_status')
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status')
         .skip(skip)
         .limit(limit)
         .lean()
