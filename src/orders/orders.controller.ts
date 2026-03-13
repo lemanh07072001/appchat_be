@@ -55,10 +55,9 @@ export class OrdersController {
     return this.ordersService.buySync(userId, dto);
   }
 
-  // ─── CDK: xoay proxy theo key ─────────────────────────────
+  // ─── CDK: xoay proxy theo key (không cần auth) ────────────
   @Get('api/proxy/rotate/:key')
   @Public()
-  @UseGuards(ApiTokenGuard)
   rotateCdk(@Param('key') key: string) {
     return this.proxyRotateService.rotateByCdkKey(key);
   }
