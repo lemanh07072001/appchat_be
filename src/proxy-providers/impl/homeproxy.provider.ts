@@ -61,7 +61,10 @@ export class HomeproxyProvider implements IProxyProvider {
       const raw = data?.message ?? JSON.stringify(data);
       const friendly =
         raw === 'notEnoughProxy' ? 'Nhà cung cấp tạm hết proxy, vui lòng thử lại sau' : raw;
-      throw new BadRequestException(`HomeProxy API error [${res.status}]: ${friendly}`);
+      const err = new BadRequestException(`HomeProxy API error [${res.status}]: ${friendly}`);
+      (err as any).providerData = data;
+      (err as any).providerStatus = res.status;
+      throw err;
     }
 
     return data as T;

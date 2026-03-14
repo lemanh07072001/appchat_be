@@ -226,7 +226,13 @@ export class OrdersWorkerService implements OnModuleInit {
             orderId,
             OrderLogStep.WORKER_PROVIDER_RETRY,
             `provider.buy() thất bại lần ${attempt}/${MAX_RETRIES}: ${err?.message}`,
-            { attempt, error: err?.message, duration_ms: Date.now() - tAttempt },
+            {
+              attempt,
+              error:           err?.message,
+              provider_status: (err as any)?.providerStatus,
+              provider_data:   (err as any)?.providerData,
+              duration_ms:     Date.now() - tAttempt,
+            },
           );
 
           if (attempt < MAX_RETRIES) await this.sleep(RETRY_DELAY_MS);
@@ -272,7 +278,11 @@ export class OrdersWorkerService implements OnModuleInit {
           orderId,
           OrderLogStep.WORKER_PROVIDER_FAIL,
           `provider.buy() thất bại tất cả ${MAX_RETRIES} lần: ${errorSummary}`,
-          { retries: MAX_RETRIES, errors: retryErrors },
+          {
+            retries:       MAX_RETRIES,
+            errors:        retryErrors,
+            provider_data: (err as any)?.providerData,
+          },
         );
 
         throw new Error(errorSummary);

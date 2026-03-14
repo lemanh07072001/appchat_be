@@ -285,6 +285,41 @@ export class WebhookService {
     } catch { /* không được làm crash flow */ }
   }
 
+  // ─── Admin: lấy webhook steps theo transaction MongoDB ID ────────────────
+  async getStepsByTransactionId(mongoId: string) {
+    const tx = await this.txModel
+      .findById(mongoId)
+      .select('transaction_id')
+      .lean()
+      .exec();
+
+    if (!tx) return { steps: [], transaction_id: null };
+
+    const numericId = (tx as any).transaction_id as number;
+
+    const log = await this.webhookLogModel
+      .findOne({ 'steps.data.transaction_id': numericId })
+      .select('steps source ip status_code createdAt')
+      .lean()
+      .exec();
+
+    if (!log) return { steps: [], transaction_id: numericId };
+
+    // Lọc chỉ lấy steps thuộc transaction này
+    const steps = (log.steps as any[]).filter(
+      (s) => !s.data?.transaction_id || s.data.transaction_id === numericId,
+    );
+
+    return {
+      steps,
+      transaction_id: numericId,
+      received_at:    (log as any).createdAt,
+      source:         log.source,
+      ip:             log.ip,
+      status_code:    log.status_code,
+    };
+  }
+
   // ─── Admin: danh sách webhook log ────────────────────────────────────────
   async getWebhookLogs(page = 1, limit = 20, from_date?: string, to_date?: string) {
     const filter: any = {};
