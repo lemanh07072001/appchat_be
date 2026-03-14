@@ -164,6 +164,7 @@ export class OrdersWorkerService implements OnModuleInit {
       // Retry buy() tối đa MAX_RETRIES lần
       const retryErrors: string[] = [];
       let result: any = null;
+      let lastProviderData: any = undefined;
       const tProviderStart = Date.now();
 
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -219,6 +220,7 @@ export class OrdersWorkerService implements OnModuleInit {
 
           break; // Thành công — thoát loop
         } catch (err: any) {
+          lastProviderData = (err as any)?.providerData;
           retryErrors.push(`[${attempt}/${MAX_RETRIES}] ${err?.message ?? 'Unknown error'}`);
           this.logger.warn(`Order ${orderId}: lần thử ${attempt}/${MAX_RETRIES} thất bại — ${err?.message}`);
 
@@ -281,7 +283,7 @@ export class OrdersWorkerService implements OnModuleInit {
           {
             retries:       MAX_RETRIES,
             errors:        retryErrors,
-            provider_data: (err as any)?.providerData,
+            provider_data: lastProviderData,
           },
         );
 
