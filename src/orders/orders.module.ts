@@ -14,11 +14,11 @@ import { ApiTokenGuard } from '../guards/api-token.guard';
 import { OrdersScheduler } from './orders.scheduler';
 import { OrdersProcessingScheduler } from './orders-processing.scheduler';
 import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
-import { OrdersWorkerService } from './orders.worker.service';
-import { OrdersProcessingWorkerService } from './orders-processing.worker.service';
 import { OrderLogService } from './order-log.service';
+import { ProxyRotateService } from './proxy-rotate.service';
 import { ProxyProvidersModule } from '../proxy-providers/proxy-providers.module';
 import { AffiliateModule } from '../affiliate/affiliate.module';
+import { WalletModule } from '../wallet/wallet.module';
 
 @Module({
   imports: [
@@ -34,9 +34,10 @@ import { AffiliateModule } from '../affiliate/affiliate.module';
     JwtModule,
     ProxyProvidersModule,
     AffiliateModule,
+    WalletModule,
   ],
   controllers: [OrdersController],
-  providers: [OrdersService, OrdersWorkerService, OrdersProcessingWorkerService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler, OrderLogService, ApiTokenGuard],
+  providers: [OrdersService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler, OrderLogService, ProxyRotateService, ApiTokenGuard],
   exports: [OrdersService],
 })
 export class OrdersModule {}

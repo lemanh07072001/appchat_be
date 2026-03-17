@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { randomBytes } from 'crypto';
 import { Order, OrderDocument } from '../schemas/orders.schema';
 import { Partner, PartnerDocument } from '../schemas/partners.schema';
 import { Proxy, ProxyDocument } from '../schemas/proxies.schema';
@@ -8,7 +9,7 @@ import { OrderStatusEnum } from '../enum/order.enum';
 import { ProxyProtocolEnum } from '../enum/proxy.enum';
 import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 import { AffiliateService } from '../affiliate/affiliate.service';
-import { REDIS_CLIENT } from '../redis/redis.module';
+import { REDIS_CLIENT, REDIS_BLOCKING_CLIENT } from '../redis/redis.module';
 import { PROCESSING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
@@ -17,9 +18,9 @@ import { OrderLogStep } from '../schemas/order-log.schema';
 /** Timeout BRPOP — block tối đa 5s chờ order mới */
 const BRPOP_TIMEOUT_SECONDS  = 5;
 /** Delay giữa các lần poll khi chưa có proxy (ms) */
-const POLL_INTERVAL_MS       = 3_000;
+const POLL_INTERVAL_MS       = 2_000;
 /** Số lần poll tối đa trước khi bỏ cuộc */
-const MAX_POLL_ATTEMPTS      = 5;    // 5 × 3s = 15s tối đa
+const MAX_POLL_ATTEMPTS      = 20;   // 20 × 2s = 40s tối đa
 /** Số proxy insert mỗi batch */
 const INSERT_BATCH_SIZE      = 500;
 /** Số order xử lý đồng thời tối đa */
@@ -35,7 +36,8 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
     @InjectModel(Order.name)   private readonly orderModel:   Model<OrderDocument>,
     @InjectModel(Partner.name) private readonly partnerModel: Model<PartnerDocument>,
     @InjectModel(Proxy.name)   private readonly proxyModel:   Model<ProxyDocument>,
-    @Inject(REDIS_CLIENT)      private readonly redis:        Redis,
+    @Inject(REDIS_CLIENT)          private readonly redis:         Redis,
+    @Inject(REDIS_BLOCKING_CLIENT) private readonly blockingRedis: Redis,
     private readonly providerFactory: ProxyProviderFactory,
     private readonly affiliateService: AffiliateService,
     private readonly orderLogService:  OrderLogService,
@@ -55,7 +57,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
           continue;
         }
 
-        const result = await this.redis.brpop(PROCESSING_ORDERS_KEY, BRPOP_TIMEOUT_SECONDS);
+        const result = await this.blockingRedis.brpop(PROCESSING_ORDERS_KEY, BRPOP_TIMEOUT_SECONDS);
         if (!result) continue;
 
         const [, orderId] = result;
@@ -72,14 +74,25 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
 
   private async pollUntilActive(orderId: string): Promise<void> {
     const t0 = Date.now();
+    this.logger.log(`Order ${orderId}: [STEP 4] ProcessingWorker started polling`);
 
     const order = await this.orderModel
       .findById(orderId)
       .select('_id provider_order_id partner_id service_id config user_id total_price quantity status')
       .exec();
 
-    if (!order || order.status !== OrderStatusEnum.PROCESSING) {
-      this.logger.debug(`Order ${orderId}: không còn PROCESSING, bỏ qua`);
+    if (!order) {
+      this.logger.warn(`Order ${orderId}: không tìm thấy trong DB`);
+      return;
+    }
+    if (order.status !== OrderStatusEnum.PROCESSING) {
+      this.logger.debug(`Order ${orderId}: status=${order.status}, không còn PROCESSING → bỏ qua`);
+      void this.orderLogService.warn(
+        orderId,
+        OrderLogStep.POLLING_STARTED,
+        `ProcessingWorker bỏ qua: order status=${order.status}, không phải PROCESSING`,
+        { status: order.status },
+      );
       return;
     }
 
@@ -89,12 +102,32 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
 
     if (!partner?.code || !partner?.token_api) {
       this.logger.warn(`Order ${orderId}: không có partner hợp lệ`);
+      await this.orderModel.findByIdAndUpdate(orderId, {
+        status:        OrderStatusEnum.PENDING_REFUND,
+        error_message: 'Order không có partner hợp lệ',
+      }).exec();
+      void this.orderLogService.error(
+        orderId,
+        OrderLogStep.POLLING_FAILED,
+        'Không tìm thấy partner hợp lệ → PENDING_REFUND',
+        { partner_id: order.partner_id?.toString() },
+      );
       return;
     }
 
     const provider = this.providerFactory.getProvider(partner.code);
     if (!provider.fetchOrderProxies) {
       this.logger.warn(`Order ${orderId}: provider "${partner.code}" không hỗ trợ fetchOrderProxies`);
+      await this.orderModel.findByIdAndUpdate(orderId, {
+        status:        OrderStatusEnum.PENDING_REFUND,
+        error_message: `Provider "${partner.code}" không hỗ trợ lấy proxy`,
+      }).exec();
+      void this.orderLogService.error(
+        orderId,
+        OrderLogStep.POLLING_FAILED,
+        `Provider "${partner.code}" không hỗ trợ fetchOrderProxies → PENDING_REFUND`,
+        { partner_code: partner.code },
+      );
       return;
     }
 
@@ -102,6 +135,8 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
       await this.sleep(POLL_INTERVAL_MS);
 
       try {
+        const tPoll = Date.now();
+        this.logger.log(`Order ${orderId}: [STEP 4] Poll attempt ${attempt}/${MAX_POLL_ATTEMPTS} (elapsed: ${tPoll - t0}ms)`);
         void this.orderLogService.info(
           orderId,
           OrderLogStep.POLLING_STARTED,
@@ -113,6 +148,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
           partner.token_api,
           order.provider_order_id,
         );
+        this.logger.log(`Order ${orderId}: [STEP 4] fetchOrderProxies returned ${proxies?.length ?? 0} proxies (${Date.now() - tPoll}ms)`);
 
         if (!proxies || proxies.length === 0) {
           void this.orderLogService.info(
@@ -134,6 +170,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
 
         // Batch insert
         const orderObjectId = new Types.ObjectId(order._id as any);
+        const isCdk = (order.config as any)?.is_cdk === true;
         const proxyDocs = proxies.map((p: any) => ({
           order_id:          orderObjectId,
           proxy_type_id:     order.service_id ?? null,
@@ -151,6 +188,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
           country_code:      p.country_code ?? 'VN',
           is_active:         true,
           is_available:      false,
+          cdk_key:           isCdk ? randomBytes(16).toString('hex') : undefined,
         }));
 
         for (let i = 0; i < proxyDocs.length; i += INSERT_BATCH_SIZE) {

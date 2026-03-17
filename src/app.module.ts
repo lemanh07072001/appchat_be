@@ -32,6 +32,10 @@ import { AnnouncementsModule } from './announcements/announcements.module';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         uri: config.get<string>('MONGO_URI'),
+        maxPoolSize: 30,
+        minPoolSize: 5,
+        serverSelectionTimeoutMS: 5000,
+        socketTimeoutMS: 30000,
       }),
     }),
 

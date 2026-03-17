@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import {
   IProxyProvider,
@@ -13,6 +13,7 @@ import {
 
 @Injectable()
 export class HomeproxyProvider implements IProxyProvider {
+  private readonly logger      = new Logger(HomeproxyProvider.name);
   private readonly BASE_URL    = 'https://api.homeproxy.vn/api';
   private readonly TIMEOUT_MS  = 30_000;
   private readonly MAX_PAGES   = 50;
@@ -25,12 +26,16 @@ export class HomeproxyProvider implements IProxyProvider {
     token: string,
     body?: Record<string, any>,
   ): Promise<T> {
+    const url = `${this.BASE_URL}${path}`;
+    this.logger.log(`[${method}] → ${url}`);
+    if (body) this.logger.debug(`[${method}] body: ${JSON.stringify(body)}`);
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
 
     let res: Response;
     try {
-      res = await fetch(`${this.BASE_URL}${path}`, {
+      res = await fetch(url, {
         method,
         signal: controller.signal,
         headers: {
@@ -50,11 +55,16 @@ export class HomeproxyProvider implements IProxyProvider {
     }
 
     const data = await res.json().catch(() => ({}));
+    this.logger.debug(`[${method}] ← ${res.status} ${path}: ${JSON.stringify(data)}`);
 
     if (!res.ok) {
-      throw new BadRequestException(
-        `HomeProxy API error [${res.status}]: ${data?.message ?? JSON.stringify(data)}`,
-      );
+      const raw = data?.message ?? JSON.stringify(data);
+      const friendly =
+        raw === 'notEnoughProxy' ? 'Nhà cung cấp tạm hết proxy, vui lòng thử lại sau' : raw;
+      const err = new BadRequestException(`HomeProxy API error [${res.status}]: ${friendly}`);
+      (err as any).providerData = data;
+      (err as any).providerStatus = res.status;
+      throw err;
     }
 
     return data as T;
@@ -70,20 +80,31 @@ export class HomeproxyProvider implements IProxyProvider {
   // ─── Mua proxy ───────────────────────────────────────────────────────────────
 
   async buy(params: ProviderBuyParams): Promise<BuyResult> {
-    const { user, password } = this.generateCredentials();
+    const { user, password } = params.username && params.password
+      ? { user: params.username, password: params.password }
+      : this.generateCredentials();
+
+    const rotateInterval = params.rotate_interval ?? 0;
+    const isCdk          = params.is_cdk ?? false;
+
+    const VALID_PROVIDERS = ['VIETTEL', 'VNPT', 'FPT', 'HOMEPROXY'];
+    const ispUpper = params.isp?.toUpperCase() ?? '';
+    const provider = VALID_PROVIDERS.includes(ispUpper) ? ispUpper : 'VIETTEL';
 
     const raw = await this.request<any>('POST', '/merchant/orders', params.token_api, {
       paymentMethod: 'WALLET',
       products: [
         {
-          dayOfUse:     params.duration_days,
+          isCdk,
+          dayOfUse:       params.duration_days,
+          rotateInterval,
           user,
           password,
-          protocolType: params.protocol?.toLowerCase() === 'socks5' ? 'SOCKS' : 'HTTP',
-          provider:     params.isp?.toUpperCase(),   // VD: "VIETTEL"
-          quantity:     params.quantity,
+          protocolType:   params.protocol?.toLowerCase() === 'socks5' ? 'SOCKS' : 'HTTP',
+          provider,
+          quantity:       params.quantity,
           product: {
-            id: params.id_service,                     // product.id lưu trong service.body_api
+            id: params.id_service,
           },
         },
       ],
@@ -122,12 +143,12 @@ export class HomeproxyProvider implements IProxyProvider {
     }
 
     return allItems.map((p: any) => ({
-      host:              p.proxy?.ipaddress?.domain ?? p.proxy?.ipaddress?.ip ?? '',
+      host:              p.proxy?.ipaddress?.ip ?? p.proxy?.ipaddress?.domain ?? '',
       port:              Number(p.proxy?.port ?? 0),
       username:          p.proxy?.username ?? '',
       password:          p.proxy?.password ?? '',
       protocol:          (p.protocol ?? 'http').toLowerCase(),
-      provider_proxy_id: typeof p.id === 'number' ? p.id : undefined,
+      provider_proxy_id: p.id != null ? String(p.id) : undefined,
       domain:            p.proxy?.ipaddress?.domain ?? undefined,
       prev_ip:           p.proxy?.ipaddress?.prevIp ?? undefined,
       location:          p.proxy?.ipaddress?.location ?? undefined,

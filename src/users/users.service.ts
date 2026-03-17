@@ -6,6 +6,8 @@ import { Model } from 'mongoose';
 import { CreateUserDto } from '../dto/create-user.dto';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+import { WalletTransactionService } from '../wallet/wallet-transaction.service';
+import { WalletTxType } from '../schemas/wallet-transaction.schema';
 
 @Injectable()
 export class UsersService {
@@ -16,6 +18,7 @@ export class UsersService {
     private userModel: Model<UserDocument>,
     @InjectModel(Transaction.name)
     private txModel: Model<TransactionDocument>,
+    private readonly walletTxService: WalletTransactionService,
   ) {}
 
   async findAll() {
@@ -199,6 +202,17 @@ export class UsersService {
       note: note || `Admin nạp ${amount.toLocaleString('vi-VN')}đ cho ${updatedUser.email}`,
     });
 
+    void this.walletTxService.log({
+      user_id:        updatedUser._id.toString(),
+      type:           WalletTxType.DEPOSIT,
+      amount,
+      direction:      'in',
+      balance_before: balanceBefore,
+      balance_after:  balanceAfter,
+      description:    note || `Admin nạp tiền`,
+      created_by:     'admin',
+    });
+
     this.logger.log(`Deposit: +${amount.toLocaleString('vi-VN')}đ → ${updatedUser.email} (${balanceBefore} → ${balanceAfter})`);
 
     return {
@@ -251,12 +265,42 @@ export class UsersService {
       note: note || `Admin trừ ${amount.toLocaleString('vi-VN')}đ từ ${updatedUser.email}`,
     });
 
+    void this.walletTxService.log({
+      user_id:        updatedUser._id.toString(),
+      type:           WalletTxType.DEDUCTION,
+      amount,
+      direction:      'out',
+      balance_before: balanceBefore,
+      balance_after:  balanceAfter,
+      description:    note || `Admin trừ tiền`,
+      created_by:     'admin',
+    });
+
     this.logger.log(`Deduct: -${amount.toLocaleString('vi-VN')}đ → ${updatedUser.email} (${balanceBefore} → ${balanceAfter})`);
 
     return {
       message: `Đã trừ ${amount.toLocaleString('vi-VN')}đ từ ${updatedUser.email}`,
       balance_before: balanceBefore,
       balance_after: balanceAfter,
+    };
+  }
+
+  // ─── Admin: set % hoa hồng riêng cho user ────────────────────────────
+  async setCommissionRate(userId: string, rate: number | null) {
+    if (rate !== null && (rate < 0 || rate > 100)) {
+      throw new BadRequestException('commission_rate phải trong khoảng 0 – 100');
+    }
+    const user = await this.userModel.findByIdAndUpdate(
+      userId,
+      { commission_rate: rate },
+      { new: true },
+    ).select('_id email commission_rate').exec();
+    if (!user) throw new BadRequestException('Không tìm thấy người dùng');
+    return {
+      message: rate === null
+        ? `Đã xoá tỉ lệ riêng, ${user.email} sẽ dùng tỉ lệ global`
+        : `Đã set hoa hồng ${rate}% cho ${user.email}`,
+      commission_rate: user.commission_rate,
     };
   }
 

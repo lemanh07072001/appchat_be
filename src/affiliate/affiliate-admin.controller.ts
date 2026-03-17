@@ -15,7 +15,9 @@ export class AffiliateAdminController {
   getConfig() {
     return this.affiliateService.getConfig();
   }
+   
 
+  
   @Patch('config')
   updateConfig(@Body() body: { commission_rate?: number; is_active?: boolean }) {
     return this.affiliateService.updateConfig(body);

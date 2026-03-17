@@ -39,8 +39,12 @@ export class Proxy {
   @Prop({ default: '' })
   city: string;
 
-  @Prop()
-  provider_proxy_id: number;
+  @Prop({ type: String })
+  provider_proxy_id: string;
+
+  // Key xoay CDK — chỉ có với proxy isCdk:true (HomeProxy). Không set default để sparse index hoạt động đúng
+  @Prop({ type: String })
+  cdk_key?: string;
 
   @Prop({ default: '' })
   domain: string;
@@ -76,5 +80,6 @@ export class Proxy {
 export const ProxySchema = SchemaFactory.createForClass(Proxy);
 
 ProxySchema.index({ order_id: 1 });
-ProxySchema.index({ provider_proxy_id: 1 }, { unique: true, sparse: true }); // tránh insert trùng
+ProxySchema.index({ provider_proxy_id: 1 }, { unique: true, sparse: true });
+ProxySchema.index({ cdk_key: 1 }, { unique: true, sparse: true });
 ProxySchema.index({ is_active: 1, is_available: 1 });

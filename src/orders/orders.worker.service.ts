@@ -9,7 +9,7 @@ import { OrderStatusEnum } from '../enum/order.enum';
 import { ProxyProtocolEnum } from '../enum/proxy.enum';
 import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 import { AffiliateService } from '../affiliate/affiliate.service';
-import { REDIS_CLIENT } from '../redis/redis.module';
+import { REDIS_CLIENT, REDIS_BLOCKING_CLIENT } from '../redis/redis.module';
 import { PENDING_ORDERS_KEY, PROCESSING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
@@ -44,7 +44,8 @@ export class OrdersWorkerService implements OnModuleInit {
     @InjectModel(Partner.name) private readonly partnerModel: Model<PartnerDocument>,
     @InjectModel(Service.name) private readonly serviceModel: Model<ServiceDocument>,
     @InjectModel(Proxy.name)   private readonly proxyModel:   Model<ProxyDocument>,
-    @Inject(REDIS_CLIENT)      private readonly redis:        Redis,
+    @Inject(REDIS_CLIENT)          private readonly redis:         Redis,
+    @Inject(REDIS_BLOCKING_CLIENT) private readonly blockingRedis: Redis,
     private readonly providerFactory: ProxyProviderFactory,
     private readonly affiliateService: AffiliateService,
     private readonly orderLogService: OrderLogService,
@@ -65,8 +66,8 @@ export class OrdersWorkerService implements OnModuleInit {
           continue;
         }
 
-        // BRPOP block chờ order mới — trả về ngay khi có LPUSH
-        const result = await this.redis.brpop(PENDING_ORDERS_KEY, BRPOP_TIMEOUT_SECONDS);
+        // BRPOP block chờ order mới — dùng blockingRedis riêng, tránh block lệnh thường
+        const result = await this.blockingRedis.brpop(PENDING_ORDERS_KEY, BRPOP_TIMEOUT_SECONDS);
 
         if (!result) continue; // Timeout — không có order, loop lại
 
@@ -109,7 +110,14 @@ export class OrdersWorkerService implements OnModuleInit {
         return;
       }
 
-      void this.orderLogService.info(orderId, OrderLogStep.WORKER_ORDER_VERIFIED, 'Order xác nhận PENDING, tiếp tục xử lý');
+      // Tính queue wait time: từ khi order được tạo → worker bắt đầu xử lý
+      const orderCreatedAt = (order as any).createdAt as Date | undefined;
+      const queueWaitMs = orderCreatedAt ? t0 - orderCreatedAt.getTime() : null;
+      this.logger.log(`Order ${orderId}: [STEP 1] Queue wait = ${queueWaitMs ?? '?'}ms`);
+
+      void this.orderLogService.info(orderId, OrderLogStep.WORKER_ORDER_VERIFIED, 'Order xác nhận PENDING, tiếp tục xử lý', {
+        queue_wait_ms: queueWaitMs,
+      });
 
       const [partner, service] = await Promise.all([
         order.partner_id ? this.partnerModel.findById(order.partner_id).exec() : null,
@@ -117,9 +125,7 @@ export class OrdersWorkerService implements OnModuleInit {
       ]);
 
       if (!partner || !partner.code) {
-        this.logger.warn(`Order ${orderId}: không có partner, bỏ qua`);
-        void this.orderLogService.warn(orderId, OrderLogStep.WORKER_ORDER_VERIFIED, 'Order không có partner hợp lệ, bỏ qua');
-        return;
+        throw new Error('Order không có partner hợp lệ');
       }
 
       const provider = this.providerFactory.getProvider(partner.code);
@@ -128,15 +134,29 @@ export class OrdersWorkerService implements OnModuleInit {
       const isp = (order.config?.isp as string) ?? '';
 
       if (partner.code === 'homeproxy') {
-        // HomeProxy dùng UUID product ID
-        switch (isp.toLowerCase()) {
-          case 'vnpt':    idService = '528d39a9-f826-4c65-989c-4591d9f0dce3'; break;
-          case 'viettel': idService = 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd'; break;
-          case 'fpt':     idService = 'f0be21c6-2deb-499c-9d5d-7bba3f765a26'; break;
+        const isRotating = order.order_type === 'rotating';
+
+        if (isRotating) {
+          // Proxy xoay — chọn theo duration_days
+          switch (order.duration_days) {
+            case 1:  idService = '7d57163a-9e09-4ee1-b52f-8c99dff60aa9'; break;
+            case 7:  idService = '604b3b98-cb4c-4e48-aadb-0557dcffa48d'; break;
+            case 30: idService = 'f792c198-380a-4851-89f7-408b432e46fa'; break;
+            default: throw new Error(`Service không hỗ trợ gói ${order.duration_days} ngày`);
+          }
+        } else {
+          // Proxy tĩnh — chọn theo ISP
+          switch (isp.toLowerCase()) {
+            case 'vnpt':    idService = '528d39a9-f826-4c65-989c-4591d9f0dce3'; break;
+            case 'viettel': idService = 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd'; break;
+            case 'fpt':     idService = 'f0be21c6-2deb-499c-9d5d-7bba3f765a26'; break;
+            default: throw new Error(`Service không hỗ trợ ISP "${isp}"`);
+          }
         }
       } else if (partner.code === 'proxyvn') {
-        // ProxyVN dùng tên loại proxy trực tiếp
-        idService = service?.id_service || isp;
+        // ProxyVN dùng tên loại proxy — capitalize chữ đầu (VD: viettel → Viettel)
+        const raw = service?.id_service || isp;
+        idService = raw ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase() : '';
       } else {
         idService = service?.id_service || '';
       }
@@ -144,10 +164,13 @@ export class OrdersWorkerService implements OnModuleInit {
       // Retry buy() tối đa MAX_RETRIES lần
       const retryErrors: string[] = [];
       let result: any = null;
+      let lastProviderData: any = undefined;
+      const tProviderStart = Date.now();
 
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         const tAttempt = Date.now();
         try {
+          this.logger.log(`Order ${orderId}: [STEP 2] Calling provider.buy() (attempt ${attempt}/${MAX_RETRIES})`);
           void this.orderLogService.info(
             orderId,
             OrderLogStep.WORKER_PROVIDER_CALL,
@@ -163,24 +186,33 @@ export class OrdersWorkerService implements OnModuleInit {
             },
           );
 
+          let bodyApi: any = {};
+          try { bodyApi = JSON.parse(service?.body_api ?? '{}'); } catch {}
+
           result = await provider.buy({
-            token_api:     partner.token_api,
-            quantity:      order.quantity,
-            duration_days: order.duration_days,
-            proxy_type:    order.proxy_type,
-            body_api:      service?.body_api,
-            id_service:    idService,
-            isp:           order.config?.isp      as string | undefined,
-            protocol:      order.config?.protocol as string | undefined,
+            token_api:        partner.token_api,
+            quantity:         order.quantity,
+            duration_days:    order.duration_days,
+            proxy_type:       order.proxy_type,
+            body_api:         service?.body_api,
+            id_service:       idService,
+            isp:              order.config?.isp             as string | undefined,
+            protocol:         order.config?.protocol        as string | undefined,
+            rotate_interval:  order.config?.rotate_interval as number | undefined,
+            is_cdk:           bodyApi?.isCdk === true,
+            username:         order.config?.username as string | undefined,
+            password:         order.config?.password as string | undefined,
           });
 
+          const providerCallMs = Date.now() - tAttempt;
+          this.logger.log(`Order ${orderId}: [STEP 2] provider.buy() OK in ${providerCallMs}ms (attempt ${attempt})`);
           void this.orderLogService.info(
             orderId,
             OrderLogStep.WORKER_PROVIDER_OK,
             `provider.buy() thành công lần ${attempt}`,
             {
               attempt,
-              duration_ms:       Date.now() - tAttempt,
+              duration_ms:       providerCallMs,
               provider_order_id: result?.provider_order_id,
               proxies_returned:  result?.proxies?.length ?? 0,
             },
@@ -188,6 +220,7 @@ export class OrdersWorkerService implements OnModuleInit {
 
           break; // Thành công — thoát loop
         } catch (err: any) {
+          lastProviderData = (err as any)?.providerData;
           retryErrors.push(`[${attempt}/${MAX_RETRIES}] ${err?.message ?? 'Unknown error'}`);
           this.logger.warn(`Order ${orderId}: lần thử ${attempt}/${MAX_RETRIES} thất bại — ${err?.message}`);
 
@@ -195,7 +228,13 @@ export class OrdersWorkerService implements OnModuleInit {
             orderId,
             OrderLogStep.WORKER_PROVIDER_RETRY,
             `provider.buy() thất bại lần ${attempt}/${MAX_RETRIES}: ${err?.message}`,
-            { attempt, error: err?.message, duration_ms: Date.now() - tAttempt },
+            {
+              attempt,
+              error:           err?.message,
+              provider_status: (err as any)?.providerStatus,
+              provider_data:   (err as any)?.providerData,
+              duration_ms:     Date.now() - tAttempt,
+            },
           );
 
           if (attempt < MAX_RETRIES) await this.sleep(RETRY_DELAY_MS);
@@ -241,7 +280,11 @@ export class OrdersWorkerService implements OnModuleInit {
           orderId,
           OrderLogStep.WORKER_PROVIDER_FAIL,
           `provider.buy() thất bại tất cả ${MAX_RETRIES} lần: ${errorSummary}`,
-          { retries: MAX_RETRIES, errors: retryErrors },
+          {
+            retries:       MAX_RETRIES,
+            errors:        retryErrors,
+            provider_data: lastProviderData,
+          },
         );
 
         throw new Error(errorSummary);
@@ -309,9 +352,13 @@ export class OrdersWorkerService implements OnModuleInit {
       } else {
         // Provider trả proxy async (HomeProxy) → push vào processing queue
         order!.status = OrderStatusEnum.PROCESSING;
+        const tSave = Date.now();
         await order!.save();
+        this.logger.log(`Order ${orderId}: [STEP 3a] order.save() took ${Date.now() - tSave}ms`);
+        const tPush = Date.now();
         await this.redis.lpush(PROCESSING_ORDERS_KEY, orderId);
-        this.logger.log(`Order ${orderId} → PROCESSING, pushed to ${PROCESSING_ORDERS_KEY}`);
+        this.logger.log(`Order ${orderId}: [STEP 3b] redis.lpush took ${Date.now() - tPush}ms`);
+        this.logger.log(`Order ${orderId}: [STEP 3] → PROCESSING, pushed to processing queue (provider API took ${Date.now() - tProviderStart}ms, total worker ${Date.now() - t0}ms)`);
         void this.orderLogService.info(
           orderId,
           OrderLogStep.WORKER_STATUS_PROCESSING,

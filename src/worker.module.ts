@@ -26,6 +26,10 @@ import { OrderLogService } from './orders/order-log.service';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         uri: config.get<string>('MONGO_URI'),
+        maxPoolSize: 30,
+        minPoolSize: 5,
+        serverSelectionTimeoutMS: 5000,
+        socketTimeoutMS: 30000,
       }),
     }),
 

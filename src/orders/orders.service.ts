@@ -17,6 +17,8 @@ import { PENDING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
 import { OrderLogStep } from '../schemas/order-log.schema';
+import { WalletTransactionService } from '../wallet/wallet-transaction.service';
+import { WalletTxType } from '../schemas/wallet-transaction.schema';
 
 @Injectable()
 export class OrdersService {
@@ -34,6 +36,7 @@ export class OrdersService {
     @Inject(REDIS_CLIENT)
     private readonly redis: Redis,
     private readonly orderLogService: OrderLogService,
+    private readonly walletTxService: WalletTransactionService,
   ) {}
 
   private toObjectId(id?: string): Types.ObjectId | null {
@@ -75,7 +78,9 @@ export class OrdersService {
     };
   }> {
     const t0 = Date.now();
+    let orderId: string | null = null;
 
+    try {
     // 1. Validate service
     const service = await this.serviceModel.findById(dto.service_id).exec();
     if (!service || !service.status) {
@@ -120,6 +125,7 @@ export class OrdersService {
       partner_id:     service.partner ?? null,
       country_id:     countryId,
       proxy_type:     dto.proxy_type ?? service.proxy_type,
+      order_type:     service.type ?? '',
       quantity,
       duration_days:  dto.duration_days,
       price_per_unit: pricePerUnit,
@@ -132,16 +138,24 @@ export class OrdersService {
       status:         OrderStatusEnum.PENDING,
       start_date:     now,
       end_date:       endDate,
-      config: {
-        protocol: dto.protocol ?? null,
-        isp:      dto.isp ?? null,
-      },
+      config: (() => {
+        let bodyApi: any = {};
+        try { bodyApi = JSON.parse(service.body_api ?? '{}'); } catch {}
+        return {
+          protocol:        dto.protocol ?? null,
+          isp:             dto.isp      ?? null,
+          rotate_interval: dto.rotate_interval ?? bodyApi?.rotate_interval ?? null,
+          is_cdk:          bodyApi?.isCdk === true,
+          ...(dto.username ? { username: dto.username } : {}),
+          ...(dto.password ? { password: dto.password } : {}),
+        };
+      })(),
     };
 
     const order = new this.orderModel(dataOrder);
     await order.save();
 
-    const orderId = (order._id as Types.ObjectId).toString();
+    orderId = (order._id as Types.ObjectId).toString();
 
     // Log: order đã tạo xong
     void this.orderLogService.info(
@@ -189,6 +203,19 @@ export class OrdersService {
     const balanceBefore = Number(user.money) + totalPrice;
     const balanceAfter  = Number(user.money);
 
+    void this.walletTxService.log({
+      user_id:        userId,
+      type:           WalletTxType.PURCHASE,
+      amount:         totalPrice,
+      direction:      'out',
+      balance_before: balanceBefore,
+      balance_after:  balanceAfter,
+      description:    `Mua proxy: ${service.name} x${quantity} (${dto.duration_days} ngày)`,
+      ref_id:         orderId,
+      ref_type:       'order',
+      created_by:     'system',
+    });
+
     return {
       success: true,
       message: 'Đặt hàng thành công, đang xử lý proxy',
@@ -209,6 +236,19 @@ export class OrdersService {
         config:         dataOrder.config,
       },
     };
+    } catch (err: any) {
+      // Nếu order đã được tạo thì ghi lỗi vào order_logs trước khi throw
+      if (orderId) {
+        await this.orderLogService.error(
+          orderId,
+          OrderLogStep.BUY_FAILED,
+          `Đặt hàng thất bại tại bước sau khi tạo order: ${err?.message ?? 'Unknown error'}`,
+          { error: err?.message, duration_ms: Date.now() - t0 },
+          userId,
+        );
+      }
+      throw err;
+    }
   }
 
   async findAllPaginated(query: PaginationQueryDto) {
@@ -324,7 +364,7 @@ export class OrdersService {
     const [proxies, totalProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password country_code region city isp is_active health_status')
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status')
         .skip(skip)
         .limit(limit)
         .lean()
@@ -474,6 +514,23 @@ export class OrdersService {
     order.payment_status = PaymentStatusEnum.REFUNDED;
     const saved = await order.save();
 
+    if (user && order.user_id) {
+      const balanceAfter  = Number(user.money ?? 0);
+      const balanceBefore = balanceAfter - refundAmount;
+      void this.walletTxService.log({
+        user_id:        order.user_id.toString(),
+        type:           WalletTxType.REFUND,
+        amount:         refundAmount,
+        direction:      'in',
+        balance_before: balanceBefore,
+        balance_after:  balanceAfter,
+        description:    `Hoàn tiền đơn hàng ${order.order_code ?? id}`,
+        ref_id:         id,
+        ref_type:       'order',
+        created_by:     actor,
+      });
+    }
+
     void this.orderLogService.info(
       id,
       OrderLogStep.ADMIN_REFUND_APPROVED,
@@ -489,6 +546,169 @@ export class OrdersService {
     );
 
     return saved;
+  }
+
+  async buySync(userId: string, dto: BuyOrderDto): Promise<{
+    status: string;
+    statusCode: number;
+    message: string;
+    order_code?: string;
+    proxiesip?: string[];
+    timestamp?: number;
+  }> {
+    const POLL_INTERVAL_MS = 500;
+    const MAX_WAIT_MS      = 60_000;
+
+    // 1. Tạo order và trừ tiền
+    const buyResult = await this.buy(userId, dto);
+    const orderId   = buyResult.data.order_id;
+
+    // 2. Poll DB cho đến khi ACTIVE / FAILED / timeout
+    const deadline = Date.now() + MAX_WAIT_MS;
+
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+
+      const order = await this.orderModel
+        .findById(orderId)
+        .select('status error_message')
+        .lean()
+        .exec();
+
+      if (!order) throw new BadRequestException('Order not found');
+
+      if (order.status === OrderStatusEnum.ACTIVE || order.status === OrderStatusEnum.PARTIAL) {
+        const proxies = await this.proxyModel
+          .find({ order_id: new Types.ObjectId(orderId) })
+          .select('ip_address port auth_username auth_password cdk_key')
+          .lean()
+          .exec();
+
+        // CDK proxy → trả cdk_key; proxy thường → trả ip:port:user:pass
+        const proxiesip = proxies.map(p =>
+          (p as any).cdk_key
+            ? (p as any).cdk_key
+            : `${p.ip_address}:${p.port}:${p.auth_username}:${p.auth_password}`,
+        );
+
+        return {
+          status:     'SUCCESS',
+          statusCode: 200,
+          message:    'Giao dịch thành công!',
+          order_code: buyResult.data.order_code,
+          proxiesip,
+          timestamp:  Math.floor(new Date(buyResult.data.end_date).getTime() / 1000),
+        };
+      }
+
+      if (
+        order.status === OrderStatusEnum.PENDING_REFUND ||
+        order.status === OrderStatusEnum.FAILED
+      ) {
+        return {
+          status:     'FAILED',
+          statusCode: 400,
+          message:    (order as any).error_message ?? 'Đặt hàng thất bại, tiền sẽ được hoàn vào số dư',
+          order_code: buyResult.data.order_code,
+        };
+      }
+    }
+
+    return {
+      status:     'TIMEOUT',
+      statusCode: 408,
+      message:    'Timeout: không nhận được proxy sau 60 giây, vui lòng liên hệ hỗ trợ',
+      order_code: buyResult.data.order_code,
+    };
+  }
+
+  /**
+   * Admin hoàn tiền thủ công cho bất kỳ đơn nào.
+   * - amount: số tiền hoàn (mặc định = total_price - refunded_amount đã hoàn trước đó)
+   * - cancelOrder: nếu true → đổi status sang CANCELLED sau khi hoàn
+   */
+  async adminRefund(
+    id: string,
+    amount?: number,
+    note?: string,
+    cancelOrder = true,
+    actor = 'admin',
+  ): Promise<{ refunded_amount: number; balance_after: number; order: OrderDocument }> {
+    const order = await this.orderModel.findById(id).exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    const BLOCKED_STATUSES = [OrderStatusEnum.ACTIVE, OrderStatusEnum.COMPLETED];
+    if (BLOCKED_STATUSES.includes(order.status)) {
+      throw new BadRequestException(
+        `Không thể hoàn tiền đơn đang ở trạng thái "${order.status === OrderStatusEnum.ACTIVE ? 'Đang chạy' : 'Hoàn thành'}"`,
+      );
+    }
+
+    const alreadyRefunded = order.refunded_amount ?? 0;
+    const maxRefund       = (order.total_price ?? 0) - alreadyRefunded;
+
+    const refundAmount = amount != null ? amount : maxRefund;
+
+    if (refundAmount <= 0) {
+      throw new BadRequestException('Số tiền hoàn không hợp lệ hoặc đơn đã được hoàn toàn bộ');
+    }
+    if (refundAmount > maxRefund) {
+      throw new BadRequestException(
+        `Số tiền hoàn vượt quá giới hạn. Tối đa còn có thể hoàn: ${maxRefund.toLocaleString()} VND`,
+      );
+    }
+
+    // Cộng tiền vào ví user
+    const user = await this.userModel.findByIdAndUpdate(
+      order.user_id,
+      { $inc: { money: refundAmount } },
+      { new: true },
+    ).exec();
+
+    if (!user) throw new BadRequestException('Không tìm thấy user của đơn hàng');
+
+    // Cập nhật order
+    order.refunded_amount = alreadyRefunded + refundAmount;
+    if (cancelOrder) {
+      order.status = OrderStatusEnum.CANCELLED;
+      order.payment_status = PaymentStatusEnum.REFUNDED;
+    }
+    if (note) order.admin_note = note;
+    const saved = await order.save();
+
+    // Ghi wallet transaction
+    const balanceAfter  = Number(user.money ?? 0);
+    const balanceBefore = balanceAfter - refundAmount;
+    void this.walletTxService.log({
+      user_id:        order.user_id.toString(),
+      type:           WalletTxType.REFUND,
+      amount:         refundAmount,
+      direction:      'in',
+      balance_before: balanceBefore,
+      balance_after:  balanceAfter,
+      description:    `Admin hoàn tiền đơn ${order.order_code ?? id}${note ? ': ' + note : ''}`,
+      ref_id:         id,
+      ref_type:       'order',
+      created_by:     actor,
+    });
+
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_REFUND_APPROVED,
+      `Admin hoàn ${refundAmount.toLocaleString()} VND cho user ${order.user_id}`,
+      {
+        refund_amount:       refundAmount,
+        already_refunded:    alreadyRefunded,
+        total_refunded:      order.refunded_amount,
+        user_id:             order.user_id?.toString(),
+        balance_after:       balanceAfter,
+        cancel_order:        cancelOrder,
+        note:                note ?? null,
+      },
+      actor,
+    );
+
+    return { refunded_amount: refundAmount, balance_after: balanceAfter, order: saved };
   }
 
   async delete(id: string, actor = 'admin') {

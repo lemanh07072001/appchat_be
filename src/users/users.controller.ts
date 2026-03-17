@@ -71,6 +71,15 @@ export class UsersController {
     return this.usersService.deduct(id, amount, note);
   }
 
+  // ─── Admin: set % hoa hồng riêng cho user ──────────────────────────────
+  @Post(':id/commission-rate')
+  setCommissionRate(
+    @Param('id') id: string,
+    @Body('rate') rate: number | null,
+  ) {
+    return this.usersService.setCommissionRate(id, rate);
+  }
+
   // ─── Admin: tạo/đổi mã nạp tiền ───────────────────────────────────────
   @Post(':id/generate-topup-code')
   generateTopupCode(@Param('id') id: string) {

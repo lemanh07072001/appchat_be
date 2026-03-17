@@ -12,6 +12,16 @@ export class ServicesService {
     private serviceModel: Model<ServiceDocument>,
   ) {}
 
+  async findApiEnabledList() {
+    return this.serviceModel
+      .find({ status: true, api_enabled: true })
+      .populate('country', 'name code')
+      .select('_id name type proxy_type ip_version protocol isp pricing usage_type')
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec();
+  }
+
   async findPublicList(category?: 'static' | 'rotating', usage_type?: string, ip_version?: string) {
     const filter: any = { status: true };
     if (category) filter.type = category;
@@ -32,20 +42,32 @@ export class ServicesService {
     const search = query.search ?? '';
     const skip = (page - 1) * limit;
 
-    const orConditions: any[] = [
-      { name: { $regex: search, $options: 'i' } },
-      { type: { $regex: search, $options: 'i' } },
-    ];
+    const andConditions: any[] = [];
 
-    if (Types.ObjectId.isValid(search)) {
-      orConditions.push(
-        { _id: new Types.ObjectId(search) },
-        { partner: new Types.ObjectId(search) },
-        { country: new Types.ObjectId(search) },
-      );
+    if (search) {
+      const orConditions: any[] = [
+        { name: { $regex: search, $options: 'i' } },
+        { type: { $regex: search, $options: 'i' } },
+      ];
+      if (Types.ObjectId.isValid(search)) {
+        orConditions.push(
+          { _id: new Types.ObjectId(search) },
+          { partner: new Types.ObjectId(search) },
+          { country: new Types.ObjectId(search) },
+        );
+      }
+      andConditions.push({ $or: orConditions });
     }
 
-    const filter = search ? { $or: orConditions } : {};
+    if (query.type) andConditions.push({ type: query.type });
+    if (query.ip_version) andConditions.push({ ip_version: query.ip_version });
+    if (query.proxy_type) andConditions.push({ proxy_type: query.proxy_type });
+    if (query.status !== undefined && query.status !== '') {
+      andConditions.push({ status: query.status === 'true' });
+    }
+    if (query.badge) andConditions.push({ badge: query.badge });
+
+    const filter = andConditions.length > 0 ? { $and: andConditions } : {};
 
     const [data, total] = await Promise.all([
       this.serviceModel.find(filter).skip(skip).limit(limit).sort({ createdAt: -1 }).exec(),
@@ -88,6 +110,9 @@ export class ServicesService {
       isp: data.isp ?? [],
       protocol: data.protocol ?? [],
     });
+    service.markModified('pricing');
+    service.markModified('duration_ids');
+    service.markModified('note');
     return service.save();
   }
 
@@ -113,11 +138,16 @@ export class ServicesService {
       partner: service.partner,
       country: service.country,
       body_api: service.body_api,
+      id_service: service.id_service,
       protocol: service.protocol,
       note: service.note,
       isp: service.isp,
       is_show: service.is_show,
+      api_enabled: service.api_enabled,
+      show_user_pass: service.show_user_pass,
       pricing: service.pricing,
+      badge: service.badge,
+      duration_ids: service.duration_ids,
     });
     return newService.save();
   }

@@ -1,13 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { OrderLog, OrderLogDocument, OrderLogLevel, OrderLogStep } from '../schemas/order-log.schema';
+import { Order, OrderDocument } from '../schemas/orders.schema';
 
 @Injectable()
 export class OrderLogService {
   constructor(
     @InjectModel(OrderLog.name)
     private readonly logModel: Model<OrderLogDocument>,
+    @InjectModel(Order.name)
+    private readonly orderModel: Model<OrderDocument>,
   ) {}
 
   async log(params: {
@@ -42,8 +45,8 @@ export class OrderLogService {
     return this.log({ order_id, step, level: OrderLogLevel.WARN, message, data });
   }
 
-  error(order_id: string | Types.ObjectId, step: OrderLogStep, message: string, data?: Record<string, any>) {
-    return this.log({ order_id, step, level: OrderLogLevel.ERROR, message, data });
+  error(order_id: string | Types.ObjectId, step: OrderLogStep, message: string, data?: Record<string, any>, actor?: string) {
+    return this.log({ order_id, step, level: OrderLogLevel.ERROR, message, data, actor });
   }
 
   /** Ghi nhiều log cùng lúc — 1 DB write thay vì N writes */
@@ -81,5 +84,16 @@ export class OrderLogService {
       .sort({ createdAt: 1 })
       .lean()
       .exec();
+  }
+
+  /** Lấy log của order — chỉ trả về nếu order thuộc về userId */
+  async findByOrderForUser(orderId: string, userId: string) {
+    const order = await this.orderModel
+      .findOne({ _id: new Types.ObjectId(orderId), user_id: new Types.ObjectId(userId) })
+      .select('_id')
+      .lean()
+      .exec();
+    if (!order) throw new ForbiddenException('Order không tồn tại hoặc không có quyền truy cập');
+    return this.findByOrder(orderId);
   }
 }

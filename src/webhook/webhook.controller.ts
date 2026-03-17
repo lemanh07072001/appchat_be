@@ -62,6 +62,13 @@ export class WebhookController {
     return this.webhookService.handlePays2(body, req.headers, req.ip);
   }
 
+  // ─── Admin: webhook steps theo transaction ──────────────────────────────
+  @UseGuards(AdminGuard)
+  @Get('admin/transactions/:id/webhook-steps')
+  getTransactionWebhookSteps(@Param('id') id: string) {
+    return this.webhookService.getStepsByTransactionId(id);
+  }
+
   // ─── Admin: danh sách webhook log ────────────────────────────────────────
   @UseGuards(AdminGuard)
   @Get('admin/webhooks')
