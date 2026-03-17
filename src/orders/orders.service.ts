@@ -143,7 +143,13 @@ export class OrdersService {
         try { bodyApi = JSON.parse(service.body_api ?? '{}'); } catch {}
         return {
           protocol:        dto.protocol ?? null,
-          isp:             dto.isp      ?? null,
+          isp:             (() => {
+            if (!dto.isp) return null;
+            const found = (service.isp ?? []).find(
+              (i: any) => i.code === dto.isp || i.name === dto.isp,
+            );
+            return found?.code ?? dto.isp;
+          })(),
           rotate_interval: dto.rotate_interval ?? bodyApi?.rotate_interval ?? null,
           is_cdk:          bodyApi?.isCdk === true,
           ...(dto.username ? { username: dto.username } : {}),
