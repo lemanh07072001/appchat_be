@@ -357,7 +357,8 @@ export class OrdersService {
       .findOne({ _id: new Types.ObjectId(orderId), user_id: new Types.ObjectId(userId) })
       .populate('service_id', 'name proxy_type ip_version')
       .populate('country_id', 'name code')
-      .select('-admin_note -cost_per_unit -total_cost -profit -partner_id -provider_order_id -error_message -credentials')
+      .populate('partner_id', '_id code name')
+      .select('-admin_note -cost_per_unit -total_cost -profit -provider_order_id -error_message -credentials')
       .lean()
       .exec();
     if (!order) throw new BadRequestException('Order not found');
@@ -370,7 +371,7 @@ export class OrdersService {
     const [proxies, totalProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status')
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider')
         .skip(skip)
         .limit(limit)
         .lean()
