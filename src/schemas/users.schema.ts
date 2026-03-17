@@ -58,7 +58,7 @@ export class User {
   commission_rate: number | null;
 
   // ─── API Token (dùng để mua proxy qua API bên ngoài) ─────
-  @Prop({ default: null, unique: true, sparse: true })
+  @Prop({ unique: true, sparse: true })
   api_token: string;
 
   // ─── Thông tin ngân hàng (để rút hoa hồng) ───────────────
