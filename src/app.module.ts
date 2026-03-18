@@ -18,6 +18,7 @@ import { WebhookModule } from './webhook/webhook.module';
 import { IpsModule } from './ips/ips.module';
 import { UploadModule } from './upload/upload.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
+import { BlogModule } from './blog/blog.module';
 
 @Module({
   imports: [
@@ -66,6 +67,8 @@ import { AnnouncementsModule } from './announcements/announcements.module';
     UploadModule,
 
     AnnouncementsModule,
+
+    BlogModule,
 
     // Serve static files (uploads)
     ServeStaticModule.forRoot({
