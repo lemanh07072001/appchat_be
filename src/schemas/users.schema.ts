@@ -58,7 +58,7 @@ export class User {
   commission_rate: number | null;
 
   // ─── API Token (dùng để mua proxy qua API bên ngoài) ─────
-  @Prop({ unique: true, sparse: true })
+  @Prop({ default: null })
   api_token: string;
 
   // ─── Thông tin ngân hàng (để rút hoa hồng) ───────────────
@@ -73,3 +73,9 @@ export class User {
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
+
+// Unique index on api_token, but only for documents where api_token exists and is not null
+UserSchema.index(
+  { api_token: 1 },
+  { unique: true, partialFilterExpression: { api_token: { $type: 'string' } } },
+);

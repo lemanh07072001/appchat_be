@@ -37,10 +37,34 @@ export class BlogPost {
 
   @Prop({ type: Number, default: 0 })
   views: number;
+
+  // ─── New fields ─────────────────────────────────────
+  @Prop({ default: 'FastProxyVN' })
+  author: string;
+
+  @Prop({ default: '' })
+  category: string;
+
+  @Prop({ default: false })
+  is_featured: boolean;
+
+  @Prop({ default: true })
+  toc_enabled: boolean;
+
+  @Prop({ default: '' })
+  cta_text: string;
+
+  @Prop({ default: '' })
+  cta_button_text: string;
+
+  @Prop({ default: '' })
+  cta_link: string;
 }
 
 export const BlogPostSchema = SchemaFactory.createForClass(BlogPost);
 
-BlogPostSchema.index({ slug: 1 });
+// slug already has unique index from @Prop — no need to duplicate
 BlogPostSchema.index({ status: 1, createdAt: -1 });
 BlogPostSchema.index({ tags: 1 });
+BlogPostSchema.index({ is_featured: 1, status: 1 });
+BlogPostSchema.index({ category: 1, status: 1 });
