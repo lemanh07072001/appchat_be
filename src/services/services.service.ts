@@ -103,13 +103,16 @@ export class ServicesService {
     if (!service) {
       throw new BadRequestException('Service not found');
     }
-    Object.assign(service, {
-      ...data,
-      partner: this.toObjectId(data.partner),
-      country: this.toObjectId(data.country),
-      isp: data.isp ?? [],
-      protocol: data.protocol ?? [],
-    });
+    // Only assign defined fields to prevent overwriting existing data with undefined
+    const updateData: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) updateData[key] = value;
+    }
+    updateData.partner = this.toObjectId(data.partner);
+    updateData.country = this.toObjectId(data.country);
+    if (data.isp !== undefined) updateData.isp = data.isp;
+    if (data.protocol !== undefined) updateData.protocol = data.protocol;
+    Object.assign(service, updateData);
     service.markModified('pricing');
     service.markModified('duration_ids');
     service.markModified('note');
