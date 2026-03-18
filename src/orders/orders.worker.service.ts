@@ -155,8 +155,7 @@ export class OrdersWorkerService implements OnModuleInit {
         }
       } else if (partner.code === 'proxyvn') {
         // ProxyVN dùng tên loại proxy — capitalize chữ đầu (VD: viettel → Viettel)
-        const raw = service?.id_service || isp;
-        idService = raw ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase() : '';
+        idService = isp;
       } else {
         idService = service?.id_service || '';
       }
