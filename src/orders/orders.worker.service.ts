@@ -140,7 +140,7 @@ export class OrdersWorkerService implements OnModuleInit {
           // Proxy xoay — chọn theo duration_days
           switch (order.duration_days) {
             case 1:  idService = '7d57163a-9e09-4ee1-b52f-8c99dff60aa9'; break;
-            case 7:  idService = '604b3b98-cb4c-4e48-aadb-0557dcffa48d'; break;
+            case 7:  idService = '6bde5588-8ad8-4d3a-adc7-fefc790745e1'; break;
             case 30: idService = 'f792c198-380a-4851-89f7-408b432e46fa'; break;
             default: throw new Error(`Service không hỗ trợ gói ${order.duration_days} ngày`);
           }
