@@ -83,8 +83,8 @@ export class OrdersController {
 
   @Get('api/admin/orders/:id')
   @UseGuards(AdminGuard)
-  findOne(@Param('id') id: string) {
-    return this.ordersService.findOne(id);
+  findOne(@Param('id') id: string, @Query() query: PaginationQueryDto) {
+    return this.ordersService.findOneAdmin(id, query);
   }
 
   @Post('api/admin/orders')

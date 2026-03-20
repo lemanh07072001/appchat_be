@@ -287,10 +287,10 @@ export class OrdersService {
       delete filter.order_code;
     }
 
-    const [data, total] = await Promise.all([
+    const [raw, total] = await Promise.all([
       this.orderModel
         .find(filter)
-        .populate('user_id', 'email name')
+        .populate('user_id', 'email full_name')
         .populate('service_id', 'name proxy_type')
         .populate('country_id', 'name code')
         .skip(skip)
@@ -300,6 +300,12 @@ export class OrdersService {
         .exec(),
       this.orderModel.countDocuments(filter).exec(),
     ]);
+
+    const data = raw.map(({ user_id, ...rest }) => ({
+      ...rest,
+      user_id: user_id?._id ?? user_id,
+      user: user_id,
+    }));
 
     return {
       data,
@@ -411,6 +417,44 @@ export class OrdersService {
       .exec();
     if (!order) throw new BadRequestException('Order not found');
     return order as any;
+  }
+
+  async findOneAdmin(id: string, query: PaginationQueryDto) {
+    const order = await this.orderModel
+      .findById(id)
+      .populate('user_id', 'email full_name')
+      .populate('service_id', 'name proxy_type')
+      .populate('country_id', 'name code')
+      .populate('partner_id', 'name code')
+      .lean()
+      .exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    const page  = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const skip  = (page - 1) * limit;
+
+    const proxyFilter = { order_id: order._id };
+    const [proxies, totalProxies] = await Promise.all([
+      this.proxyModel
+        .find(proxyFilter)
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider')
+        .skip(skip)
+        .limit(limit)
+        .lean()
+        .exec(),
+      this.proxyModel.countDocuments(proxyFilter).exec(),
+    ]);
+
+    const { user_id, ...rest } = order as any;
+    return {
+      ...rest,
+      user: user_id,
+      proxies: {
+        data: proxies,
+        meta: { total: totalProxies, page, limit, totalPages: Math.ceil(totalProxies / limit) },
+      },
+    };
   }
 
   async create(data: CreateOrderDto): Promise<OrderDocument> {
