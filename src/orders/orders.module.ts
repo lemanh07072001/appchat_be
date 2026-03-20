@@ -19,6 +19,7 @@ import { ProxyRotateService } from './proxy-rotate.service';
 import { ProxyProvidersModule } from '../proxy-providers/proxy-providers.module';
 import { AffiliateModule } from '../affiliate/affiliate.module';
 import { WalletModule } from '../wallet/wallet.module';
+import { WebhookModule } from '../webhook/webhook.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { WalletModule } from '../wallet/wallet.module';
     ProxyProvidersModule,
     AffiliateModule,
     WalletModule,
+    WebhookModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler, OrderLogService, ProxyRotateService, ApiTokenGuard],

@@ -17,9 +17,13 @@ import { User, UserDocument } from '../schemas/users.schema';
 export class NotificationGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(NotificationGateway.name);
 
-  private sendTelegram(text: string) {
-    const token = process.env.TELEGRAM_BOT_TOKEN;
-    const chatId = process.env.TELEGRAM_CHAT_ID;
+  private sendTelegram(text: string, channel: 'default' | 'order' = 'default') {
+    const token = channel === 'order'
+      ? (process.env.TELEGRAM_ORDER_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN)
+      : process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = channel === 'order'
+      ? (process.env.TELEGRAM_ORDER_CHAT_ID || process.env.TELEGRAM_CHAT_ID)
+      : process.env.TELEGRAM_CHAT_ID;
     if (!token || !chatId) return;
     fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
@@ -57,11 +61,45 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
     this.logger.log(`Socket disconnected — id: ${client.id}`);
   }
 
-  sendTopupSuccess(userId: string, data: { amount: number; balance: number }) {
+  async sendTopupSuccess(userId: string, data: { amount: number; balance: number }) {
     const room = this.server.sockets.adapter.rooms.get(userId);
     const clientCount = room?.size ?? 0;
     this.logger.log(`Emit topup_success → userId: ${userId} | clients: ${clientCount} | amount: ${data.amount} | balance: ${data.balance}`);
     this.server.to(userId).emit('topup_success', data);
+
+    // Telegram notify
+    const user = await this.userModel.findById(userId).select('email name').lean();
+    const userLabel = user ? `${user.name || user.email} (${user.email})` : userId;
+    this.sendTelegram(
+      `💰 <b>Nạp tiền thành công</b>\n\n` +
+      `👤 ${userLabel}\n` +
+      `💵 Số tiền: <b>${data.amount.toLocaleString('vi-VN')}đ</b>\n` +
+      `🏦 Số dư: <b>${data.balance.toLocaleString('vi-VN')}đ</b>`,
+    );
+  }
+
+  async sendOrderSuccess(userId: string, data: {
+    order_code: string;
+    service_name: string;
+    quantity: number;
+    duration_days: number;
+    total_price: number;
+    balance_after: number;
+  }) {
+    // Telegram notify
+    const user = await this.userModel.findById(userId).select('email name').lean();
+    const userLabel = user ? `${user.name || user.email} (${user.email})` : userId;
+    this.sendTelegram(
+      `🛒 <b>Đơn hàng mới</b>\n\n` +
+      `👤 ${userLabel}\n` +
+      `📦 ${data.service_name}\n` +
+      `🔢 Số lượng: ${data.quantity}\n` +
+      `📅 Thời hạn: ${data.duration_days} ngày\n` +
+      `💵 Tổng: <b>${data.total_price.toLocaleString('vi-VN')}đ</b>\n` +
+      `🏦 Số dư còn: <b>${data.balance_after.toLocaleString('vi-VN')}đ</b>\n` +
+      `🆔 Mã: ${data.order_code}`,
+      'order',
+    );
   }
 
   @SubscribeMessage('admin_join')

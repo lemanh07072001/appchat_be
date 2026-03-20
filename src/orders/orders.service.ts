@@ -19,6 +19,7 @@ import { OrderLogService } from './order-log.service';
 import { OrderLogStep } from '../schemas/order-log.schema';
 import { WalletTransactionService } from '../wallet/wallet-transaction.service';
 import { WalletTxType } from '../schemas/wallet-transaction.schema';
+import { NotificationGateway } from '../webhook/notification.gateway';
 
 @Injectable()
 export class OrdersService {
@@ -37,6 +38,7 @@ export class OrdersService {
     private readonly redis: Redis,
     private readonly orderLogService: OrderLogService,
     private readonly walletTxService: WalletTransactionService,
+    private readonly notification: NotificationGateway,
   ) {}
 
   private toObjectId(id?: string): Types.ObjectId | null {
@@ -186,6 +188,16 @@ export class OrdersService {
       },
       userId,
     );
+
+    // Telegram notify
+    void this.notification.sendOrderSuccess(userId, {
+      order_code:   order.order_code,
+      service_name: service.name,
+      quantity,
+      duration_days: dto.duration_days,
+      total_price:   totalPrice,
+      balance_after: user.money,
+    });
 
     // 6. Push order ID vào Redis List — worker BRPOP sẽ nhận ngay
     if (service.partner) {
