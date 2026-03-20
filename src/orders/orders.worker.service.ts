@@ -214,6 +214,7 @@ export class OrdersWorkerService implements OnModuleInit {
               duration_ms:       providerCallMs,
               provider_order_id: result?.provider_order_id,
               proxies_returned:  result?.proxies?.length ?? 0,
+              raw_response:      result?.raw,
             },
           );
 
@@ -229,10 +230,11 @@ export class OrdersWorkerService implements OnModuleInit {
             `provider.buy() thất bại lần ${attempt}/${MAX_RETRIES}: ${err?.message}`,
             {
               attempt,
-              error:           err?.message,
-              provider_status: (err as any)?.providerStatus,
-              provider_data:   (err as any)?.providerData,
-              duration_ms:     Date.now() - tAttempt,
+              error:               err?.message,
+              provider_status:     (err as any)?.providerStatus,
+              provider_data:       (err as any)?.providerData,
+              provider_raw_response: (err as any)?.providerRawResponse,
+              duration_ms:         Date.now() - tAttempt,
             },
           );
 
