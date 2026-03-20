@@ -10,9 +10,10 @@ export class BlogService {
   ) {}
 
   // Public
-  async getPublished(page = 1, limit = 12, tag?: string) {
+  async getPublished(page = 1, limit = 12, tag?: string, category?: string) {
     const filter: any = { status: 'published' };
     if (tag) filter.tags = tag;
+    if (category) filter.category = category;
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([
       this.blogModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)

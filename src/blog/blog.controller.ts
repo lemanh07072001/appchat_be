@@ -15,11 +15,13 @@ export class BlogController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('tag') tag?: string,
+    @Query('category') category?: string,
   ) {
     return this.blogService.getPublished(
       Number(page) || 1,
       Number(limit) || 12,
       tag,
+      category,
     );
   }
 
