@@ -87,17 +87,18 @@ export class HomeproxyProvider implements IProxyProvider {
 
     const rotateInterval = params.rotate_interval ?? 0;
     const isCdk          = params.is_cdk ?? false;
+    const isRotating     = rotateInterval > 0 || params.proxy_type === 'rotating';
 
-    const VALID_PROVIDERS = ['VIETTEL', 'VNPT', 'FPT', 'HOMEPROXY'];
+    const VALID_ISP = ['VIETTEL', 'VNPT', 'FPT'];
     const ispUpper = params.isp?.toUpperCase() ?? '';
-    const provider = VALID_PROVIDERS.includes(ispUpper) ? ispUpper : 'VIETTEL';
+    const provider = isRotating ? 'HOMEPROXY' : (VALID_ISP.includes(ispUpper) ? ispUpper : 'VIETTEL');
 
     const raw = await this.request<any>('POST', '/merchant/orders', params.token_api, {
       paymentMethod: 'WALLET',
       products: [
         {
           isCdk,
-          dayOfUse:       params.duration_days,
+          dayOfUse:       isRotating || isCdk ? 1 : params.duration_days,
           rotateInterval,
           user,
           password,
