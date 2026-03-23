@@ -89,7 +89,7 @@ export class ProxyRotateService {
     // ── 5. Format response ────────────────────────────────────────────────────
     const result = this.formatResponse(raw, proxy);
 
-    // ── 5b. Cập nhật proxy mới vào DB nếu xoay thành công ──────────────────
+    // ── 5b. Cập nhật IP mới vào DB nếu xoay thành công ─────────────────────
     if (!result.timeRemaining && raw.proxy) {
       const parts = raw.proxy.split(':');
       if (parts.length >= 4) {
@@ -160,12 +160,17 @@ export class ProxyRotateService {
 
   private formatResponse(raw: any, proxy: ProxyDocument | any): Record<string, any> {
     const proxyStr = `${proxy.ip_address}:${proxy.port}:${proxy.auth_username}:${proxy.auth_password}`;
+    const newProxyStr = raw.proxy ?? proxyStr;
+    const newIp = newProxyStr.split(':')[0];
 
     const base = {
       status:     raw.status     ?? 'success',
       message:    raw.message    ?? 'Xoay proxy thành công',
-      proxy:      raw.proxy      ?? proxyStr,
-      ip:         raw.ip         ?? proxy.ip_address,
+      proxy:      newProxyStr,
+      ip:         newIp,
+      prev_ip:    proxy.ip_address,
+      location:   raw.location   ?? null,
+      provider:   raw.provider   ?? null,
       lastRotate: raw.lastRotate != null ? String(raw.lastRotate) : null,
     };
 
