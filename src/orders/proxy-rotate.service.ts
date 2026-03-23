@@ -42,7 +42,7 @@ export class ProxyRotateService {
     // ── 2. Lấy token_api từ partner qua order ─────────────────────────────────
     const order = await this.orderModel
       .findById(proxy.order_id)
-      .select('partner_id')
+      .select('partner_id config')
       .lean()
       .exec();
 
@@ -72,7 +72,7 @@ export class ProxyRotateService {
           return {
             ...entry.result,
             timeRemaining: remaining,
-            message: `Chưa tới thời gian xoay: ${remaining}s`,
+            message: `Chưa tới thời gian xoay: ${remaining >= 60 ? `${Math.floor(remaining / 60)}p${remaining % 60}s` : `${remaining}s`}`,
           };
         }
 
@@ -108,9 +108,9 @@ export class ProxyRotateService {
       }
     }
 
-    // ── 6. Cache để chặn spam — tối thiểu 60s ────────────────────────────────
-    const MIN_COOLDOWN = 70;
-    const cacheTtl = Math.max(result.timeRemaining ?? 0, MIN_COOLDOWN);
+    // ── 6. Cache theo rotate_interval từ order config ─────────────────────────
+    const rotateIntervalSec = ((order as any).config?.rotate_interval ?? 1) * 60;
+    const cacheTtl = Math.max(result.timeRemaining ?? 0, rotateIntervalSec);
     const entry: RotateCacheEntry = {
       result,
       cachedAt:          Date.now(),
