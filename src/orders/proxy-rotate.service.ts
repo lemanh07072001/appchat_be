@@ -89,6 +89,25 @@ export class ProxyRotateService {
     // ── 5. Format response ────────────────────────────────────────────────────
     const result = this.formatResponse(raw, proxy);
 
+    // ── 5b. Cập nhật proxy mới vào DB nếu xoay thành công ──────────────────
+    if (!result.timeRemaining && raw.proxy) {
+      const parts = raw.proxy.split(':');
+      if (parts.length >= 4) {
+        const [newIp, newPort, newUser, newPass] = parts;
+        await this.proxyModel.updateOne(
+          { _id: proxy._id },
+          { $set: {
+            prev_ip: proxy.ip_address,
+            ip_address: newIp,
+            port: Number(newPort),
+            auth_username: newUser,
+            auth_password: newPass,
+          }},
+        );
+        this.logger.log(`Updated proxy ${proxy._id}: ${proxy.ip_address} → ${newIp}`);
+      }
+    }
+
     // ── 6. Cache để chặn spam — tối thiểu 60s ────────────────────────────────
     const MIN_COOLDOWN = 70;
     const cacheTtl = Math.max(result.timeRemaining ?? 0, MIN_COOLDOWN);
