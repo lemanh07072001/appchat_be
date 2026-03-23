@@ -423,7 +423,7 @@ export class OrdersService {
     const order = await this.orderModel
       .findById(id)
       .populate('user_id', 'email full_name')
-      .populate('service_id', 'name proxy_type')
+      .populate('service_id', 'name proxy_type ip_version')
       .populate('country_id', 'name code')
       .populate('partner_id', 'name code')
       .lean()
