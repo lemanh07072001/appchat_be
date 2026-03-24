@@ -88,6 +88,9 @@ export class OrdersService {
     if (!service || !service.status) {
       throw new BadRequestException('Service không tồn tại hoặc đã ngừng hoạt động');
     }
+    if (!service.api_enabled) {
+      throw new BadRequestException('Dịch vụ này đang tạm dừng mua');
+    }
 
     // 2. Lấy giá theo duration_days — tính server-side, không tin frontend
     const pricing = service.pricing?.[dto.duration_days];
