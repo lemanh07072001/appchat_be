@@ -287,12 +287,29 @@ export class OrdersService {
       delete filter.order_code;
     }
 
+    if (query.partner_id) {
+      filter.partner_id = new Types.ObjectId(query.partner_id);
+    }
+    if (query.order_type) {
+      filter.proxy_type = query.order_type;
+    }
+    if (query.order_status) {
+      filter.status = Number(query.order_status);
+    }
+    if (query.date_range) {
+      const days = Number(query.date_range);
+      if (days > 0) {
+        filter.createdAt = { $gte: new Date(Date.now() - days * 86400000) };
+      }
+    }
+
     const [raw, total] = await Promise.all([
       this.orderModel
         .find(filter)
         .populate('user_id', 'email full_name')
-        .populate('service_id', 'name proxy_type')
+        .populate('service_id', 'name proxy_type ip_version')
         .populate('country_id', 'name code')
+        .populate('partner_id', 'name domain')
         .skip(skip)
         .limit(limit)
         .sort({ createdAt: -1 })

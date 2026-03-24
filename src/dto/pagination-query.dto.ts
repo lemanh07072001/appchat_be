@@ -37,4 +37,20 @@ export class PaginationQueryDto {
   @IsOptional()
   @IsString()
   badge?: string;
+
+  @IsOptional()
+  @IsString()
+  partner_id?: string;
+
+  @IsOptional()
+  @IsString()
+  order_type?: string;
+
+  @IsOptional()
+  @IsString()
+  date_range?: string;
+
+  @IsOptional()
+  @IsString()
+  order_status?: string;
 }

@@ -98,7 +98,7 @@ export class HomeproxyProvider implements IProxyProvider {
       products: [
         {
           isCdk,
-          dayOfUse:       isRotating || isCdk ? 1 : params.duration_days,
+          dayOfUse:       params.duration_days,
           rotateInterval,
           user,
           password,
