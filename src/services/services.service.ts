@@ -70,7 +70,7 @@ export class ServicesService {
     const filter = andConditions.length > 0 ? { $and: andConditions } : {};
 
     const [data, total] = await Promise.all([
-      this.serviceModel.find(filter).skip(skip).limit(limit).sort({ createdAt: -1 }).exec(),
+      this.serviceModel.find(filter).populate('partner', 'name domain').populate('country', 'name code').skip(skip).limit(limit).sort({ createdAt: -1 }).lean().exec(),
       this.serviceModel.countDocuments(filter).exec(),
     ]);
 
@@ -117,6 +117,12 @@ export class ServicesService {
     service.markModified('duration_ids');
     service.markModified('note');
     return service.save();
+  }
+
+  async toggleStatus(id: string, status: boolean): Promise<ServiceDocument> {
+    const service = await this.serviceModel.findByIdAndUpdate(id, { status }, { new: true }).exec();
+    if (!service) throw new BadRequestException('Service not found');
+    return service;
   }
 
   async duplicate(id: string): Promise<ServiceDocument> {
