@@ -794,6 +794,43 @@ export class OrdersService {
     return { refunded_amount: refundAmount, balance_after: balanceAfter, order: saved };
   }
 
+  async retryOrder(id: string, actor = 'admin') {
+    const order = await this.orderModel.findById(id).exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    const retryableStatuses = [
+      OrderStatusEnum.FAILED,
+      OrderStatusEnum.PENDING_REFUND,
+    ];
+    if (!retryableStatuses.includes(order.status)) {
+      throw new BadRequestException(
+        `Chỉ có thể mua lại đơn ở trạng thái FAILED hoặc PENDING_REFUND (hiện tại: ${order.status})`,
+      );
+    }
+
+    // Delete old proxies of this order
+    await this.proxyModel.deleteMany({ order_id: order._id }).exec();
+
+    // Reset order status
+    order.status = OrderStatusEnum.PENDING;
+    order.error_message = '';
+    order.provider_order_id = '';
+    await order.save();
+
+    // Push back to Redis queue
+    await this.redis.lpush(PENDING_ORDERS_KEY, id);
+
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_ORDER_RETRY,
+      `Admin đã yêu cầu mua lại đơn hàng`,
+      { actor, previous_status: order.status },
+      actor,
+    );
+
+    return { message: 'Đơn hàng đã được đẩy lại vào hàng đợi xử lý', order };
+  }
+
   async delete(id: string, actor = 'admin') {
     const order = await this.orderModel.findByIdAndDelete(id).exec();
     if (!order) throw new BadRequestException('Order not found');
