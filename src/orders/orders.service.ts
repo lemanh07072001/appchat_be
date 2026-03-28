@@ -458,7 +458,7 @@ export class OrdersService {
     const [proxies, totalProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider')
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id')
         .skip(skip)
         .limit(limit)
         .lean()

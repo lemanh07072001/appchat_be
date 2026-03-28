@@ -119,12 +119,7 @@ export class ProxyvnProvider implements IProxyProvider {
         isp:               item.loaiproxy ?? loaiproxy,
       }));
 
-    // Dùng idproxy đầu tiên làm provider_order_id (nhóm theo lần mua)
-    const providerOrderId = proxies[0]?.provider_proxy_id
-      ? String(proxies[0].provider_proxy_id)
-      : '';
-
-    return { provider_order_id: providerOrderId, proxies, raw };
+    return { provider_order_id: '', proxies, raw };
   }
 
   // ─── Gia hạn ────────────────────────────────────────────────────────────────
