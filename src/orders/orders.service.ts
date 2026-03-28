@@ -861,7 +861,25 @@ export class OrdersService {
     }
     const countryCode = country.code;
 
-    const docs = parsed.map((p) => ({
+    // Check duplicate proxies in this order
+    const existingProxies = await this.proxyModel.find({ order_id: order._id }).select('ip_address port').lean().exec();
+    const existingSet = new Set(existingProxies.map((p) => `${p.ip_address}:${p.port}`));
+
+    const duplicates: string[] = [];
+    const newParsed = parsed.filter((p) => {
+      const key = `${p.ip}:${p.port}`;
+      if (existingSet.has(key)) {
+        duplicates.push(key);
+        return false;
+      }
+      return true;
+    });
+
+    if (newParsed.length === 0 && duplicates.length > 0) {
+      throw new BadRequestException(`Tất cả proxy đều đã tồn tại trong order: ${duplicates.join(', ')}`);
+    }
+
+    const docs = newParsed.map((p) => ({
       order_id: order._id,
       proxy_type_id: service?._id ?? null,
       ip_address: p.ip,
@@ -888,14 +906,17 @@ export class OrdersService {
     void this.orderLogService.info(
       id,
       OrderLogStep.ADMIN_PROXY_IMPORTED,
-      `Admin đã import ${parsed.length} proxy thủ công (tổng: ${totalProxies}/${order.quantity})`,
-      { imported: parsed.length, total: totalProxies, quantity: order.quantity },
+      `Admin đã import ${newParsed.length} proxy thủ công (tổng: ${totalProxies}/${order.quantity})${duplicates.length ? `, ${duplicates.length} proxy trùng` : ''}`,
+      { imported: newParsed.length, duplicates: duplicates.length, total: totalProxies, quantity: order.quantity },
       actor,
     );
 
     return {
-      message: `Import thành công ${parsed.length} proxy`,
-      imported: parsed.length,
+      message: duplicates.length
+        ? `Import thành công ${newParsed.length} proxy, ${duplicates.length} proxy đã tồn tại: ${duplicates.join(', ')}`
+        : `Import thành công ${newParsed.length} proxy`,
+      imported: newParsed.length,
+      duplicates,
       total: totalProxies,
       quantity: order.quantity,
     };

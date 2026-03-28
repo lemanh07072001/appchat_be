@@ -192,10 +192,15 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
         }));
 
         for (let i = 0; i < proxyDocs.length; i += INSERT_BATCH_SIZE) {
-          await this.proxyModel.insertMany(
-            proxyDocs.slice(i, i + INSERT_BATCH_SIZE),
-            { ordered: false },
-          );
+          try {
+            await this.proxyModel.insertMany(
+              proxyDocs.slice(i, i + INSERT_BATCH_SIZE),
+              { ordered: false },
+            );
+          } catch (err: any) {
+            // Bỏ qua lỗi duplicate key, throw các lỗi khác
+            if (err?.code !== 11000) throw err;
+          }
         }
 
         const received = proxies.length;
