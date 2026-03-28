@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as crypto from 'crypto';
@@ -7,6 +7,8 @@ import { User, UserDocument } from '../schemas/users.schema';
 import { Service, ServiceDocument } from '../schemas/services.schema';
 import { Country, CountryDocument } from '../schemas/countries.schema';
 import { Proxy, ProxyDocument } from '../schemas/proxies.schema';
+import { Partner, PartnerDocument } from '../schemas/partners.schema';
+import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { BuyOrderDto } from '../dto/buy-order.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
@@ -23,6 +25,8 @@ import { NotificationGateway } from '../webhook/notification.gateway';
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     @InjectModel(Order.name)
     private orderModel: Model<OrderDocument>,
@@ -34,11 +38,14 @@ export class OrdersService {
     private countryModel: Model<CountryDocument>,
     @InjectModel(Proxy.name)
     private proxyModel: Model<ProxyDocument>,
+    @InjectModel(Partner.name)
+    private partnerModel: Model<PartnerDocument>,
     @Inject(REDIS_CLIENT)
     private readonly redis: Redis,
     private readonly orderLogService: OrderLogService,
     private readonly walletTxService: WalletTransactionService,
     private readonly notification: NotificationGateway,
+    private readonly providerFactory: ProxyProviderFactory,
   ) {}
 
   private toObjectId(id?: string): Types.ObjectId | null {
@@ -848,6 +855,76 @@ export class OrdersService {
     );
 
     return { message: 'Đơn hàng đã được đẩy lại vào hàng đợi xử lý', order };
+  }
+
+  async renewProvider(id: string, duration_days: number, actor = 'admin') {
+    const order = await this.orderModel.findById(id).populate('service_id').populate('partner_id').exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    const allowedStatuses = [OrderStatusEnum.ACTIVE, OrderStatusEnum.EXPIRED];
+    if (!allowedStatuses.includes(order.status as OrderStatusEnum)) {
+      throw new BadRequestException('Chỉ có thể gia hạn đơn ở trạng thái ACTIVE hoặc HẾT HẠN');
+    }
+
+    const partner = order.partner_id as any;
+    if (!partner?.token_api || !partner?.code) {
+      throw new BadRequestException('Order không có thông tin NCC');
+    }
+
+    const service = order.service_id as any;
+    if (!service?.id_service) {
+      throw new BadRequestException('Service không có id_service');
+    }
+
+    const proxies = await this.proxyModel
+      .find({ order_id: order._id, provider_proxy_id: { $exists: true, $ne: '' } })
+      .select('provider_proxy_id')
+      .lean()
+      .exec();
+
+    if (proxies.length === 0) {
+      throw new BadRequestException('Không có proxy nào có provider_proxy_id để gia hạn');
+    }
+
+    const provider = this.providerFactory.getProvider(partner.code);
+    const result = await provider.renew({
+      token_api: partner.token_api,
+      provider_order_id: order.provider_order_id ?? '',
+      duration_days,
+      provider_proxy_ids: proxies.map(p => p.provider_proxy_id),
+      id_service: service.id_service,
+    });
+
+    // Update order end_date
+    const oldEndDate = new Date(order.end_date);
+    const newEndDate = new Date(oldEndDate.getTime() + duration_days * 86400000);
+    order.end_date = newEndDate;
+    order.duration_days = (order.duration_days ?? 0) + duration_days;
+    if (order.status === OrderStatusEnum.EXPIRED) {
+      order.status = OrderStatusEnum.ACTIVE;
+    }
+    await order.save();
+
+    const raw = result.raw ?? {};
+    const successCount = raw.successCount ?? proxies.length;
+    const failCount = raw.failCount ?? 0;
+
+    this.logger.log(`Order ${id}: gia hạn ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`);
+
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_ORDER_RENEWED,
+      `Gia hạn ${successCount} proxy thêm ${duration_days} ngày (đến ${newEndDate.toLocaleDateString('vi-VN')})${failCount > 0 ? `, ${failCount} proxy thất bại` : ''}`,
+      { duration_days, successCount, failCount, old_end_date: oldEndDate, new_end_date: newEndDate },
+      actor,
+    );
+
+    return {
+      message: `Gia hạn thành công ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`,
+      successCount,
+      failCount,
+      new_end_date: newEndDate,
+    };
   }
 
   async updateProxy(proxyId: string, data: { ip_address?: string; port?: number; auth_username?: string; auth_password?: string; provider_proxy_id?: string }) {

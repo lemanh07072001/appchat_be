@@ -20,6 +20,8 @@ export interface ProviderRenewParams {
   token_api: string;
   provider_order_id: string; // ID order từ nhà cung cấp, lưu trong order.provider_order_id
   duration_days: number;
+  provider_proxy_ids?: string[]; // ID từng proxy (dùng cho provider gia hạn theo proxy, vd: ProxyVN)
+  id_service?: string;           // loaiproxy (dùng cho ProxyVN)
 }
 
 export interface ProviderRotateParams {
