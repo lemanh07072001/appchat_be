@@ -832,7 +832,7 @@ export class OrdersService {
   }
 
   async importProxies(id: string, lines: string[], actor = 'admin') {
-    const order = await this.orderModel.findById(id).populate('service_id').exec();
+    const order = await this.orderModel.findById(id).populate('service_id').populate('country_id').exec();
     if (!order) throw new BadRequestException('Order not found');
 
     const parsed = lines
@@ -855,7 +855,11 @@ export class OrdersService {
     }
 
     const service = order.service_id as any;
-    const countryCode = (order as any).country_id?.code || '';
+    const country = await this.countryModel.findById(order.country_id).exec();
+    if (!country?.code) {
+      throw new BadRequestException('Order chưa có thông tin quốc gia hoặc quốc gia chưa có mã code');
+    }
+    const countryCode = country.code;
 
     const docs = parsed.map((p) => ({
       order_id: order._id,
