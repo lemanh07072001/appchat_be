@@ -119,19 +119,60 @@ export class ProxyvnProvider implements IProxyProvider {
         isp:               item.loaiproxy ?? loaiproxy,
       }));
 
-    // Dùng idproxy đầu tiên làm provider_order_id (nhóm theo lần mua)
-    const providerOrderId = proxies[0]?.provider_proxy_id
-      ? String(proxies[0].provider_proxy_id)
-      : '';
-
-    return { provider_order_id: providerOrderId, proxies, raw };
+    return { provider_order_id: '', proxies, raw };
   }
 
   // ─── Gia hạn ────────────────────────────────────────────────────────────────
-  // TODO: implement khi có tài liệu API gia hạn của ProxyVN
 
   async renew(params: ProviderRenewParams): Promise<RenewResult> {
-    throw new BadRequestException('ProxyVN: API gia hạn chưa được implement');
+    const { token_api: key, duration_days, provider_proxy_ids, id_service } = params;
+
+    if (!provider_proxy_ids?.length) {
+      throw new BadRequestException('ProxyVN: không có proxy nào để gia hạn');
+    }
+    if (!id_service) {
+      throw new BadRequestException('ProxyVN: thiếu id_service (loaiproxy)');
+    }
+
+    const results: { idproxy: string; success: boolean; message?: string }[] = [];
+
+    for (const idproxy of provider_proxy_ids) {
+      const url =
+        `${this.BASE_URL}/giahanproxy.php` +
+        `?key=${encodeURIComponent(key)}` +
+        `&loaiproxy=${encodeURIComponent(id_service)}` +
+        `&ngay=${duration_days}` +
+        `&idproxy=${encodeURIComponent(idproxy)}`;
+
+      const safeUrl = url.replace(/key=[^&]+/, 'key=***');
+      this.logger.log(`[RENEW] → ${safeUrl}`);
+
+      try {
+        const raw = await this.request<any>(url);
+        this.logger.debug(`[RENEW] ← idproxy=${idproxy}: ${JSON.stringify(raw)}`);
+
+        const items = Array.isArray(raw) ? raw : [raw];
+        this.checkError(items);
+        results.push({ idproxy, success: true });
+      } catch (err: any) {
+        this.logger.error(`[RENEW] ✗ idproxy=${idproxy}: ${err?.message}`);
+        results.push({ idproxy, success: false, message: err?.message });
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length;
+    const failCount = results.filter(r => !r.success).length;
+
+    if (successCount === 0) {
+      throw new BadRequestException(
+        `ProxyVN: gia hạn thất bại tất cả ${failCount} proxy — ${results.map(r => r.message).join('; ')}`,
+      );
+    }
+
+    return {
+      success: true,
+      raw: { results, successCount, failCount },
+    };
   }
 
   // ─── Xoay IP ────────────────────────────────────────────────────────────────

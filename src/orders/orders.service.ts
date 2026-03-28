@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as crypto from 'crypto';
@@ -7,6 +7,8 @@ import { User, UserDocument } from '../schemas/users.schema';
 import { Service, ServiceDocument } from '../schemas/services.schema';
 import { Country, CountryDocument } from '../schemas/countries.schema';
 import { Proxy, ProxyDocument } from '../schemas/proxies.schema';
+import { Partner, PartnerDocument } from '../schemas/partners.schema';
+import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { BuyOrderDto } from '../dto/buy-order.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
@@ -23,6 +25,8 @@ import { NotificationGateway } from '../webhook/notification.gateway';
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     @InjectModel(Order.name)
     private orderModel: Model<OrderDocument>,
@@ -34,11 +38,14 @@ export class OrdersService {
     private countryModel: Model<CountryDocument>,
     @InjectModel(Proxy.name)
     private proxyModel: Model<ProxyDocument>,
+    @InjectModel(Partner.name)
+    private partnerModel: Model<PartnerDocument>,
     @Inject(REDIS_CLIENT)
     private readonly redis: Redis,
     private readonly orderLogService: OrderLogService,
     private readonly walletTxService: WalletTransactionService,
     private readonly notification: NotificationGateway,
+    private readonly providerFactory: ProxyProviderFactory,
   ) {}
 
   private toObjectId(id?: string): Types.ObjectId | null {
@@ -278,16 +285,35 @@ export class OrdersService {
     const search = query.search ?? '';
     const skip  = (page - 1) * limit;
 
-    const filter: any = search
-      ? { order_code: { $regex: search, $options: 'i' } }
-      : {};
+    const filter: any = {};
 
-    if (search && Types.ObjectId.isValid(search)) {
-      filter['$or'] = [
+    if (search) {
+      const orConditions: any[] = [
         { order_code: { $regex: search, $options: 'i' } },
-        { user_id: new Types.ObjectId(search) },
+        { provider_order_id: { $regex: search, $options: 'i' } },
       ];
-      delete filter.order_code;
+
+      if (Types.ObjectId.isValid(search)) {
+        orConditions.push({ user_id: new Types.ObjectId(search) });
+      }
+
+      const matchedUsers = await this.userModel
+        .find({
+          $or: [
+            { email: { $regex: search, $options: 'i' } },
+            { full_name: { $regex: search, $options: 'i' } },
+          ],
+        })
+        .select('_id')
+        .limit(50)
+        .lean()
+        .exec();
+
+      if (matchedUsers.length > 0) {
+        orConditions.push({ user_id: { $in: matchedUsers.map(u => u._id) } });
+      }
+
+      filter['$or'] = orConditions;
     }
 
     if (query.partner_id) {
@@ -409,7 +435,7 @@ export class OrdersService {
     const [proxies, totalProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider')
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id')
         .skip(skip)
         .limit(limit)
         .lean()
@@ -458,7 +484,7 @@ export class OrdersService {
     const [proxies, totalProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider')
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id')
         .skip(skip)
         .limit(limit)
         .lean()
@@ -792,6 +818,220 @@ export class OrdersService {
     );
 
     return { refunded_amount: refundAmount, balance_after: balanceAfter, order: saved };
+  }
+
+  async retryOrder(id: string, actor = 'admin') {
+    const order = await this.orderModel.findById(id).exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    const retryableStatuses = [
+      OrderStatusEnum.FAILED,
+      OrderStatusEnum.PENDING_REFUND,
+    ];
+    if (!retryableStatuses.includes(order.status)) {
+      throw new BadRequestException(
+        `Chỉ có thể mua lại đơn ở trạng thái FAILED hoặc PENDING_REFUND (hiện tại: ${order.status})`,
+      );
+    }
+
+    // Delete old proxies of this order
+    await this.proxyModel.deleteMany({ order_id: order._id }).exec();
+
+    // Reset order status
+    order.status = OrderStatusEnum.PENDING;
+    order.error_message = '';
+    order.provider_order_id = '';
+    await order.save();
+
+    // Push back to Redis queue
+    await this.redis.lpush(PENDING_ORDERS_KEY, id);
+
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_ORDER_RETRY,
+      `Admin đã yêu cầu mua lại đơn hàng`,
+      { actor, previous_status: order.status },
+      actor,
+    );
+
+    return { message: 'Đơn hàng đã được đẩy lại vào hàng đợi xử lý', order };
+  }
+
+  async renewProvider(id: string, duration_days: number, actor = 'admin') {
+    const order = await this.orderModel.findById(id).populate('service_id').populate('partner_id').exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    const allowedStatuses = [OrderStatusEnum.ACTIVE, OrderStatusEnum.EXPIRED];
+    if (!allowedStatuses.includes(order.status as OrderStatusEnum)) {
+      throw new BadRequestException('Chỉ có thể gia hạn đơn ở trạng thái ACTIVE hoặc HẾT HẠN');
+    }
+
+    const partner = order.partner_id as any;
+    if (!partner?.token_api || !partner?.code) {
+      throw new BadRequestException('Order không có thông tin NCC');
+    }
+
+    const service = order.service_id as any;
+    if (!service?.id_service) {
+      throw new BadRequestException('Service không có id_service');
+    }
+
+    const proxies = await this.proxyModel
+      .find({ order_id: order._id, provider_proxy_id: { $exists: true, $ne: '' } })
+      .select('provider_proxy_id')
+      .lean()
+      .exec();
+
+    if (proxies.length === 0) {
+      throw new BadRequestException('Không có proxy nào có provider_proxy_id để gia hạn');
+    }
+
+    const provider = this.providerFactory.getProvider(partner.code);
+    const result = await provider.renew({
+      token_api: partner.token_api,
+      provider_order_id: order.provider_order_id ?? '',
+      duration_days,
+      provider_proxy_ids: proxies.map(p => p.provider_proxy_id),
+      id_service: service.id_service,
+    });
+
+    // Update order end_date
+    const oldEndDate = new Date(order.end_date);
+    const newEndDate = new Date(oldEndDate.getTime() + duration_days * 86400000);
+    order.end_date = newEndDate;
+    order.duration_days = (order.duration_days ?? 0) + duration_days;
+    if (order.status === OrderStatusEnum.EXPIRED) {
+      order.status = OrderStatusEnum.ACTIVE;
+    }
+    await order.save();
+
+    const raw = result.raw ?? {};
+    const successCount = raw.successCount ?? proxies.length;
+    const failCount = raw.failCount ?? 0;
+
+    this.logger.log(`Order ${id}: gia hạn ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`);
+
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_ORDER_RENEWED,
+      `Gia hạn ${successCount} proxy thêm ${duration_days} ngày (đến ${newEndDate.toLocaleDateString('vi-VN')})${failCount > 0 ? `, ${failCount} proxy thất bại` : ''}`,
+      { duration_days, successCount, failCount, old_end_date: oldEndDate, new_end_date: newEndDate },
+      actor,
+    );
+
+    return {
+      message: `Gia hạn thành công ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`,
+      successCount,
+      failCount,
+      new_end_date: newEndDate,
+    };
+  }
+
+  async updateProxy(proxyId: string, data: { ip_address?: string; port?: number; auth_username?: string; auth_password?: string; provider_proxy_id?: string }) {
+    const proxy = await this.proxyModel.findById(proxyId).exec();
+    if (!proxy) throw new BadRequestException('Proxy not found');
+
+    if (data.ip_address) proxy.ip_address = data.ip_address;
+    if (data.port) proxy.port = data.port;
+    if (data.auth_username) proxy.auth_username = data.auth_username;
+    if (data.auth_password) proxy.auth_password = data.auth_password;
+    if (data.provider_proxy_id !== undefined) proxy.provider_proxy_id = data.provider_proxy_id;
+
+    await proxy.save();
+    return { message: 'Cập nhật proxy thành công', proxy };
+  }
+
+  async importProxies(id: string, lines: string[], actor = 'admin') {
+    const order = await this.orderModel.findById(id).populate('service_id').populate('country_id').exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    const parsed = lines
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const parts = line.split(':');
+        if (parts.length < 2) return null;
+        return {
+          ip: parts[0],
+          port: Number(parts[1]),
+          username: parts[2] || '',
+          password: parts[3] || '',
+          provider_proxy_id: parts[4] || '',
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => Boolean(x));
+
+    if (parsed.length === 0) {
+      throw new BadRequestException('Không có proxy hợp lệ để import');
+    }
+
+    const service = order.service_id as any;
+    const country = await this.countryModel.findById(order.country_id).exec();
+    if (!country?.code) {
+      throw new BadRequestException('Order chưa có thông tin quốc gia hoặc quốc gia chưa có mã code');
+    }
+    const countryCode = country.code;
+
+    // Check duplicate proxies in this order
+    const existingProxies = await this.proxyModel.find({ order_id: order._id }).select('ip_address port').lean().exec();
+    const existingSet = new Set(existingProxies.map((p) => `${p.ip_address}:${p.port}`));
+
+    const duplicates: string[] = [];
+    const newParsed = parsed.filter((p) => {
+      const key = `${p.ip}:${p.port}`;
+      if (existingSet.has(key)) {
+        duplicates.push(key);
+        return false;
+      }
+      return true;
+    });
+
+    if (newParsed.length === 0 && duplicates.length > 0) {
+      throw new BadRequestException(`Tất cả proxy đều đã tồn tại trong order: ${duplicates.join(', ')}`);
+    }
+
+    const docs = newParsed.map((p) => ({
+      order_id: order._id,
+      proxy_type_id: service?._id ?? null,
+      ip_address: p.ip,
+      port: p.port,
+      protocol: (order.config as any)?.protocol || 'http',
+      auth_username: p.username,
+      auth_password: p.password,
+      provider_proxy_id: p.provider_proxy_id || undefined,
+      country_code: countryCode,
+      provider: 'manual',
+      is_active: true,
+      is_available: true,
+    }));
+
+    await this.proxyModel.insertMany(docs);
+
+    // Check if order now has enough proxies
+    const totalProxies = await this.proxyModel.countDocuments({ order_id: order._id }).exec();
+    if (totalProxies >= order.quantity && order.status !== OrderStatusEnum.ACTIVE) {
+      order.status = OrderStatusEnum.ACTIVE;
+      order.error_message = '';
+      await order.save();
+    }
+
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_PROXY_IMPORTED,
+      `Admin đã import ${newParsed.length} proxy thủ công (tổng: ${totalProxies}/${order.quantity})${duplicates.length ? `, ${duplicates.length} proxy trùng` : ''}`,
+      { imported: newParsed.length, duplicates: duplicates.length, total: totalProxies, quantity: order.quantity },
+      actor,
+    );
+
+    return {
+      message: duplicates.length
+        ? `Import thành công ${newParsed.length} proxy, ${duplicates.length} proxy đã tồn tại: ${duplicates.join(', ')}`
+        : `Import thành công ${newParsed.length} proxy`,
+      imported: newParsed.length,
+      duplicates,
+      total: totalProxies,
+      quantity: order.quantity,
+    };
   }
 
   async delete(id: string, actor = 'admin') {
