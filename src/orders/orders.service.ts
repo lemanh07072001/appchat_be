@@ -848,7 +848,7 @@ export class OrdersService {
           password: parts[3] || '',
         };
       })
-      .filter(Boolean);
+      .filter((x): x is NonNullable<typeof x> => Boolean(x));
 
     if (parsed.length === 0) {
       throw new BadRequestException('Không có proxy hợp lệ để import');
