@@ -278,16 +278,35 @@ export class OrdersService {
     const search = query.search ?? '';
     const skip  = (page - 1) * limit;
 
-    const filter: any = search
-      ? { order_code: { $regex: search, $options: 'i' } }
-      : {};
+    const filter: any = {};
 
-    if (search && Types.ObjectId.isValid(search)) {
-      filter['$or'] = [
+    if (search) {
+      const orConditions: any[] = [
         { order_code: { $regex: search, $options: 'i' } },
-        { user_id: new Types.ObjectId(search) },
+        { provider_order_id: { $regex: search, $options: 'i' } },
       ];
-      delete filter.order_code;
+
+      if (Types.ObjectId.isValid(search)) {
+        orConditions.push({ user_id: new Types.ObjectId(search) });
+      }
+
+      const matchedUsers = await this.userModel
+        .find({
+          $or: [
+            { email: { $regex: search, $options: 'i' } },
+            { full_name: { $regex: search, $options: 'i' } },
+          ],
+        })
+        .select('_id')
+        .limit(50)
+        .lean()
+        .exec();
+
+      if (matchedUsers.length > 0) {
+        orConditions.push({ user_id: { $in: matchedUsers.map(u => u._id) } });
+      }
+
+      filter['$or'] = orConditions;
     }
 
     if (query.partner_id) {
@@ -831,6 +850,20 @@ export class OrdersService {
     return { message: 'Đơn hàng đã được đẩy lại vào hàng đợi xử lý', order };
   }
 
+  async updateProxy(proxyId: string, data: { ip_address?: string; port?: number; auth_username?: string; auth_password?: string; provider_proxy_id?: string }) {
+    const proxy = await this.proxyModel.findById(proxyId).exec();
+    if (!proxy) throw new BadRequestException('Proxy not found');
+
+    if (data.ip_address) proxy.ip_address = data.ip_address;
+    if (data.port) proxy.port = data.port;
+    if (data.auth_username) proxy.auth_username = data.auth_username;
+    if (data.auth_password) proxy.auth_password = data.auth_password;
+    if (data.provider_proxy_id !== undefined) proxy.provider_proxy_id = data.provider_proxy_id;
+
+    await proxy.save();
+    return { message: 'Cập nhật proxy thành công', proxy };
+  }
+
   async importProxies(id: string, lines: string[], actor = 'admin') {
     const order = await this.orderModel.findById(id).populate('service_id').populate('country_id').exec();
     if (!order) throw new BadRequestException('Order not found');
@@ -846,6 +879,7 @@ export class OrdersService {
           port: Number(parts[1]),
           username: parts[2] || '',
           password: parts[3] || '',
+          provider_proxy_id: parts[4] || '',
         };
       })
       .filter((x): x is NonNullable<typeof x> => Boolean(x));
@@ -887,6 +921,7 @@ export class OrdersService {
       protocol: (order.config as any)?.protocol || 'http',
       auth_username: p.username,
       auth_password: p.password,
+      provider_proxy_id: p.provider_proxy_id || undefined,
       country_code: countryCode,
       provider: 'manual',
       is_active: true,

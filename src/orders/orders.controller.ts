@@ -142,6 +142,15 @@ export class OrdersController {
     return this.ordersService.importProxies(id, proxies, actor);
   }
 
+  @Patch('api/admin/proxies/:proxyId')
+  @UseGuards(AdminGuard)
+  updateProxy(
+    @Param('proxyId') proxyId: string,
+    @Body() body: { ip_address?: string; port?: number; auth_username?: string; auth_password?: string; provider_proxy_id?: string },
+  ) {
+    return this.ordersService.updateProxy(proxyId, body);
+  }
+
   @Post('api/admin/orders/:id/retry')
   @UseGuards(AdminGuard)
   retryOrder(@Param('id') id: string, @Req() req?: Request) {
