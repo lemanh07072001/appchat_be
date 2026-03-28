@@ -288,9 +288,10 @@ export class OrdersService {
     const filter: any = {};
 
     if (search) {
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const orConditions: any[] = [
-        { order_code: { $regex: search, $options: 'i' } },
-        { provider_order_id: { $regex: search, $options: 'i' } },
+        { order_code: { $regex: escaped, $options: 'i' } },
+        { provider_order_id: { $regex: escaped, $options: 'i' } },
       ];
 
       if (Types.ObjectId.isValid(search)) {
@@ -300,8 +301,8 @@ export class OrdersService {
       const matchedUsers = await this.userModel
         .find({
           $or: [
-            { email: { $regex: search, $options: 'i' } },
-            { full_name: { $regex: search, $options: 'i' } },
+            { email: { $regex: escaped, $options: 'i' } },
+            { full_name: { $regex: escaped, $options: 'i' } },
           ],
         })
         .select('_id')
@@ -858,6 +859,10 @@ export class OrdersService {
   }
 
   async renewProvider(id: string, duration_days: number, actor = 'admin') {
+    if (!duration_days || duration_days < 1) {
+      throw new BadRequestException('duration_days phải >= 1');
+    }
+
     const order = await this.orderModel.findById(id).populate('service_id').populate('partner_id').exec();
     if (!order) throw new BadRequestException('Order not found');
 
@@ -895,19 +900,22 @@ export class OrdersService {
       id_service: service.id_service,
     });
 
-    // Update order end_date
-    const oldEndDate = new Date(order.end_date);
-    const newEndDate = new Date(oldEndDate.getTime() + duration_days * 86400000);
-    order.end_date = newEndDate;
-    order.duration_days = (order.duration_days ?? 0) + duration_days;
-    if (order.status === OrderStatusEnum.EXPIRED) {
-      order.status = OrderStatusEnum.ACTIVE;
-    }
-    await order.save();
-
     const raw = result.raw ?? {};
     const successCount = raw.successCount ?? proxies.length;
     const failCount = raw.failCount ?? 0;
+
+    // Chỉ update end_date nếu có ít nhất 1 proxy gia hạn thành công
+    const oldEndDate = new Date(order.end_date);
+    let newEndDate = oldEndDate;
+    if (successCount > 0) {
+      newEndDate = new Date(oldEndDate.getTime() + duration_days * 86400000);
+      order.end_date = newEndDate;
+      order.duration_days = (order.duration_days ?? 0) + duration_days;
+      if (order.status === OrderStatusEnum.EXPIRED) {
+        order.status = OrderStatusEnum.ACTIVE;
+      }
+      await order.save();
+    }
 
     this.logger.log(`Order ${id}: gia hạn ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`);
 
@@ -928,13 +936,14 @@ export class OrdersService {
   }
 
   async updateProxy(proxyId: string, data: { ip_address?: string; port?: number; auth_username?: string; auth_password?: string; provider_proxy_id?: string }) {
+    if (!Types.ObjectId.isValid(proxyId)) throw new BadRequestException('Invalid proxy ID');
     const proxy = await this.proxyModel.findById(proxyId).exec();
     if (!proxy) throw new BadRequestException('Proxy not found');
 
-    if (data.ip_address) proxy.ip_address = data.ip_address;
-    if (data.port) proxy.port = data.port;
-    if (data.auth_username) proxy.auth_username = data.auth_username;
-    if (data.auth_password) proxy.auth_password = data.auth_password;
+    if (data.ip_address !== undefined) proxy.ip_address = data.ip_address;
+    if (data.port !== undefined) proxy.port = data.port;
+    if (data.auth_username !== undefined) proxy.auth_username = data.auth_username;
+    if (data.auth_password !== undefined) proxy.auth_password = data.auth_password;
     if (data.provider_proxy_id !== undefined) proxy.provider_proxy_id = data.provider_proxy_id;
 
     await proxy.save();
