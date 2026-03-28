@@ -131,6 +131,17 @@ export class OrdersController {
     return this.ordersService.adminRefund(id, amount, note, cancelOrder, actor);
   }
 
+  @Post('api/admin/orders/:id/import-proxies')
+  @UseGuards(AdminGuard)
+  importProxies(
+    @Param('id') id: string,
+    @Body('proxies') proxies: string[],
+    @Req() req?: Request,
+  ) {
+    const actor = (req as any)?.user?.sub ?? 'admin';
+    return this.ordersService.importProxies(id, proxies, actor);
+  }
+
   @Post('api/admin/orders/:id/retry')
   @UseGuards(AdminGuard)
   retryOrder(@Param('id') id: string, @Req() req?: Request) {

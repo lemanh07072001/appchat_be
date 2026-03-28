@@ -831,6 +831,72 @@ export class OrdersService {
     return { message: 'Đơn hàng đã được đẩy lại vào hàng đợi xử lý', order };
   }
 
+  async importProxies(id: string, lines: string[], actor = 'admin') {
+    const order = await this.orderModel.findById(id).populate('service_id').exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    const parsed = lines
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const parts = line.split(':');
+        if (parts.length < 2) return null;
+        return {
+          ip: parts[0],
+          port: Number(parts[1]),
+          username: parts[2] || '',
+          password: parts[3] || '',
+        };
+      })
+      .filter(Boolean);
+
+    if (parsed.length === 0) {
+      throw new BadRequestException('Không có proxy hợp lệ để import');
+    }
+
+    const service = order.service_id as any;
+    const countryCode = (order as any).country_id?.code || '';
+
+    const docs = parsed.map((p) => ({
+      order_id: order._id,
+      proxy_type_id: service?._id ?? null,
+      ip_address: p.ip,
+      port: p.port,
+      protocol: (order.config as any)?.protocol || 'http',
+      auth_username: p.username,
+      auth_password: p.password,
+      country_code: countryCode,
+      provider: 'manual',
+      is_active: true,
+      is_available: true,
+    }));
+
+    await this.proxyModel.insertMany(docs);
+
+    // Check if order now has enough proxies
+    const totalProxies = await this.proxyModel.countDocuments({ order_id: order._id }).exec();
+    if (totalProxies >= order.quantity && order.status !== OrderStatusEnum.ACTIVE) {
+      order.status = OrderStatusEnum.ACTIVE;
+      order.error_message = '';
+      await order.save();
+    }
+
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_PROXY_IMPORTED,
+      `Admin đã import ${parsed.length} proxy thủ công (tổng: ${totalProxies}/${order.quantity})`,
+      { imported: parsed.length, total: totalProxies, quantity: order.quantity },
+      actor,
+    );
+
+    return {
+      message: `Import thành công ${parsed.length} proxy`,
+      imported: parsed.length,
+      total: totalProxies,
+      quantity: order.quantity,
+    };
+  }
+
   async delete(id: string, actor = 'admin') {
     const order = await this.orderModel.findByIdAndDelete(id).exec();
     if (!order) throw new BadRequestException('Order not found');
