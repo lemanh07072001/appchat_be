@@ -847,9 +847,6 @@ export class OrdersService {
     }
 
     const service = order.service_id as any;
-    if (!service?.id_service) {
-      throw new BadRequestException('Service không có id_service');
-    }
 
     const proxies = await this.proxyModel
       .find({ order_id: order._id, provider_proxy_id: { $exists: true, $ne: '' } })
@@ -975,9 +972,6 @@ export class OrdersService {
     }
 
     const service = order.service_id as any;
-    if (!service?.id_service) {
-      throw new BadRequestException('Service không có id_service');
-    }
 
     const proxies = await this.proxyModel
       .find({ order_id: order._id, provider_proxy_id: { $exists: true, $ne: '' } })
