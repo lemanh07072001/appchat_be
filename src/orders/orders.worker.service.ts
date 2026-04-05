@@ -191,7 +191,8 @@ export class OrdersWorkerService implements OnModuleInit {
           result = await provider.buy({
             token_api:        partner.token_api,
             quantity:         order.quantity,
-            duration_days:    order.duration_days,
+            // HomeProxy rotating: product chỉ có gói 1 ngày
+            duration_days:    (partner.code === 'homeproxy' && order.order_type === 'rotating') ? 1 : order.duration_days,
             proxy_type:       order.proxy_type,
             body_api:         service?.body_api,
             id_service:       idService,

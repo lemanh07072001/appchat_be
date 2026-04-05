@@ -288,9 +288,10 @@ export class OrdersService {
     const filter: any = {};
 
     if (search) {
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const orConditions: any[] = [
-        { order_code: { $regex: search, $options: 'i' } },
-        { provider_order_id: { $regex: search, $options: 'i' } },
+        { order_code: { $regex: escaped, $options: 'i' } },
+        { provider_order_id: { $regex: escaped, $options: 'i' } },
       ];
 
       if (Types.ObjectId.isValid(search)) {
@@ -300,8 +301,8 @@ export class OrdersService {
       const matchedUsers = await this.userModel
         .find({
           $or: [
-            { email: { $regex: search, $options: 'i' } },
-            { full_name: { $regex: search, $options: 'i' } },
+            { email: { $regex: escaped, $options: 'i' } },
+            { full_name: { $regex: escaped, $options: 'i' } },
           ],
         })
         .select('_id')
@@ -545,55 +546,6 @@ export class OrdersService {
       { prev_status: prevStatus, new_status: status },
       actor,
     );
-    return saved;
-  }
-
-  async renew(id: string, actor = 'admin'): Promise<OrderDocument> {
-    const original = await this.orderModel.findById(id).exec();
-    if (!original) throw new BadRequestException('Order not found');
-
-    const newOrder = new this.orderModel({
-      order_code:     this.generateOrderCode(),
-      user_id:        original.user_id,
-      service_id:     original.service_id,
-      partner_id:     original.partner_id,
-      country_id:     original.country_id,
-      proxy_type:     original.proxy_type,
-      quantity:       original.quantity,
-      duration_days:  original.duration_days,
-      bandwidth_gb:   original.bandwidth_gb,
-      price_per_unit: original.price_per_unit,
-      cost_per_unit:  original.cost_per_unit,
-      total_price:    original.total_price,
-      total_cost:     original.total_cost,
-      profit:         original.profit,
-      currency:       original.currency,
-      payment_method: original.payment_method,
-      config:         original.config,
-      auto_renew:     original.auto_renew,
-      renewed_from:   original._id,
-    });
-
-    const saved = await newOrder.save();
-    original.renewed_to = saved._id as Types.ObjectId;
-    await original.save();
-
-    const newOrderId = (saved._id as Types.ObjectId).toString();
-    void this.orderLogService.info(
-      id,
-      OrderLogStep.ADMIN_ORDER_RENEWED,
-      `Order được gia hạn → order mới ${newOrder.order_code}`,
-      { new_order_id: newOrderId, new_order_code: newOrder.order_code },
-      actor,
-    );
-    void this.orderLogService.info(
-      newOrderId,
-      OrderLogStep.ADMIN_ORDER_RENEWED,
-      `Order gia hạn từ order gốc ${original.order_code}`,
-      { source_order_id: id, source_order_code: original.order_code },
-      actor,
-    );
-
     return saved;
   }
 
@@ -857,13 +809,81 @@ export class OrdersService {
     return { message: 'Đơn hàng đã được đẩy lại vào hàng đợi xử lý', order };
   }
 
-  async renewProvider(id: string, duration_days: number, actor = 'admin') {
-    const order = await this.orderModel.findById(id).populate('service_id').populate('partner_id').exec();
-    if (!order) throw new BadRequestException('Order not found');
+  /**
+   * Lấy `id_service` (loaiproxy với ProxyVN) dựa trên partner code + order config.
+   * Copy logic từ orders.worker.service.ts để đảm bảo renew dùng đúng giá trị như buy.
+   */
+  private deriveIdService(partnerCode: string, order: OrderDocument, service: any): string {
+    const isp = (order.config?.isp as string) ?? '';
 
-    const allowedStatuses = [OrderStatusEnum.ACTIVE, OrderStatusEnum.EXPIRED];
-    if (!allowedStatuses.includes(order.status as OrderStatusEnum)) {
-      throw new BadRequestException('Chỉ có thể gia hạn đơn ở trạng thái ACTIVE hoặc HẾT HẠN');
+    if (partnerCode === 'homeproxy') {
+      const isRotating = (order as any).order_type === 'rotating';
+      if (isRotating) {
+        switch (order.duration_days) {
+          case 1:  return '7d57163a-9e09-4ee1-b52f-8c99dff60aa9';
+          case 7:  return '6bde5588-8ad8-4d3a-adc7-fefc790745e1';
+          case 30: return 'f792c198-380a-4851-89f7-408b432e46fa';
+          default: return '';
+        }
+      }
+      switch (isp.toLowerCase()) {
+        case 'vnpt':    return '528d39a9-f826-4c65-989c-4591d9f0dce3';
+        case 'viettel': return 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd';
+        case 'fpt':     return 'f0be21c6-2deb-499c-9d5d-7bba3f765a26';
+        default: return '';
+      }
+    }
+
+    if (partnerCode === 'proxyvn') {
+      return isp; // VD: "Viettel", "DatacenterA"
+    }
+
+    return service?.id_service || '';
+  }
+
+  /**
+   * Lấy id_service dùng cho RENEW (khác BUY ở chỗ HomeProxy trả categoryTypeId thay vì product.id):
+   * - HomeProxy: "1" (tĩnh) | "2" (rotating)
+   * - Các provider khác: dùng chung logic với buy.
+   */
+  private deriveIdServiceForRenew(partnerCode: string, order: OrderDocument, service: any): string {
+    if (partnerCode === 'homeproxy') {
+      const isRotating = (order as any).order_type === 'rotating';
+      return isRotating ? '2' : '1';
+    }
+    return this.deriveIdService(partnerCode, order, service);
+  }
+
+  /**
+   * User tự gia hạn order của chính mình:
+   * - Trừ tiền từ balance (price_per_unit × quantity × duration_days)
+   * - Gọi provider.renew() gia hạn proxy
+   * - Nếu fail toàn bộ → rollback tiền
+   * - Nếu thành công → update end_date, log wallet tx
+   */
+  async renewByUser(userId: string, orderId: string, duration_days: number) {
+    if (!duration_days || duration_days < 1) {
+      throw new BadRequestException('duration_days phải >= 1');
+    }
+
+    if (!Types.ObjectId.isValid(orderId)) {
+      throw new BadRequestException('Order id không hợp lệ');
+    }
+
+    const order = await this.orderModel
+      .findById(orderId)
+      .populate('service_id')
+      .populate('partner_id')
+      .exec();
+    if (!order) throw new BadRequestException('Order không tồn tại');
+
+    // Check order thuộc về user đang login
+    if (order.user_id?.toString() !== userId) {
+      throw new BadRequestException('Bạn không có quyền gia hạn đơn hàng này');
+    }
+
+    if (order.status !== OrderStatusEnum.ACTIVE) {
+      throw new BadRequestException('Chỉ có thể gia hạn đơn ở trạng thái ACTIVE');
     }
 
     const partner = order.partner_id as any;
@@ -872,9 +892,6 @@ export class OrdersService {
     }
 
     const service = order.service_id as any;
-    if (!service?.id_service) {
-      throw new BadRequestException('Service không có id_service');
-    }
 
     const proxies = await this.proxyModel
       .find({ order_id: order._id, provider_proxy_id: { $exists: true, $ne: '' } })
@@ -883,58 +900,115 @@ export class OrdersService {
       .exec();
 
     if (proxies.length === 0) {
-      throw new BadRequestException('Không có proxy nào có provider_proxy_id để gia hạn');
+      throw new BadRequestException('Không có proxy nào để gia hạn');
     }
 
+    // 1. Tính phí gia hạn
+    const pricePerUnit = Number(order.price_per_unit ?? 0);
+    const quantity     = Number(order.quantity ?? 0);
+    const totalPrice   = pricePerUnit * quantity * duration_days;
+    if (totalPrice <= 0) {
+      throw new BadRequestException('Không thể xác định giá gia hạn');
+    }
+
+    // 2. Trừ tiền atomic (chỉ trừ khi đủ)
+    const deducted = await this.userModel.findOneAndUpdate(
+      { _id: new Types.ObjectId(userId), money: { $gte: totalPrice } },
+      { $inc: { money: -totalPrice } },
+      { new: true },
+    ).exec();
+
+    if (!deducted) {
+      throw new BadRequestException('Số dư không đủ để gia hạn');
+    }
+
+    // 3. Gọi provider.renew() — nếu fail toàn bộ thì rollback tiền
     const provider = this.providerFactory.getProvider(partner.code);
-    const result = await provider.renew({
-      token_api: partner.token_api,
-      provider_order_id: order.provider_order_id ?? '',
-      duration_days,
-      provider_proxy_ids: proxies.map(p => p.provider_proxy_id),
-      id_service: service.id_service,
-    });
-
-    // Update order end_date
-    const oldEndDate = new Date(order.end_date);
-    const newEndDate = new Date(oldEndDate.getTime() + duration_days * 86400000);
-    order.end_date = newEndDate;
-    order.duration_days = (order.duration_days ?? 0) + duration_days;
-    if (order.status === OrderStatusEnum.EXPIRED) {
-      order.status = OrderStatusEnum.ACTIVE;
+    const idService = this.deriveIdServiceForRenew(partner.code, order, service);
+    let result;
+    try {
+      result = await provider.renew({
+        token_api:          partner.token_api,
+        provider_order_id:  order.provider_order_id ?? '',
+        duration_days,
+        provider_proxy_ids: proxies.map(p => p.provider_proxy_id),
+        id_service:         idService,
+      });
+    } catch (err: any) {
+      // Rollback tiền nếu provider fail
+      await this.userModel.findByIdAndUpdate(userId, { $inc: { money: totalPrice } }).exec();
+      this.logger.error(`Order ${orderId}: user renew fail — rollback ${totalPrice} VND: ${err?.message}`);
+      void this.orderLogService.error(
+        orderId,
+        OrderLogStep.USER_ORDER_RENEWED,
+        `Gia hạn thất bại, đã hoàn tiền ${totalPrice.toLocaleString('vi-VN')} VND`,
+        { duration_days, totalPrice, error: err?.message },
+        userId,
+      );
+      throw new BadRequestException(`Gia hạn thất bại: ${err?.message ?? 'Unknown'}`);
     }
-    await order.save();
 
     const raw = result.raw ?? {};
     const successCount = raw.successCount ?? proxies.length;
-    const failCount = raw.failCount ?? 0;
+    const failCount    = raw.failCount ?? 0;
 
-    this.logger.log(`Order ${id}: gia hạn ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`);
+    // 4. Update order.end_date
+    const oldEndDate = new Date(order.end_date);
+    const newEndDate = result.new_end_date
+      ? new Date(result.new_end_date)
+      : new Date(oldEndDate.getTime() + duration_days * 86400000);
+    order.end_date = newEndDate;
+    order.duration_days = (order.duration_days ?? 0) + duration_days;
+    await order.save();
 
+    // 5. Log wallet transaction
+    const balanceAfter  = Number(deducted.money ?? 0);
+    const balanceBefore = balanceAfter + totalPrice;
+    void this.walletTxService.log({
+      user_id:        userId,
+      type:           WalletTxType.PURCHASE,
+      amount:         totalPrice,
+      direction:      'out',
+      balance_before: balanceBefore,
+      balance_after:  balanceAfter,
+      description:    `Gia hạn proxy: ${service.name ?? ''} x${quantity} (${duration_days} ngày)`,
+      ref_id:         orderId,
+      ref_type:       'order',
+      created_by:     userId,
+    });
+
+    // 6. Log order
+    this.logger.log(`Order ${orderId}: user gia hạn ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày, trừ ${totalPrice} VND`);
     void this.orderLogService.info(
-      id,
-      OrderLogStep.ADMIN_ORDER_RENEWED,
-      `Gia hạn ${successCount} proxy thêm ${duration_days} ngày (đến ${newEndDate.toLocaleDateString('vi-VN')})${failCount > 0 ? `, ${failCount} proxy thất bại` : ''}`,
-      { duration_days, successCount, failCount, old_end_date: oldEndDate, new_end_date: newEndDate },
-      actor,
+      orderId,
+      OrderLogStep.USER_ORDER_RENEWED,
+      `User gia hạn ${successCount} proxy thêm ${duration_days} ngày (đến ${newEndDate.toLocaleDateString('vi-VN')})${failCount > 0 ? `, ${failCount} proxy thất bại` : ''} — trừ ${totalPrice.toLocaleString('vi-VN')} VND`,
+      { duration_days, successCount, failCount, totalPrice, old_end_date: oldEndDate, new_end_date: newEndDate, balance_after: balanceAfter },
+      userId,
     );
 
     return {
+      success: true,
       message: `Gia hạn thành công ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`,
-      successCount,
-      failCount,
-      new_end_date: newEndDate,
+      data: {
+        successCount,
+        failCount,
+        totalPrice,
+        new_end_date:  newEndDate,
+        balance_after: balanceAfter,
+      },
     };
   }
 
   async updateProxy(proxyId: string, data: { ip_address?: string; port?: number; auth_username?: string; auth_password?: string; provider_proxy_id?: string }) {
+    if (!Types.ObjectId.isValid(proxyId)) throw new BadRequestException('Invalid proxy ID');
     const proxy = await this.proxyModel.findById(proxyId).exec();
     if (!proxy) throw new BadRequestException('Proxy not found');
 
-    if (data.ip_address) proxy.ip_address = data.ip_address;
-    if (data.port) proxy.port = data.port;
-    if (data.auth_username) proxy.auth_username = data.auth_username;
-    if (data.auth_password) proxy.auth_password = data.auth_password;
+    if (data.ip_address !== undefined) proxy.ip_address = data.ip_address;
+    if (data.port !== undefined) proxy.port = data.port;
+    if (data.auth_username !== undefined) proxy.auth_username = data.auth_username;
+    if (data.auth_password !== undefined) proxy.auth_password = data.auth_password;
     if (data.provider_proxy_id !== undefined) proxy.provider_proxy_id = data.provider_proxy_id;
 
     await proxy.save();

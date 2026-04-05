@@ -107,12 +107,16 @@ export class ProxyvnProvider implements IProxyProvider {
     const items = Array.isArray(raw) ? raw : [raw];
     this.checkError(items);
 
+    // ProxyVN trả về user có prefix timestamp + 2 ký tự (vd: "1775392699mdYJyLNo")
+    // Auth username thực tế chỉ là phần suffix random sau prefix. Cắt prefix để lưu đúng.
+    const stripUserPrefix = (raw: string) => (raw ?? '').replace(/^\d{10}.{2}/, '');
+
     const proxies: ProxyCredential[] = items
       .filter((item) => item?.status === 100)
       .map((item) => ({
         host:              item.ip,
         port:              Number(item.port),
-        username:          item.user ?? '',
+        username:          stripUserPrefix(item.user),
         password:          item.password ?? '',
         protocol:          (item.type ?? type).toLowerCase().replace('https', 'http'),
         provider_proxy_id: item.idproxy,
@@ -134,7 +138,7 @@ export class ProxyvnProvider implements IProxyProvider {
       throw new BadRequestException('ProxyVN: thiếu id_service (loaiproxy)');
     }
 
-    const results: { idproxy: string; success: boolean; message?: string }[] = [];
+    const results: { idproxy: string; success: boolean; message?: string; time?: number }[] = [];
 
     for (const idproxy of provider_proxy_ids) {
       const url =
@@ -153,7 +157,10 @@ export class ProxyvnProvider implements IProxyProvider {
 
         const items = Array.isArray(raw) ? raw : [raw];
         this.checkError(items);
-        results.push({ idproxy, success: true });
+
+        // Lấy `time` (epoch seconds — thời gian proxy hết hạn) từ response
+        const timeField = items.find((i) => i?.status === 100 && i?.time)?.time;
+        results.push({ idproxy, success: true, time: timeField ? Number(timeField) : undefined });
       } catch (err: any) {
         this.logger.error(`[RENEW] ✗ idproxy=${idproxy}: ${err?.message}`);
         results.push({ idproxy, success: false, message: err?.message });
@@ -169,8 +176,15 @@ export class ProxyvnProvider implements IProxyProvider {
       );
     }
 
+    // Lấy thời điểm hết hạn xa nhất trong tất cả proxy đã gia hạn thành công
+    const maxTime = results
+      .filter((r) => r.success && r.time)
+      .reduce((max, r) => Math.max(max, r.time!), 0);
+    const new_end_date = maxTime > 0 ? new Date(maxTime * 1000) : undefined;
+
     return {
       success: true,
+      new_end_date,
       raw: { results, successCount, failCount },
     };
   }

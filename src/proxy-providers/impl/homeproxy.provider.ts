@@ -159,17 +159,32 @@ export class HomeproxyProvider implements IProxyProvider {
   }
 
   // ─── Gia hạn ─────────────────────────────────────────────────────────────────
-  // TODO: cập nhật khi có tài liệu API gia hạn của HomeProxy
+  // API: POST /merchant/orders/renewal-proxies
+  // Body: { userProxyIds: number[], dayOfRenewal: number, isRenewal: false, categoryTypeId: 1 }
 
   async renew(params: ProviderRenewParams): Promise<RenewResult> {
-    const raw = await this.request<any>('POST', '/orders/renew', params.token_api, {
-      orderId:      params.provider_order_id,
-      dayOfUse:     params.duration_days,
+    const ids = (params.provider_proxy_ids ?? [])
+      .map((id) => Number(id))
+      .filter((n) => Number.isFinite(n) && n > 0);
+
+    if (ids.length === 0) {
+      throw new BadRequestException('HomeProxy: không có userProxyIds để gia hạn');
+    }
+
+    // categoryTypeId: 1 = proxy tĩnh. Rotating chưa có tài liệu → mặc định 1.
+    // id_service được truyền xuống; nếu là số thì coi như categoryTypeId.
+    const categoryTypeId = Number(params.id_service) || 1;
+
+    const raw = await this.request<any>('POST', '/merchant/orders/renewal-proxies', params.token_api, {
+      userProxyIds:   ids,
+      dayOfRenewal:   params.duration_days,
+      isRenewal:      false,
+      categoryTypeId,
     });
 
     return {
-      success:      raw.success ?? true,
-      new_end_date: raw.endDate ? new Date(raw.endDate) : undefined,
+      success:      raw?.success ?? true,
+      new_end_date: raw?.endDate ? new Date(raw.endDate) : undefined,
       raw,
     };
   }
