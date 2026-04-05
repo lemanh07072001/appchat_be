@@ -842,6 +842,19 @@ export class OrdersService {
   }
 
   /**
+   * Lấy id_service dùng cho RENEW (khác BUY ở chỗ HomeProxy trả categoryTypeId thay vì product.id):
+   * - HomeProxy: "1" (tĩnh) | "2" (rotating)
+   * - Các provider khác: dùng chung logic với buy.
+   */
+  private deriveIdServiceForRenew(partnerCode: string, order: OrderDocument, service: any): string {
+    if (partnerCode === 'homeproxy') {
+      const isRotating = (order as any).order_type === 'rotating';
+      return isRotating ? '2' : '1';
+    }
+    return this.deriveIdService(partnerCode, order, service);
+  }
+
+  /**
    * User tự gia hạn order của chính mình:
    * - Trừ tiền từ balance (price_per_unit × quantity × duration_days)
    * - Gọi provider.renew() gia hạn proxy
@@ -911,7 +924,7 @@ export class OrdersService {
 
     // 3. Gọi provider.renew() — nếu fail toàn bộ thì rollback tiền
     const provider = this.providerFactory.getProvider(partner.code);
-    const idService = this.deriveIdService(partner.code, order, service);
+    const idService = this.deriveIdServiceForRenew(partner.code, order, service);
     let result;
     try {
       result = await provider.renew({
@@ -984,81 +997,6 @@ export class OrdersService {
         new_end_date:  newEndDate,
         balance_after: balanceAfter,
       },
-    };
-  }
-
-  async renewProvider(id: string, duration_days: number, actor = 'admin') {
-    if (!duration_days || duration_days < 1) {
-      throw new BadRequestException('duration_days phải >= 1');
-    }
-
-    const order = await this.orderModel.findById(id).populate('service_id').populate('partner_id').exec();
-    if (!order) throw new BadRequestException('Order not found');
-
-    if (order.status !== OrderStatusEnum.ACTIVE) {
-      throw new BadRequestException('Chỉ có thể gia hạn đơn ở trạng thái ACTIVE');
-    }
-
-    const partner = order.partner_id as any;
-    if (!partner?.token_api || !partner?.code) {
-      throw new BadRequestException('Order không có thông tin NCC');
-    }
-
-    const service = order.service_id as any;
-
-    const proxies = await this.proxyModel
-      .find({ order_id: order._id, provider_proxy_id: { $exists: true, $ne: '' } })
-      .select('provider_proxy_id')
-      .lean()
-      .exec();
-
-    if (proxies.length === 0) {
-      throw new BadRequestException('Không có proxy nào có provider_proxy_id để gia hạn');
-    }
-
-    const provider = this.providerFactory.getProvider(partner.code);
-    const idService = this.deriveIdService(partner.code, order, service);
-    const result = await provider.renew({
-      token_api: partner.token_api,
-      provider_order_id: order.provider_order_id ?? '',
-      duration_days,
-      provider_proxy_ids: proxies.map(p => p.provider_proxy_id),
-      id_service: idService,
-    });
-
-    const raw = result.raw ?? {};
-    const successCount = raw.successCount ?? proxies.length;
-    const failCount = raw.failCount ?? 0;
-
-    // Chỉ update end_date nếu có ít nhất 1 proxy gia hạn thành công
-    const oldEndDate = new Date(order.end_date);
-    let newEndDate = oldEndDate;
-    if (successCount > 0) {
-      // Ưu tiên dùng `new_end_date` từ provider (chính xác theo thời gian hết hạn thực tế),
-      // fallback cộng duration_days nếu provider không trả về.
-      newEndDate = result.new_end_date
-        ? new Date(result.new_end_date)
-        : new Date(oldEndDate.getTime() + duration_days * 86400000);
-      order.end_date = newEndDate;
-      order.duration_days = (order.duration_days ?? 0) + duration_days;
-      await order.save();
-    }
-
-    this.logger.log(`Order ${id}: gia hạn ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`);
-
-    void this.orderLogService.info(
-      id,
-      OrderLogStep.ADMIN_ORDER_RENEWED,
-      `Gia hạn ${successCount} proxy thêm ${duration_days} ngày (đến ${newEndDate.toLocaleDateString('vi-VN')})${failCount > 0 ? `, ${failCount} proxy thất bại` : ''}`,
-      { duration_days, successCount, failCount, old_end_date: oldEndDate, new_end_date: newEndDate },
-      actor,
-    );
-
-    return {
-      message: `Gia hạn thành công ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`,
-      successCount,
-      failCount,
-      new_end_date: newEndDate,
     };
   }
 

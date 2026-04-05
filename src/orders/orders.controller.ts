@@ -156,18 +156,7 @@ export class OrdersController {
     return this.ordersService.updateProxy(proxyId, body);
   }
 
-  @Post('api/admin/orders/:id/renew')
-  @UseGuards(AdminGuard)
-  renewOrder(
-    @Param('id') id: string,
-    @Body('duration_days') duration_days: number,
-    @Req() req?: Request,
-  ) {
-    const actor = (req as any)?.user?.sub ?? 'admin';
-    return this.ordersService.renewProvider(id, duration_days, actor);
-  }
-
-  @Post('api/admin/orders/:id/retry')
+@Post('api/admin/orders/:id/retry')
   @UseGuards(AdminGuard)
   retryOrder(@Param('id') id: string, @Req() req?: Request) {
     const actor = (req as any)?.user?.sub ?? 'admin';
