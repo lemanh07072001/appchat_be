@@ -810,6 +810,38 @@ export class OrdersService {
   }
 
   /**
+   * Lấy `id_service` (loaiproxy với ProxyVN) dựa trên partner code + order config.
+   * Copy logic từ orders.worker.service.ts để đảm bảo renew dùng đúng giá trị như buy.
+   */
+  private deriveIdService(partnerCode: string, order: OrderDocument, service: any): string {
+    const isp = (order.config?.isp as string) ?? '';
+
+    if (partnerCode === 'homeproxy') {
+      const isRotating = (order as any).order_type === 'rotating';
+      if (isRotating) {
+        switch (order.duration_days) {
+          case 1:  return '7d57163a-9e09-4ee1-b52f-8c99dff60aa9';
+          case 7:  return '6bde5588-8ad8-4d3a-adc7-fefc790745e1';
+          case 30: return 'f792c198-380a-4851-89f7-408b432e46fa';
+          default: return '';
+        }
+      }
+      switch (isp.toLowerCase()) {
+        case 'vnpt':    return '528d39a9-f826-4c65-989c-4591d9f0dce3';
+        case 'viettel': return 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd';
+        case 'fpt':     return 'f0be21c6-2deb-499c-9d5d-7bba3f765a26';
+        default: return '';
+      }
+    }
+
+    if (partnerCode === 'proxyvn') {
+      return isp; // VD: "Viettel", "DatacenterA"
+    }
+
+    return service?.id_service || '';
+  }
+
+  /**
    * User tự gia hạn order của chính mình:
    * - Trừ tiền từ balance (price_per_unit × quantity × duration_days)
    * - Gọi provider.renew() gia hạn proxy
@@ -879,6 +911,7 @@ export class OrdersService {
 
     // 3. Gọi provider.renew() — nếu fail toàn bộ thì rollback tiền
     const provider = this.providerFactory.getProvider(partner.code);
+    const idService = this.deriveIdService(partner.code, order, service);
     let result;
     try {
       result = await provider.renew({
@@ -886,7 +919,7 @@ export class OrdersService {
         provider_order_id:  order.provider_order_id ?? '',
         duration_days,
         provider_proxy_ids: proxies.map(p => p.provider_proxy_id),
-        id_service:         service.id_service,
+        id_service:         idService,
       });
     } catch (err: any) {
       // Rollback tiền nếu provider fail
@@ -984,12 +1017,13 @@ export class OrdersService {
     }
 
     const provider = this.providerFactory.getProvider(partner.code);
+    const idService = this.deriveIdService(partner.code, order, service);
     const result = await provider.renew({
       token_api: partner.token_api,
       provider_order_id: order.provider_order_id ?? '',
       duration_days,
       provider_proxy_ids: proxies.map(p => p.provider_proxy_id),
-      id_service: service.id_service,
+      id_service: idService,
     });
 
     const raw = result.raw ?? {};
