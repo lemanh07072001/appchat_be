@@ -55,6 +55,7 @@ export enum OrderLogStep {
   ADMIN_ORDER_CREATED    = 'admin.order_created',
   ADMIN_ORDER_DELETED    = 'admin.order_deleted',
   ADMIN_ORDER_RENEWED    = 'admin.order_renewed',
+  USER_ORDER_RENEWED     = 'user.order_renewed',
   ADMIN_ORDER_RETRY      = 'admin.order_retry',
   ADMIN_PROXY_IMPORTED   = 'admin.proxy_imported',
 }

@@ -19,7 +19,8 @@
       "Bash(curl -s http://localhost:8080/)",
       "Bash(curl -s -X POST http://localhost:8080/api/auth/login -H \"Content-Type: application/json\" -d '{\"\"email\"\":\"\"admin@admin.com\"\",\"\"password\"\":\"\"admin123\"\"}')",
       "Bash(curl -s -X POST http://localhost:8080/api/auth/login -H \"Content-Type: application/json\" -d '{\"\"email\"\":\"\"admin@admin.com\"\",\"\"password\"\":\"\"Admin@123\"\"}')",
-      "Bash(curl -s \"http://localhost:8080/api/admin/transactions?page=1&limit=5\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImFkbWluQGFkbWluLmNvbSIsInN1YiI6IjY5YThmOTBhYTU1ZTNiYTVhNDJkM2EzNyIsInJvbGUiOjAsImlhdCI6MTc3MzIxNzYxMiwiZXhwIjoxNzczMjE4NTEyfQ.yVpO5nNB-uYofNndjwZQBlhaG-4-_1xK20ghiUnEVhI\")"
+      "Bash(curl -s \"http://localhost:8080/api/admin/transactions?page=1&limit=5\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImFkbWluQGFkbWluLmNvbSIsInN1YiI6IjY5YThmOTBhYTU1ZTNiYTVhNDJkM2EzNyIsInJvbGUiOjAsImlhdCI6MTc3MzIxNzYxMiwiZXhwIjoxNzczMjE4NTEyfQ.yVpO5nNB-uYofNndjwZQBlhaG-4-_1xK20ghiUnEVhI\")",
+      "Bash(xargs grep:*)"
     ]
   }
 }

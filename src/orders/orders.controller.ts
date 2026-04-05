@@ -74,6 +74,17 @@ export class OrdersController {
     return this.ordersService.findOneByUser(userId, id, query);
   }
 
+  // ─── User: gia hạn order của chính mình ──────────────────
+  @Post('api/orders/my/:id/renew')
+  renewMyOrder(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body('duration_days') duration_days: number,
+  ) {
+    const userId = (req as any).user.sub as string;
+    return this.ordersService.renewByUser(userId, id, duration_days);
+  }
+
   // ─── Admin ────────────────────────────────────────────────
   @Get('api/admin/orders')
   @UseGuards(AdminGuard)
@@ -103,12 +114,6 @@ export class OrdersController {
   @UseGuards(AdminGuard)
   updatePaymentStatus(@Param('id') id: string, @Body('payment_status') status: PaymentStatusEnum) {
     return this.ordersService.updatePaymentStatus(id, status);
-  }
-
-  @Post('api/admin/orders/:id/renew')
-  @UseGuards(AdminGuard)
-  renew(@Param('id') id: string) {
-    return this.ordersService.renew(id);
   }
 
   @Post('api/admin/orders/:id/approve-refund')
@@ -151,9 +156,9 @@ export class OrdersController {
     return this.ordersService.updateProxy(proxyId, body);
   }
 
-  @Post('api/admin/orders/:id/renew-provider')
+  @Post('api/admin/orders/:id/renew')
   @UseGuards(AdminGuard)
-  renewProvider(
+  renewOrder(
     @Param('id') id: string,
     @Body('duration_days') duration_days: number,
     @Req() req?: Request,
