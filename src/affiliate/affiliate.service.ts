@@ -44,8 +44,16 @@ export class AffiliateService {
 
       if (!buyer?.referred_by) return;
 
+      // Lấy commission_rate riêng của referrer, fallback về global config
+      const referrer = await this.userModel
+        .findById(buyer.referred_by)
+        .select('commission_rate')
+        .lean()
+        .exec();
+      const rate = referrer?.commission_rate ?? config.commission_rate;
+
       const commissionAmount = parseFloat(
-        ((order.total_price * config.commission_rate) / 100).toFixed(2),
+        ((order.total_price * rate) / 100).toFixed(2),
       );
 
       if (commissionAmount <= 0) return;
@@ -56,7 +64,7 @@ export class AffiliateService {
         referred_user_id:  order.user_id,
         order_id:          order._id,
         order_total:       order.total_price,
-        commission_rate:   config.commission_rate,
+        commission_rate:   rate,
         commission_amount: commissionAmount,
         status:            AffiliateCommissionStatus.PENDING,
       });
@@ -149,22 +157,32 @@ export class AffiliateService {
       throw new BadRequestException('Commission không đủ điều kiện để yêu cầu rút');
     }
 
-    // Trừ affiliate_balance + tạo withdrawal record
-    await Promise.all([
-      this.userModel.findByIdAndUpdate(userId, {
-        $inc: { affiliate_balance: -updated.commission_amount },
-      }).exec(),
-      this.withdrawalModel.create({
-        user_id:        new Types.ObjectId(userId),
-        total_amount:   updated.commission_amount,
-        bank_name:      user.bank_name,
-        bank_account:   user.bank_account,
-        bank_owner:     user.bank_owner,
-        status:         WithdrawalStatus.REQUESTED,
-        commission_ids: [new Types.ObjectId(commissionId)],
-        requested_at:   new Date(),
-      }),
-    ]);
+    // Atomic: trừ affiliate_balance chỉ khi đủ tiền
+    const deducted = await this.userModel.findOneAndUpdate(
+      { _id: new Types.ObjectId(userId), affiliate_balance: { $gte: updated.commission_amount } },
+      { $inc: { affiliate_balance: -updated.commission_amount } },
+      { new: true },
+    ).exec();
+
+    if (!deducted) {
+      // Rollback commission status về CREDITED
+      await this.commissionModel.findByIdAndUpdate(updated._id, {
+        status: AffiliateCommissionStatus.CREDITED,
+        requested_at: null,
+      }).exec();
+      throw new BadRequestException('Số dư ví affiliate không đủ');
+    }
+
+    await this.withdrawalModel.create({
+      user_id:        new Types.ObjectId(userId),
+      total_amount:   updated.commission_amount,
+      bank_name:      user.bank_name,
+      bank_account:   user.bank_account,
+      bank_owner:     user.bank_owner,
+      status:         WithdrawalStatus.REQUESTED,
+      commission_ids: [new Types.ObjectId(commissionId)],
+      requested_at:   new Date(),
+    });
 
     this.logger.log(`Affiliate: user ${userId} yêu cầu rút commission ${commissionId} → ${user.bank_account}`);
     return { message: 'Yêu cầu rút đã được gửi, chờ admin chuyển khoản' };
@@ -230,25 +248,36 @@ export class AffiliateService {
       },
     ).exec();
 
-    // Trừ affiliate_balance + tạo 1 withdrawal record gộp tất cả commissions
-    await Promise.all([
-      this.userModel.findByIdAndUpdate(userId, {
-        $inc: { affiliate_balance: -user.affiliate_balance },
-      }).exec(),
-      this.withdrawalModel.create({
-        user_id:        new Types.ObjectId(userId),
-        total_amount:   user.affiliate_balance,
-        bank_name:      user.bank_name,
-        bank_account:   user.bank_account,
-        bank_owner:     user.bank_owner,
-        status:         WithdrawalStatus.REQUESTED,
-        commission_ids: commissionIds,
-        requested_at:   now,
-      }),
-    ]);
+    // Atomic: trừ affiliate_balance chỉ khi đủ tiền
+    const withdrawAmount = user.affiliate_balance;
+    const deducted = await this.userModel.findOneAndUpdate(
+      { _id: new Types.ObjectId(userId), affiliate_balance: { $gte: withdrawAmount } },
+      { $inc: { affiliate_balance: -withdrawAmount } },
+      { new: true },
+    ).exec();
 
-    this.logger.log(`Affiliate: user ${userId} yêu cầu rút ${user.affiliate_balance} → ${user.bank_account}`);
-    return { message: 'Yêu cầu rút đã được gửi, chờ admin chuyển khoản', total: user.affiliate_balance };
+    if (!deducted) {
+      // Rollback commissions về CREDITED
+      await this.commissionModel.updateMany(
+        { _id: { $in: commissionIds }, status: AffiliateCommissionStatus.REQUESTED },
+        { status: AffiliateCommissionStatus.CREDITED, requested_at: null },
+      ).exec();
+      throw new BadRequestException('Số dư ví affiliate không đủ');
+    }
+
+    await this.withdrawalModel.create({
+      user_id:        new Types.ObjectId(userId),
+      total_amount:   withdrawAmount,
+      bank_name:      user.bank_name,
+      bank_account:   user.bank_account,
+      bank_owner:     user.bank_owner,
+      status:         WithdrawalStatus.REQUESTED,
+      commission_ids: commissionIds,
+      requested_at:   now,
+    });
+
+    this.logger.log(`Affiliate: user ${userId} yêu cầu rút ${withdrawAmount} → ${user.bank_account}`);
+    return { message: 'Yêu cầu rút đã được gửi, chờ admin chuyển khoản', total: withdrawAmount };
   }
 
   private validateObjectId(id: string, label = 'ID') {
@@ -402,7 +431,7 @@ export class AffiliateService {
   async getStats(userId: string) {
     const objectId = new Types.ObjectId(userId);
 
-    const [totalReferred, commissionStats, user] = await Promise.all([
+    const [totalReferred, commissionStats, user, config] = await Promise.all([
       this.userModel.countDocuments({ referred_by: objectId }).exec(),
       this.commissionModel.aggregate([
         { $match: { referrer_id: objectId, status: { $ne: AffiliateCommissionStatus.CANCELLED } } },
@@ -433,7 +462,8 @@ export class AffiliateService {
           },
         },
       ]).exec(),
-      this.userModel.findById(userId).select('affiliate_balance referral_code').lean().exec(),
+      this.userModel.findById(userId).select('affiliate_balance referral_code commission_rate').lean().exec(),
+      this.getConfig(),
     ]);
 
     const s = commissionStats[0] ?? {
@@ -448,9 +478,15 @@ export class AffiliateService {
     // total_earned = tất cả đã được xác nhận (trừ PENDING vì đơn chưa hết hạn)
     const total_earned = s.awaiting_credit + s.credited_amount + s.requested_amount + s.paid_amount;
 
+    // commission_rate hiệu lực: ưu tiên rate riêng của user, fallback về affiliateconfigs
+    const effectiveRate = (user as any)?.commission_rate ?? config.commission_rate;
+
     return {
       referral_code:     user?.referral_code   ?? '',
       affiliate_balance: user?.affiliate_balance ?? 0, // CREDITED còn trong ví
+      commission_rate:   config.commission_rate,        // tỷ lệ mặc định từ affiliateconfigs
+      effective_rate:    effectiveRate,                 // tỷ lệ thực tế áp dụng cho user này
+      has_custom_rate:   (user as any)?.commission_rate != null, // true nếu đang dùng rate riêng
       total_referred:    totalReferred,
       total_orders:      s.total_orders,
       total_earned,                                     // đã xác nhận (không tính pending)
@@ -575,7 +611,7 @@ export class AffiliateService {
   async getConfig(): Promise<AffiliateConfigDocument> {
     let config = await this.configModel.findOne().exec();
     if (!config) {
-      config = new this.configModel({ commission_rate: 5, is_active: true });
+      config = new this.configModel({ commission_rate: 10, is_active: true });
       await config.save();
     }
     return config;

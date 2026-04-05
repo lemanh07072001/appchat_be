@@ -12,6 +12,16 @@ export class ServicesService {
     private serviceModel: Model<ServiceDocument>,
   ) {}
 
+  async findApiEnabledList() {
+    return this.serviceModel
+      .find({ status: true, api_enabled: true })
+      .populate('country', 'name code')
+      .select('_id name type proxy_type ip_version protocol isp pricing usage_type')
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec();
+  }
+
   async findPublicList(category?: 'static' | 'rotating', usage_type?: string, ip_version?: string) {
     const filter: any = { status: true };
     if (category) filter.type = category;
@@ -32,23 +42,35 @@ export class ServicesService {
     const search = query.search ?? '';
     const skip = (page - 1) * limit;
 
-    const orConditions: any[] = [
-      { name: { $regex: search, $options: 'i' } },
-      { type: { $regex: search, $options: 'i' } },
-    ];
+    const andConditions: any[] = [];
 
-    if (Types.ObjectId.isValid(search)) {
-      orConditions.push(
-        { _id: new Types.ObjectId(search) },
-        { partner: new Types.ObjectId(search) },
-        { country: new Types.ObjectId(search) },
-      );
+    if (search) {
+      const orConditions: any[] = [
+        { name: { $regex: search, $options: 'i' } },
+        { type: { $regex: search, $options: 'i' } },
+      ];
+      if (Types.ObjectId.isValid(search)) {
+        orConditions.push(
+          { _id: new Types.ObjectId(search) },
+          { partner: new Types.ObjectId(search) },
+          { country: new Types.ObjectId(search) },
+        );
+      }
+      andConditions.push({ $or: orConditions });
     }
 
-    const filter = search ? { $or: orConditions } : {};
+    if (query.type) andConditions.push({ type: query.type });
+    if (query.ip_version) andConditions.push({ ip_version: query.ip_version });
+    if (query.proxy_type) andConditions.push({ proxy_type: query.proxy_type });
+    if (query.status !== undefined && query.status !== '') {
+      andConditions.push({ status: query.status === 'true' });
+    }
+    if (query.badge) andConditions.push({ badge: query.badge });
+
+    const filter = andConditions.length > 0 ? { $and: andConditions } : {};
 
     const [data, total] = await Promise.all([
-      this.serviceModel.find(filter).skip(skip).limit(limit).sort({ createdAt: -1 }).exec(),
+      this.serviceModel.find(filter).populate('partner', 'name domain').populate('country', 'name code').skip(skip).limit(limit).sort({ createdAt: -1 }).lean().exec(),
       this.serviceModel.countDocuments(filter).exec(),
     ]);
 
@@ -81,12 +103,26 @@ export class ServicesService {
     if (!service) {
       throw new BadRequestException('Service not found');
     }
-    Object.assign(service, {
-      ...data,
-      partner: this.toObjectId(data.partner),
-      country: this.toObjectId(data.country),
-    });
+    // Only assign defined fields to prevent overwriting existing data with undefined
+    const updateData: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) updateData[key] = value;
+    }
+    updateData.partner = this.toObjectId(data.partner);
+    updateData.country = this.toObjectId(data.country);
+    if (data.isp !== undefined) updateData.isp = data.isp;
+    if (data.protocol !== undefined) updateData.protocol = data.protocol;
+    Object.assign(service, updateData);
+    service.markModified('pricing');
+    service.markModified('duration_ids');
+    service.markModified('note');
     return service.save();
+  }
+
+  async toggleStatus(id: string, status: boolean): Promise<ServiceDocument> {
+    const service = await this.serviceModel.findByIdAndUpdate(id, { status }, { new: true }).exec();
+    if (!service) throw new BadRequestException('Service not found');
+    return service;
   }
 
   async duplicate(id: string): Promise<ServiceDocument> {
@@ -111,11 +147,16 @@ export class ServicesService {
       partner: service.partner,
       country: service.country,
       body_api: service.body_api,
+      id_service: service.id_service,
       protocol: service.protocol,
       note: service.note,
       isp: service.isp,
       is_show: service.is_show,
+      api_enabled: service.api_enabled,
+      show_user_pass: service.show_user_pass,
       pricing: service.pricing,
+      badge: service.badge,
+      duration_ids: service.duration_ids,
     });
     return newService.save();
   }

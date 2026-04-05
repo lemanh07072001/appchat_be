@@ -1,14 +1,22 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { ServicesService } from './services.service';
 import { CreateServiceDto } from '../dto/create-service.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
 import { Public } from '../guards/public.decorator';
+import { ApiTokenGuard } from '../guards/api-token.guard';
 
 @Controller()
 @UseGuards(AuthGuard)
 export class ServicesController {
   constructor(private readonly servicesService: ServicesService) {}
+
+  @Public()
+  @UseGuards(ApiTokenGuard)
+  @Get('api/services/api-list')
+  findApiEnabledList() {
+    return this.servicesService.findApiEnabledList();
+  }
 
   @Public()
   @Get('api/services')
@@ -33,6 +41,11 @@ export class ServicesController {
   @Put('api/admin/services/:id')
   update(@Param('id') id: string, @Body() updateServiceDto: CreateServiceDto) {
     return this.servicesService.update(id, updateServiceDto);
+  }
+
+  @Patch('api/admin/services/:id/status')
+  toggleStatus(@Param('id') id: string, @Body('status') status: boolean) {
+    return this.servicesService.toggleStatus(id, status);
   }
 
   @Post('api/admin/services/:id/duplicate')

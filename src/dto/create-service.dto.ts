@@ -55,6 +55,26 @@ export class CreateServiceDto {
   is_show?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  api_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  show_user_pass?: boolean;
+
+  @IsOptional()
+  @IsString()
+  id_service?: string;
+
+  @IsOptional()
   @IsObject()
   pricing?: Record<string, any>;
+
+  @IsOptional()
+  @IsString()
+  badge?: string;
+
+  @IsOptional()
+  @IsObject()
+  duration_ids?: Record<string, string>;
 }

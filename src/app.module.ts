@@ -4,6 +4,8 @@ import { AppService } from './app.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { CountriesModule } from './countries/countries.module';
@@ -14,6 +16,9 @@ import { RedisModule } from './redis/redis.module';
 import { AffiliateModule } from './affiliate/affiliate.module';
 import { WebhookModule } from './webhook/webhook.module';
 import { IpsModule } from './ips/ips.module';
+import { UploadModule } from './upload/upload.module';
+import { AnnouncementsModule } from './announcements/announcements.module';
+import { BlogModule } from './blog/blog.module';
 
 @Module({
   imports: [
@@ -28,6 +33,10 @@ import { IpsModule } from './ips/ips.module';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         uri: config.get<string>('MONGO_URI'),
+        maxPoolSize: 30,
+        minPoolSize: 5,
+        serverSelectionTimeoutMS: 5000,
+        socketTimeoutMS: 30000,
       }),
     }),
 
@@ -54,6 +63,18 @@ import { IpsModule } from './ips/ips.module';
     WebhookModule,
 
     IpsModule,
+
+    UploadModule,
+
+    AnnouncementsModule,
+
+    BlogModule,
+
+    // Serve static files (uploads)
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'uploads'),
+      serveRoot: '/uploads',
+    }),
   ],
   controllers: [AppController],
   providers: [AppService],

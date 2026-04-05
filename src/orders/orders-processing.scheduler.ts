@@ -1,130 +1,65 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Model } from 'mongoose';
 import { Order, OrderDocument } from '../schemas/orders.schema';
-import { Partner, PartnerDocument } from '../schemas/partners.schema';
-import { Proxy, ProxyDocument } from '../schemas/proxies.schema';
 import { OrderStatusEnum } from '../enum/order.enum';
-import { ProxyProtocolEnum } from '../enum/proxy.enum';
-import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
-import { AffiliateService } from '../affiliate/affiliate.service';
+import { REDIS_CLIENT } from '../redis/redis.module';
+import { PROCESSING_ORDERS_KEY } from './orders.scheduler';
+import type { Redis } from 'ioredis';
 
-/** Số order xử lý song song mỗi batch — tránh rate limit */
-const BATCH_SIZE = 20;
+const LOCK_KEY         = 'lock:cache_processing_orders';
+const LOCK_TTL_SECONDS = 120;
 
+/**
+ * Backup scheduler — chạy mỗi 5 phút re-push PROCESSING orders bị miss
+ * (VD: server restart, Redis flush) vào processing queue.
+ * Logic xử lý chính nằm ở OrdersProcessingWorkerService.
+ */
 @Injectable()
 export class OrdersProcessingScheduler implements OnModuleInit {
   private readonly logger = new Logger(OrdersProcessingScheduler.name);
-  private isRunning = false;
 
   constructor(
-    @InjectModel(Order.name)   private readonly orderModel:   Model<OrderDocument>,
-    @InjectModel(Partner.name) private readonly partnerModel: Model<PartnerDocument>,
-    @InjectModel(Proxy.name)   private readonly proxyModel:   Model<ProxyDocument>,
-    private readonly providerFactory: ProxyProviderFactory,
-    private readonly affiliateService: AffiliateService,
+    @InjectModel(Order.name) private readonly orderModel: Model<OrderDocument>,
+    @Inject(REDIS_CLIENT)    private readonly redis: Redis,
   ) {}
 
   onModuleInit() {
-    void this.pollProcessingOrders();
+    void this.rePushProcessingOrders();
   }
 
-  /** Poll HomeProxy mỗi 60 giây để lấy proxy cho PROCESSING orders */
-  @Cron('0 * * * * *')
-  async pollProcessingOrders(): Promise<void> {
-    if (this.isRunning) return; // Bỏ qua nếu cycle trước chưa xong
-    this.isRunning = true;
+  @Cron('0 */5 * * * *')  // mỗi 5 phút
+  async rePushProcessingOrders(): Promise<void> {
+    const acquired = await this.redis.set(LOCK_KEY, '1', 'EX', LOCK_TTL_SECONDS, 'NX');
+    if (!acquired) return;
 
     try {
       const orders = await this.orderModel
-        .find({ status: OrderStatusEnum.PROCESSING, provider_order_id: { $ne: '' } })
-        .select('_id provider_order_id partner_id config user_id total_price')
+        .find({ status: OrderStatusEnum.PROCESSING, provider_order_id: { $ne: '' }, end_date: { $gt: new Date() } })
+        .select('_id')
         .lean()
         .exec();
 
       if (orders.length === 0) return;
 
-      this.logger.log(`Polling ${orders.length} PROCESSING orders...`);
+      const existingIds = new Set(await this.redis.lrange(PROCESSING_ORDERS_KEY, 0, -1));
 
-      // Load tất cả partner 1 lần — tránh N+1 query
-      const partnerIds = [...new Set(orders.map(o => o.partner_id?.toString()).filter(Boolean))];
-      const partners = await this.partnerModel
-        .find({ _id: { $in: partnerIds } })
-        .select('code token_api')
-        .lean()
-        .exec();
-      const partnerMap = new Map(partners.map(p => [p._id.toString(), p]));
+      let pushed = 0;
+      for (const order of orders) {
+        const orderId = order._id.toString();
+        if (existingIds.has(orderId)) continue;
+        await this.redis.lpush(PROCESSING_ORDERS_KEY, orderId);
+        pushed++;
+      }
 
-      // Xử lý theo batch để không hammer API
-      for (let i = 0; i < orders.length; i += BATCH_SIZE) {
-        const batch = orders.slice(i, i + BATCH_SIZE);
-        await Promise.allSettled(batch.map(o => this.fetchAndActivate(o, partnerMap)));
+      if (pushed > 0) {
+        this.logger.log(`Re-pushed ${pushed} PROCESSING order(s) → "${PROCESSING_ORDERS_KEY}"`);
       }
     } catch (err) {
-      this.logger.error('pollProcessingOrders error', err?.message);
+      this.logger.error('rePushProcessingOrders error', err?.message);
     } finally {
-      this.isRunning = false;
-    }
-  }
-
-  private async fetchAndActivate(order: any, partnerMap: Map<string, any>): Promise<void> {
-    try {
-      const partner = partnerMap.get(order.partner_id?.toString());
-
-      if (!partner?.code || !partner?.token_api) return;
-
-      const provider = this.providerFactory.getProvider(partner.code);
-
-      if (!provider.fetchOrderProxies) return; // Provider không hỗ trợ async fetch
-
-      const proxies = await provider.fetchOrderProxies(
-        partner.token_api,
-        order.provider_order_id,
-      );
-
-      if (!proxies || proxies.length === 0) return; // Chưa có proxy — chờ cycle sau
-
-      // Idempotent: skip nếu proxy đã được insert cho order này
-      const existing = await this.proxyModel.countDocuments({ order_id: order._id }).exec();
-      if (existing > 0) {
-        // Proxy đã có, chỉ đảm bảo status ACTIVE
-        await this.orderModel.findByIdAndUpdate(order._id, { status: OrderStatusEnum.ACTIVE }).exec();
-        return;
-      }
-
-      const orderId      = new Types.ObjectId(order._id);
-      const serviceId    = order.service_id ? new Types.ObjectId(order.service_id) : null;
-      const proxyDocs = proxies.map((p: any) => ({
-        order_id:          orderId,
-        proxy_type_id:     serviceId,
-        ip_address:        p.host,
-        port:              Number(p.port),
-        protocol:          (p.protocol?.toLowerCase() ?? 'http') as ProxyProtocolEnum,
-        auth_username:     p.username,
-        auth_password:     p.password,
-        provider_proxy_id: p.provider_proxy_id ?? null,
-        domain:            p.domain   ?? '',
-        prev_ip:           p.prev_ip  ?? '',
-        location:          p.location ?? '',
-        isp:               p.isp      ?? '',
-        provider:          partner.code,
-        country_code:      p.country_code ?? 'VN',
-        is_active:         true,
-        is_available:      false,
-      }));
-
-      // ordered:false — tiếp tục insert dù có doc nào bị duplicate key (sparse unique index)
-      await this.proxyModel.insertMany(proxyDocs, { ordered: false });
-
-      await this.orderModel.findByIdAndUpdate(order._id, {
-        status: OrderStatusEnum.ACTIVE,
-      }).exec();
-
-      this.logger.log(`Order ${order._id} → ACTIVE, inserted ${proxies.length} proxies`);
-      void this.affiliateService.handleOrderActive(order as any);
-    } catch (err) {
-      this.logger.error(`fetchAndActivate ${order._id}: ${err?.message}`);
+      await this.redis.del(LOCK_KEY);
     }
   }
 }

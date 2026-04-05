@@ -6,6 +6,8 @@ import { Model } from 'mongoose';
 import { CreateUserDto } from '../dto/create-user.dto';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+import { WalletTransactionService } from '../wallet/wallet-transaction.service';
+import { WalletTxType } from '../schemas/wallet-transaction.schema';
 
 @Injectable()
 export class UsersService {
@@ -16,6 +18,7 @@ export class UsersService {
     private userModel: Model<UserDocument>,
     @InjectModel(Transaction.name)
     private txModel: Model<TransactionDocument>,
+    private readonly walletTxService: WalletTransactionService,
   ) {}
 
   async findAll() {
@@ -90,7 +93,7 @@ export class UsersService {
     return null;
   }
 
-  private async generateTopupCode(): Promise<string> {
+  private async generateUniqueTopupCode(): Promise<string> {
     let code: string;
     let exists: boolean;
     do {
@@ -115,7 +118,7 @@ export class UsersService {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(data.password, salt);
 
-    const topup_code = await this.generateTopupCode();
+    const topup_code = await this.generateUniqueTopupCode();
 
     const user = new this.userModel({
       ...data,
@@ -168,15 +171,17 @@ export class UsersService {
       throw new BadRequestException('Số tiền phải lớn hơn 0');
     }
 
-    const user = await this.userModel.findById(userId).select('_id email money').exec();
-    if (!user) throw new BadRequestException('User không tồn tại');
+    // Atomic: $inc + trả về document SAU khi cộng → tránh race condition
+    const updatedUser = await this.userModel.findByIdAndUpdate(
+      userId,
+      { $inc: { money: amount } },
+      { new: true },
+    ).select('_id email money').exec();
+    if (!updatedUser) throw new BadRequestException('User không tồn tại');
 
-    const balanceBefore = Number(user.money ?? 0);
-    const balanceAfter = balanceBefore + amount;
+    const balanceAfter = Number(updatedUser.money ?? 0);
+    const balanceBefore = balanceAfter - amount;
 
-    await this.userModel.findByIdAndUpdate(user._id, { $inc: { money: amount } }).exec();
-
-    // Lưu vào lịch sử giao dịch
     const txId = Date.now() + Math.floor(Math.random() * 1000);
     await this.txModel.create({
       transaction_id: txId,
@@ -184,25 +189,154 @@ export class UsersService {
       transaction_date: new Date(),
       transaction_number: '',
       account_number: '',
-      content: note || `Admin nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+      content: note || `Admin nạp ${amount.toLocaleString('vi-VN')}đ cho ${updatedUser.email}`,
       code: '',
       transfer_type: 'IN',
       transfer_amount: amount,
       checksum: '',
       status: TransactionStatus.PROCESSED,
-      user_id: user._id,
+      user_id: updatedUser._id,
       balance_before: balanceBefore,
       balance_after: balanceAfter,
       source: 'manual',
-      note: note || `Admin nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+      note: note || `Admin nạp ${amount.toLocaleString('vi-VN')}đ cho ${updatedUser.email}`,
     });
 
-    this.logger.log(`Deposit: +${amount.toLocaleString('vi-VN')}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
+    void this.walletTxService.log({
+      user_id:        updatedUser._id.toString(),
+      type:           WalletTxType.DEPOSIT,
+      amount,
+      direction:      'in',
+      balance_before: balanceBefore,
+      balance_after:  balanceAfter,
+      description:    note || `Admin nạp tiền`,
+      created_by:     'admin',
+    });
+
+    this.logger.log(`Deposit: +${amount.toLocaleString('vi-VN')}đ → ${updatedUser.email} (${balanceBefore} → ${balanceAfter})`);
 
     return {
-      message: `Đã nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+      message: `Đã nạp ${amount.toLocaleString('vi-VN')}đ cho ${updatedUser.email}`,
       balance_before: balanceBefore,
       balance_after: balanceAfter,
     };
+  }
+
+  // ─── Admin: trừ tiền user ─────────────────────────────────────────────
+  async deduct(userId: string, amount: number, note?: string) {
+    if (!amount || amount <= 0) {
+      throw new BadRequestException('Số tiền phải lớn hơn 0');
+    }
+
+    // Atomic: chỉ trừ nếu đủ tiền (money >= amount), trả về document SAU khi trừ
+    const updatedUser = await this.userModel.findOneAndUpdate(
+      { _id: userId, money: { $gte: amount } },
+      { $inc: { money: -amount } },
+      { new: true },
+    ).select('_id email money').exec();
+
+    if (!updatedUser) {
+      // Kiểm tra user có tồn tại không để trả lỗi chính xác
+      const exists = await this.userModel.findById(userId).select('money').exec();
+      if (!exists) throw new BadRequestException('User không tồn tại');
+      throw new BadRequestException(`Số dư không đủ (hiện có: ${Number(exists.money ?? 0).toLocaleString('vi-VN')}đ)`);
+    }
+
+    const balanceAfter = Number(updatedUser.money ?? 0);
+    const balanceBefore = balanceAfter + amount;
+
+    const txId = Date.now() + Math.floor(Math.random() * 1000);
+    await this.txModel.create({
+      transaction_id: txId,
+      gateway: 'MANUAL',
+      transaction_date: new Date(),
+      transaction_number: '',
+      account_number: '',
+      content: note || `Admin trừ ${amount.toLocaleString('vi-VN')}đ từ ${updatedUser.email}`,
+      code: '',
+      transfer_type: 'OUT',
+      transfer_amount: amount,
+      checksum: '',
+      status: TransactionStatus.PROCESSED,
+      user_id: updatedUser._id,
+      balance_before: balanceBefore,
+      balance_after: balanceAfter,
+      source: 'manual',
+      note: note || `Admin trừ ${amount.toLocaleString('vi-VN')}đ từ ${updatedUser.email}`,
+    });
+
+    void this.walletTxService.log({
+      user_id:        updatedUser._id.toString(),
+      type:           WalletTxType.DEDUCTION,
+      amount,
+      direction:      'out',
+      balance_before: balanceBefore,
+      balance_after:  balanceAfter,
+      description:    note || `Admin trừ tiền`,
+      created_by:     'admin',
+    });
+
+    this.logger.log(`Deduct: -${amount.toLocaleString('vi-VN')}đ → ${updatedUser.email} (${balanceBefore} → ${balanceAfter})`);
+
+    return {
+      message: `Đã trừ ${amount.toLocaleString('vi-VN')}đ từ ${updatedUser.email}`,
+      balance_before: balanceBefore,
+      balance_after: balanceAfter,
+    };
+  }
+
+  // ─── Admin: set % hoa hồng riêng cho user ────────────────────────────
+  async setCommissionRate(userId: string, rate: number | null) {
+    if (rate !== null && (rate < 0 || rate > 100)) {
+      throw new BadRequestException('commission_rate phải trong khoảng 0 – 100');
+    }
+    const user = await this.userModel.findByIdAndUpdate(
+      userId,
+      { commission_rate: rate },
+      { new: true },
+    ).select('_id email commission_rate').exec();
+    if (!user) throw new BadRequestException('Không tìm thấy người dùng');
+    return {
+      message: rate === null
+        ? `Đã xoá tỉ lệ riêng, ${user.email} sẽ dùng tỉ lệ global`
+        : `Đã set hoa hồng ${rate}% cho ${user.email}`,
+      commission_rate: user.commission_rate,
+    };
+  }
+
+  // ─── Admin: tạo/đổi mã nạp tiền ─────────────────────────────────────
+  async generateTopupCode(userId: string) {
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) throw new BadRequestException('Không tìm thấy người dùng');
+
+    const topup_code = await this.generateUniqueTopupCode();
+    user.topup_code = topup_code;
+    await user.save();
+
+    return { topup_code, message: 'Tạo mã nạp thành công' };
+  }
+
+  // ─── User: tạo/reset API token ────────────────────────────────────────
+  async generateApiToken(userId: string) {
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) throw new BadRequestException('Không tìm thấy người dùng');
+
+    const api_token = 'apt_' + crypto.randomBytes(24).toString('hex');
+    user.api_token = api_token;
+    await user.save();
+
+    return { api_token, message: 'API token đã được tạo thành công' };
+  }
+
+  // ─── User: lấy API token hiện tại ───────────────────────────────────────
+  async getApiToken(userId: string) {
+    const user = await this.userModel.findById(userId).select('api_token').exec();
+    if (!user) throw new BadRequestException('Không tìm thấy người dùng');
+    return { api_token: user.api_token || null };
+  }
+
+  // ─── Xác thực API token ────────────────────────────────────────────────
+  async findByApiToken(token: string): Promise<UserDocument | null> {
+    return this.userModel.findOne({ api_token: token }).select('_id email money status role').exec();
   }
 }

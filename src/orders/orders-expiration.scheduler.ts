@@ -6,6 +6,8 @@ import { Order, OrderDocument } from '../schemas/orders.schema';
 import { Proxy, ProxyDocument } from '../schemas/proxies.schema';
 import { OrderStatusEnum, OrderItemStatusEnum } from '../enum/order.enum';
 import { AffiliateService } from '../affiliate/affiliate.service';
+import { OrderLogService } from './order-log.service';
+import { OrderLogStep } from '../schemas/order-log.schema';
 
 /** Số order xử lý mỗi batch */
 const BATCH_SIZE = 100;
@@ -19,6 +21,7 @@ export class OrdersExpirationScheduler {
     @InjectModel(Order.name)  private readonly orderModel: Model<OrderDocument>,
     @InjectModel(Proxy.name)  private readonly proxyModel: Model<ProxyDocument>,
     private readonly affiliateService: AffiliateService,
+    private readonly orderLogService: OrderLogService,
   ) {}
 
   /** Chạy mỗi 1 phút — check order ACTIVE đã hết hạn chưa */
@@ -30,10 +33,10 @@ export class OrdersExpirationScheduler {
     try {
       const now = new Date();
 
-      // Tìm orders ACTIVE có end_date <= now
+      // Tìm orders ACTIVE hoặc PROCESSING có end_date <= now
       const expiredOrders = await this.orderModel
         .find({
-          status: OrderStatusEnum.ACTIVE,
+          status: { $in: [OrderStatusEnum.ACTIVE, OrderStatusEnum.PROCESSING] },
           end_date: { $ne: null, $lte: now },
         })
         .select('_id order_code')
@@ -69,6 +72,16 @@ export class OrdersExpirationScheduler {
 
         const codes = batch.map(o => o.order_code).join(', ');
         this.logger.log(`Expired batch: ${codes}`);
+
+        // Ghi log cho từng order trong batch
+        for (const o of batch) {
+          void this.orderLogService.info(
+            o._id.toString(),
+            OrderLogStep.EXPIRED,
+            `Order hết hạn — proxy đã bị vô hiệu hóa`,
+            { order_code: o.order_code, expired_at: now.toISOString() },
+          );
+        }
       }
 
       this.logger.log(`Total ${expiredOrders.length} order(s) marked as EXPIRED`);

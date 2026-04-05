@@ -1,4 +1,4 @@
-import { IsEnum, IsMongoId, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsEnum, IsMongoId, IsNotEmpty, IsNumber, IsOptional, IsString, Min, Max } from 'class-validator';
 import { ProxyProtocolEnum } from '../enum/order.enum';
 
 export class BuyOrderDto {
@@ -35,4 +35,20 @@ export class BuyOrderDto {
   @IsOptional()
   @IsString()
   proxy_type?: string;
+
+  // Thời gian xoay IP (phút) — chỉ dùng cho proxy xoay, 0 = không xoay
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1440)
+  rotate_interval?: number;
+
+  // Username/password tự chọn — nếu không gửi thì backend tự random
+  @IsOptional()
+  @IsString()
+  username?: string;
+
+  @IsOptional()
+  @IsString()
+  password?: string;
 }

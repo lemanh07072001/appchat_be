@@ -3,6 +3,7 @@ import { IProxyProvider } from './proxy-provider.interface';
 import { Proxyv6Provider } from './impl/proxyv6.provider';
 import { HomeproxyProvider } from './impl/homeproxy.provider';
 import { ProxyvnProvider } from './impl/proxyvn.provider';
+import { ProxysieutocProvider } from './impl/proxysieutoc.provider';
 // import { ProxysellerProvider } from './impl/proxyseller.provider';
 
 /**
@@ -22,6 +23,7 @@ export class ProxyProviderFactory implements OnModuleInit {
     private readonly proxyv6:     Proxyv6Provider,
     private readonly homeproxy:   HomeproxyProvider,
     private readonly proxyvn:     ProxyvnProvider,
+    private readonly proxysieutoc: ProxysieutocProvider,
     // private readonly proxyseller: ProxysellerProvider,
   ) {}
 
@@ -29,6 +31,7 @@ export class ProxyProviderFactory implements OnModuleInit {
     this.registry.set('proxyv6',   this.proxyv6);
     this.registry.set('homeproxy', this.homeproxy);
     this.registry.set('proxyvn',   this.proxyvn);
+    this.registry.set('proxysieutoc', this.proxysieutoc);
     // this.registry.set('proxyseller', this.proxyseller);
   }
 

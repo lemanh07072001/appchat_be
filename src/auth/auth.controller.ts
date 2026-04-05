@@ -94,4 +94,16 @@ export class AuthController {
     console.log(refresh_token);
     return this.authService.refresh(refresh_token);
   }
+
+  // ─── User: lấy API token hiện tại ─────────────────────────────────────
+  @Get('api-token')
+  getApiToken(@Request() req: any) {
+    return this.usersService.getApiToken(req.user.sub);
+  }
+
+  // ─── User: tạo mới hoặc reset API token ────────────────────────────────
+  @Post('api-token/generate')
+  generateApiToken(@Request() req: any) {
+    return this.usersService.generateApiToken(req.user.sub);
+  }
 }

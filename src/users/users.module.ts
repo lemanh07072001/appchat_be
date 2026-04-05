@@ -5,6 +5,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { JwtModule } from '@nestjs/jwt';
 import { User, UserSchema } from '../schemas/users.schema';
 import { Transaction, TransactionSchema } from '../schemas/transactions.schema';
+import { WalletModule } from '../wallet/wallet.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { Transaction, TransactionSchema } from '../schemas/transactions.schema';
       { name: Transaction.name, schema: TransactionSchema },
     ]),
     JwtModule,
+    WalletModule,
   ],
   providers: [UsersService],
   controllers: [UsersController],

@@ -44,7 +44,7 @@ export class User {
   topup_code: string;           // Mã định danh khi chuyển khoản, VD: NAP123456
 
   // ─── Affiliate ────────────────────────────────────────────
-  @Prop({ default: '', unique: true, sparse: true })
+  @Prop({ default: null, unique: true, sparse: true })
   referral_code: string;
 
   @Prop({ type: Types.ObjectId, ref: 'User', default: null })
@@ -52,6 +52,14 @@ export class User {
 
   @Prop({ type: Number, default: 0 })
   affiliate_balance: number;
+
+  /** % hoa hồng riêng cho user này. null = dùng tỉ lệ global */
+  @Prop({ type: Number, default: null })
+  commission_rate: number | null;
+
+  // ─── API Token (dùng để mua proxy qua API bên ngoài) ─────
+  @Prop({ default: null })
+  api_token: string;
 
   // ─── Thông tin ngân hàng (để rút hoa hồng) ───────────────
   @Prop({ default: '' })
@@ -65,3 +73,9 @@ export class User {
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
+
+// Unique index on api_token, but only for documents where api_token exists and is not null
+UserSchema.index(
+  { api_token: 1 },
+  { unique: true, partialFilterExpression: { api_token: { $type: 'string' } } },
+);

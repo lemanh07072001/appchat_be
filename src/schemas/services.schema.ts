@@ -50,8 +50,22 @@ export class Service {
   @Prop({ default: true })
   is_show: boolean;
 
+  @Prop({ default: false })
+  api_enabled: boolean;
+
+  @Prop({ default: true })
+  show_user_pass: boolean;
+
   @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
   pricing: Record<string, any>;
+
+  @Prop({ default: '' })
+  badge: string;
+
+  // Map số ngày → product ID của provider (HomeProxy có ID khác nhau theo thời hạn)
+  // VD: { "1": "uuid-1day", "7": "uuid-7day", "30": "uuid-30day" }
+  @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
+  duration_ids: Record<string, string>;
 }
 
 export const ServiceSchema = SchemaFactory.createForClass(Service);

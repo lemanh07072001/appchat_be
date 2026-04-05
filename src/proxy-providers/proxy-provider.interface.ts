@@ -9,13 +9,19 @@ export interface ProviderBuyParams {
   protocol?: string;         // http | socks5 | ...
   isp?: string;
   body_api?: string;         // template body từ service config (nếu có)
-  id_service?: string;               // id dịch vụ nhà cung cấp (không phải provider nào cũng cần)
+  id_service?: string;       // id dịch vụ nhà cung cấp (không phải provider nào cũng cần)
+  rotate_interval?: number;  // phút xoay IP (0 = không xoay / proxy tĩnh)
+  is_cdk?: boolean;          // true = key xoay (gửi lên HomeProxy để phân biệt), false = proxy xoay thường
+  username?: string;         // username tự chọn — nếu không có thì provider tự random
+  password?: string;         // password tự chọn — nếu không có thì provider tự random
 }
 
 export interface ProviderRenewParams {
   token_api: string;
   provider_order_id: string; // ID order từ nhà cung cấp, lưu trong order.provider_order_id
   duration_days: number;
+  provider_proxy_ids?: string[]; // ID từng proxy (dùng cho provider gia hạn theo proxy, vd: ProxyVN)
+  id_service?: string;           // loaiproxy (dùng cho ProxyVN)
 }
 
 export interface ProviderRotateParams {
@@ -37,7 +43,7 @@ export interface ProxyCredential {
   password:          string;
   protocol:          string;
   // optional — provider-specific fields
-  provider_proxy_id?: number;   // numeric id từ provider (HomeProxy: item.id)
+  provider_proxy_id?: string;   // id từ provider (HomeProxy: item.id)
   domain?:            string;   // domain của proxy
   prev_ip?:           string;   // IP trước khi rotate
   location?:          string;   // location code (VD: HNI)

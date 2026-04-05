@@ -5,7 +5,7 @@ export type AffiliateConfigDocument = AffiliateConfig & Document;
 
 @Schema()
 export class AffiliateConfig {
-  @Prop({ type: Number, default: 5 })
+  @Prop({ type: Number, default: 10 })
   commission_rate: number;   // % hoa hồng trên total_price
 
   @Prop({ type: Boolean, default: true })

@@ -7,7 +7,8 @@ import { OrderStatusEnum } from '../enum/order.enum';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import type { Redis } from 'ioredis';
 
-export const PENDING_ORDERS_KEY = 'orders:pending';
+export const PENDING_ORDERS_KEY     = 'orders:pending';
+export const PROCESSING_ORDERS_KEY  = 'orders:processing';
 const LOCK_KEY         = 'lock:cache_pending_orders';
 const LOCK_TTL_SECONDS = 120;    // tối đa 120s để chạy xong, tránh deadlock
 

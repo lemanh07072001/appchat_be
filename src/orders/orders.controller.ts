@@ -2,12 +2,16 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuard
 import type { Request } from 'express';
 import { OrdersService } from './orders.service';
 import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
+import { OrderLogService } from './order-log.service';
+import { ProxyRotateService } from './proxy-rotate.service';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { BuyOrderDto } from '../dto/buy-order.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { UserOrderQueryDto } from '../dto/user-order-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
 import { AdminGuard } from '../guards/admin.guard';
+import { ApiTokenGuard } from '../guards/api-token.guard';
+import { Public } from '../guards/public.decorator';
 import { OrderStatusEnum, PaymentStatusEnum } from '../enum/order.enum';
 
 @Controller()
@@ -16,6 +20,8 @@ export class OrdersController {
   constructor(
     private readonly ordersService: OrdersService,
     private readonly expirationScheduler: OrdersExpirationScheduler,
+    private readonly orderLogService: OrderLogService,
+    private readonly proxyRotateService: ProxyRotateService,
   ) {}
 
   @Post('api/admin/orders/run-expiration')
@@ -24,11 +30,36 @@ export class OrdersController {
     return this.expirationScheduler.checkExpiredOrders();
   }
 
-  // ─── User: mua dịch vụ ────────────────────────────────────
+  // ─── User: mua dịch vụ (qua JWT) ─────────────────────────
   @Post('api/orders/buy')
   buy(@Req() req: Request, @Body() dto: BuyOrderDto) {
     const userId = (req as any).user.sub as string;
     return this.ordersService.buy(userId, dto);
+  }
+
+  // ─── User: mua dịch vụ (qua API token) ───────────────────
+  @Post('api/orders/buy-external')
+  @Public()
+  @UseGuards(ApiTokenGuard)
+  buyExternal(@Req() req: Request, @Body() dto: BuyOrderDto) {
+    const userId = (req as any).user.sub as string;
+    return this.ordersService.buy(userId, dto);
+  }
+
+  // ─── User: mua dịch vụ đồng bộ — trả về proxy ngay khi sẵn sàng ──
+  @Post('api/orders/buy-sync')
+  @Public()
+  @UseGuards(ApiTokenGuard)
+  buySyncExternal(@Req() req: Request, @Body() dto: BuyOrderDto) {
+    const userId = (req as any).user.sub as string;
+    return this.ordersService.buySync(userId, dto);
+  }
+
+  // ─── CDK: xoay proxy theo key (không cần auth) ────────────
+  @Get('api/proxy/rotate/:key')
+  @Public()
+  rotateCdk(@Param('key') key: string) {
+    return this.proxyRotateService.rotateByCdkKey(key);
   }
 
   @Get('api/orders/my')
@@ -45,31 +76,37 @@ export class OrdersController {
 
   // ─── Admin ────────────────────────────────────────────────
   @Get('api/admin/orders')
+  @UseGuards(AdminGuard)
   findAll(@Query() query: PaginationQueryDto) {
     return this.ordersService.findAllPaginated(query);
   }
 
   @Get('api/admin/orders/:id')
-  findOne(@Param('id') id: string) {
-    return this.ordersService.findOne(id);
+  @UseGuards(AdminGuard)
+  findOne(@Param('id') id: string, @Query() query: PaginationQueryDto) {
+    return this.ordersService.findOneAdmin(id, query);
   }
 
   @Post('api/admin/orders')
+  @UseGuards(AdminGuard)
   create(@Body() dto: CreateOrderDto) {
     return this.ordersService.create(dto);
   }
 
   @Patch('api/admin/orders/:id/status')
+  @UseGuards(AdminGuard)
   updateStatus(@Param('id') id: string, @Body('status') status: OrderStatusEnum) {
     return this.ordersService.updateStatus(id, status);
   }
 
   @Patch('api/admin/orders/:id/payment-status')
+  @UseGuards(AdminGuard)
   updatePaymentStatus(@Param('id') id: string, @Body('payment_status') status: PaymentStatusEnum) {
     return this.ordersService.updatePaymentStatus(id, status);
   }
 
   @Post('api/admin/orders/:id/renew')
+  @UseGuards(AdminGuard)
   renew(@Param('id') id: string) {
     return this.ordersService.renew(id);
   }
@@ -80,8 +117,75 @@ export class OrdersController {
     return this.ordersService.approveRefund(id);
   }
 
+  // ─── Admin: hoàn tiền thủ công (linh hoạt hơn approve-refund) ────────
+  @Post('api/admin/orders/:id/refund')
+  @UseGuards(AdminGuard)
+  adminRefund(
+    @Param('id') id: string,
+    @Body('amount') amount?: number,
+    @Body('note') note?: string,
+    @Body('cancel_order') cancelOrder = true,
+    @Req() req?: Request,
+  ) {
+    const actor = (req as any)?.user?.sub ?? 'admin';
+    return this.ordersService.adminRefund(id, amount, note, cancelOrder, actor);
+  }
+
+  @Post('api/admin/orders/:id/import-proxies')
+  @UseGuards(AdminGuard)
+  importProxies(
+    @Param('id') id: string,
+    @Body('proxies') proxies: string[],
+    @Req() req?: Request,
+  ) {
+    const actor = (req as any)?.user?.sub ?? 'admin';
+    return this.ordersService.importProxies(id, proxies, actor);
+  }
+
+  @Patch('api/admin/proxies/:proxyId')
+  @UseGuards(AdminGuard)
+  updateProxy(
+    @Param('proxyId') proxyId: string,
+    @Body() body: { ip_address?: string; port?: number; auth_username?: string; auth_password?: string; provider_proxy_id?: string },
+  ) {
+    return this.ordersService.updateProxy(proxyId, body);
+  }
+
+  @Post('api/admin/orders/:id/renew-provider')
+  @UseGuards(AdminGuard)
+  renewProvider(
+    @Param('id') id: string,
+    @Body('duration_days') duration_days: number,
+    @Req() req?: Request,
+  ) {
+    const actor = (req as any)?.user?.sub ?? 'admin';
+    return this.ordersService.renewProvider(id, duration_days, actor);
+  }
+
+  @Post('api/admin/orders/:id/retry')
+  @UseGuards(AdminGuard)
+  retryOrder(@Param('id') id: string, @Req() req?: Request) {
+    const actor = (req as any)?.user?.sub ?? 'admin';
+    return this.ordersService.retryOrder(id, actor);
+  }
+
   @Delete('api/admin/orders/:id')
+  @UseGuards(AdminGuard)
   delete(@Param('id') id: string) {
     return this.ordersService.delete(id);
+  }
+
+  // ─── Order Logs (user xem log đơn của mình) ──────────────
+  @Get('api/orders/my/:id/logs')
+  getMyOrderLogs(@Req() req: Request, @Param('id') id: string) {
+    const userId = (req as any).user.sub as string;
+    return this.orderLogService.findByOrderForUser(id, userId);
+  }
+
+  // ─── Order Logs (admin) ───────────────────────────────────
+  @Get('api/admin/orders/:id/logs')
+  @UseGuards(AdminGuard)
+  getOrderLogs(@Param('id') id: string) {
+    return this.orderLogService.findByOrder(id);
   }
 }
