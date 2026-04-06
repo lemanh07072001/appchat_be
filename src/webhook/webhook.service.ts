@@ -21,6 +21,22 @@ interface Pays2Transaction {
   checksum: string;
 }
 
+// ─── SePay transaction format ──────────────────────────────────────────────
+interface SepayTransaction {
+  id:                 number;
+  gateway:            string;
+  transactionDate:    string;
+  accountNumber:      string;
+  code:               string | null;
+  content:            string;
+  transferType:       string;
+  transferAmount:    number;
+  accumulated:        number;
+  subAccount:         string | null;
+  referenceCode:      string;
+  description:        string;
+}
+
 @Injectable()
 export class WebhookService {
   private readonly logger = new Logger(WebhookService.name);
@@ -92,8 +108,14 @@ export class WebhookService {
     return null;
   }
 
-  // ─── Xử lý webhook từ pays2 ───────────────────────────────────────────────
-  async handlePays2(body: { transactions: Pays2Transaction[] }, headers?: Record<string, any>, ip?: string): Promise<{ success: boolean; message: string }> {
+  // ─── Xử lý webhook từ pays2 / sepay (shared logic) ───────────────────────
+  // source='pays2' (mặc định) | 'sepay'
+  async handlePays2(
+    body: { transactions: Pays2Transaction[] },
+    headers?: Record<string, any>,
+    ip?: string,
+    source: 'pays2' | 'sepay' = 'pays2',
+  ): Promise<{ success: boolean; message: string }> {
     const results: string[] = [];
     const allSteps: WebhookStep[] = [];
 
@@ -108,7 +130,7 @@ export class WebhookService {
         steps.push({
           step:   1,
           title:  'Hệ thống nhận webhook từ ngân hàng',
-          detail: `Webhook từ pay2s lúc ${new Date().toLocaleTimeString('vi-VN')} ${new Date().toLocaleDateString('vi-VN')}, 1 giao dịch`,
+          detail: `Webhook từ ${source} lúc ${new Date().toLocaleTimeString('vi-VN')} ${new Date().toLocaleDateString('vi-VN')}, 1 giao dịch`,
           status: ok,
           data:   { ip, transaction_id: tx.id },
         });
@@ -208,7 +230,7 @@ export class WebhookService {
         steps.push({
           step:   4,
           title:  'Lệnh nạp tiền',
-          detail: `Lệnh nạp #${tx.id}: ${amount.toLocaleString('vi-VN')}đ (pay2s)`,
+          detail: `Lệnh nạp #${tx.id}: ${amount.toLocaleString('vi-VN')}đ (${source})`,
           status: ok,
           data:   { transaction_id: tx.id, amount },
         });
@@ -253,7 +275,7 @@ export class WebhookService {
     const response = { success: true, message: results.join(', ') };
 
     await this.webhookLogModel.create({
-      source:      'pays2',
+      source,
       headers:     headers ?? null,
       payload:     body,
       response,
@@ -265,11 +287,29 @@ export class WebhookService {
     return response;
   }
 
+  // ─── Xử lý webhook từ SePay ───────────────────────────────────────────────
+  // SePay gửi 1 giao dịch / webhook, format khác pay2s → convert rồi dùng lại logic
+  async handleSepay(body: SepayTransaction, headers?: Record<string, any>, ip?: string): Promise<{ success: boolean; message: string }> {
+    const normalized: Pays2Transaction = {
+      id:                 Number(body.id ?? 0),
+      gateway:            String(body.gateway ?? ''),
+      transactionDate:    String(body.transactionDate ?? ''),
+      transactionNumber:  String(body.referenceCode ?? ''),
+      accountNumber:      String(body.accountNumber ?? ''),
+      content:            String(body.content ?? ''),
+      transferType:       String(body.transferType ?? '').toUpperCase(),
+      transferAmount:     Number(body.transferAmount ?? 0),
+      checksum:           '', // SePay xác thực qua Apikey header
+    };
+
+    return this.handlePays2({ transactions: [normalized] }, headers, ip, 'sepay');
+  }
+
   // ─── Lưu log lỗi (token sai, server lỗi...) ─────────────────────────────
-  async saveErrorLog(body: any, headers?: Record<string, any>, ip?: string, error?: string): Promise<void> {
+  async saveErrorLog(body: any, headers?: Record<string, any>, ip?: string, error?: string, source: 'pays2' | 'sepay' = 'pays2'): Promise<void> {
     try {
       await this.webhookLogModel.create({
-        source:      'pays2',
+        source,
         headers:     headers ?? null,
         payload:     body,
         response:    { success: false, message: error ?? 'Unknown error' },

@@ -62,6 +62,34 @@ export class WebhookController {
     return this.webhookService.handlePays2(body, req.headers, req.ip);
   }
 
+  // ─── SePay gọi vào đây khi có giao dịch ───────────────────────────────
+  // Auth: header "Authorization: Apikey XXX"
+  @Public()
+  @Post('webhook/sepay')
+  async handleSepay(
+    @Headers('authorization') authorization: string,
+    @Req() req: any,
+    @Body() body: any,
+  ) {
+    const apiKey = process.env.SEPAY_WEBHOOK_API_KEY;
+
+    if (!apiKey) {
+      await this.webhookService.saveErrorLog(body, req.headers, req.ip, 'SePay API key not configured', 'sepay');
+      throw new UnauthorizedException('SePay API key not configured');
+    }
+
+    // SePay gửi "Apikey XXX" hoặc "Bearer XXX"
+    const raw = (authorization ?? '').trim();
+    const provided = raw.replace(/^Apikey\s+/i, '').replace(/^Bearer\s+/i, '').trim();
+
+    if (provided !== apiKey) {
+      await this.webhookService.saveErrorLog(body, req.headers, req.ip, 'Invalid SePay API key', 'sepay');
+      throw new UnauthorizedException('Invalid SePay API key');
+    }
+
+    return this.webhookService.handleSepay(body, req.headers, req.ip);
+  }
+
   // ─── Admin: webhook steps theo transaction ──────────────────────────────
   @UseGuards(AdminGuard)
   @Get('admin/transactions/:id/webhook-steps')
