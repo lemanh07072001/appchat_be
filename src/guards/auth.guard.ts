@@ -23,25 +23,27 @@ export class AuthGuard implements CanActivate {
       context.getClass(),
     ]);
     if (isPublic) {
-      // 💡 See this condition
       return true;
     }
 
     const request = context.switchToHttp().getRequest();
     const token = this.extractTokenFromHeader(request);
     if (!token) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      throw new UnauthorizedException();
+      throw new UnauthorizedException({ code: 'NO_TOKEN', message: 'No token provided' });
     }
+
     try {
       const payload = await this.jwtService.verifyAsync(token, {
         secret: jwtConstants.secret,
       });
-      // 💡 We're assigning the payload to the request object here
-      // so that we can access it in our route handlers
       request['user'] = payload;
-    } catch {
-      throw new UnauthorizedException();
+    } catch (err: any) {
+      // JwtService throws TokenExpiredError khi hết hạn
+      const isExpired = err?.name === 'TokenExpiredError' || err?.message?.includes('expired');
+      throw new UnauthorizedException({
+        code: isExpired ? 'TOKEN_EXPIRED' : 'INVALID_TOKEN',
+        message: isExpired ? 'Token đã hết hạn' : 'Token không hợp lệ',
+      });
     }
     return true;
   }
@@ -51,3 +53,20 @@ export class AuthGuard implements CanActivate {
     return type === 'Bearer' ? token : undefined;
   }
 }
+
+// ─── Refresh token (logic cũ — giữ lại, tạm không dùng) ─────────────────────
+// async refresh(refresh_token: string) {
+//   if (!refresh_token) throw new UnauthorizedException('Missing refresh token');
+//   try {
+//     const payload = await this.jwtService.verifyAsync(refresh_token, {
+//       secret: process.env.JWT_REFRESH_SECRET,
+//     });
+//     const newAccessToken = this.jwtService.sign(
+//       { email: payload.email, sub: payload.sub, role: payload.role },
+//       { secret: process.env.JWT_SECRET, expiresIn: '15m' },
+//     );
+//     return { access_token: newAccessToken };
+//   } catch (error) {
+//     throw new UnauthorizedException('Invalid or expired refresh token');
+//   }
+// }
