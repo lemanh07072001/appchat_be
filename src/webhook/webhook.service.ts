@@ -10,7 +10,7 @@ import { OrderStatusEnum } from '../enum/order.enum';
 import { NotificationGateway } from './notification.gateway';
 
 interface Pays2Transaction {
-  id: number;
+  id: number | string;
   gateway: string;
   transactionDate: string;
   transactionNumber: string;
@@ -120,6 +120,10 @@ export class WebhookService {
     const allSteps: WebhookStep[] = [];
 
     for (const tx of body.transactions) {
+      // Normalize transaction_id về number để so sánh đúng khi duplicate check
+      const normalizedTx = { ...tx, id: Number(tx.id) };
+      const txId = normalizedTx.id;
+
       const steps: WebhookStep[] = [];
       const ok  = WebhookStepStatus.OK;
       const warn = WebhookStepStatus.WARN;
@@ -132,14 +136,14 @@ export class WebhookService {
           title:  'Hệ thống nhận webhook từ ngân hàng',
           detail: `Webhook từ ${source} lúc ${new Date().toLocaleTimeString('vi-VN')} ${new Date().toLocaleDateString('vi-VN')}, 1 giao dịch`,
           status: ok,
-          data:   { ip, transaction_id: tx.id },
+          data:   { ip, transaction_id: txId },
         });
 
         // 1. Chỉ xử lý giao dịch tiền vào
         if (tx.transferType !== 'IN') {
           steps.push({ step: 2, title: 'Loại giao dịch', detail: `Bỏ qua — loại ${tx.transferType}`, status: warn });
           allSteps.push(...steps);
-          results.push(`#${tx.id}: bỏ qua (${tx.transferType})`);
+          results.push(`#${txId}: bỏ qua (${tx.transferType})`);
           continue;
         }
 
@@ -166,7 +170,7 @@ export class WebhookService {
             status: err,
           });
           await this.txModel.create({
-            transaction_id:     tx.id,
+            transaction_id:     txId,
             gateway:            tx.gateway,
             transaction_date:   new Date(tx.transactionDate),
             transaction_number: tx.transactionNumber,
@@ -178,11 +182,11 @@ export class WebhookService {
             checksum:           tx.checksum,
             status:             TransactionStatus.UNMATCHED,
             note:               'Không tìm được user trong nội dung CK',
-            raw_payload:        tx,
+            raw_payload:        normalizedTx,
             raw_headers:        headers ?? null,
           });
           allSteps.push(...steps);
-          results.push(`#${tx.id}: unmatched`);
+          results.push(`#${txId}: unmatched`);
           continue;
         }
 
@@ -196,10 +200,10 @@ export class WebhookService {
 
         // 4. Atomic: kiểm tra trùng + tạo transaction
         const existing = await this.txModel.findOneAndUpdate(
-          { transaction_id: tx.id },
+          { transaction_id: txId },
           {
             $setOnInsert: {
-              transaction_id:     tx.id,
+              transaction_id:     txId,
               gateway:            tx.gateway,
               transaction_date:   new Date(tx.transactionDate),
               transaction_number: tx.transactionNumber,
@@ -212,7 +216,7 @@ export class WebhookService {
               status:             TransactionStatus.PROCESSED,
               user_id:            user._id,
               note:               `Nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
-              raw_payload:        tx,
+              raw_payload:        normalizedTx,
               raw_headers:        headers ?? null,
             },
           },
@@ -220,9 +224,9 @@ export class WebhookService {
         ).exec();
 
         if (existing) {
-          steps.push({ step: 4, title: 'Lệnh nạp tiền', detail: `Trùng giao dịch #${tx.id} — bỏ qua`, status: warn });
+          steps.push({ step: 4, title: 'Lệnh nạp tiền', detail: `Trùng giao dịch #${txId} — bỏ qua`, status: warn });
           allSteps.push(...steps);
-          results.push(`#${tx.id}: duplicate → skipped`);
+          results.push(`#${txId}: duplicate → skipped`);
           continue;
         }
 
@@ -230,9 +234,9 @@ export class WebhookService {
         steps.push({
           step:   4,
           title:  'Lệnh nạp tiền',
-          detail: `Lệnh nạp #${tx.id}: ${amount.toLocaleString('vi-VN')}đ (${source})`,
+          detail: `Lệnh nạp #${txId}: ${amount.toLocaleString('vi-VN')}đ (${source})`,
           status: ok,
-          data:   { transaction_id: tx.id, amount },
+          data:   { transaction_id: txId, amount },
         });
 
         // 5. Cộng tiền atomic
@@ -246,7 +250,7 @@ export class WebhookService {
         const balanceBefore = balanceAfter - amount;
 
         await this.txModel.findOneAndUpdate(
-          { transaction_id: tx.id },
+          { transaction_id: txId },
           { balance_before: balanceBefore, balance_after: balanceAfter },
         ).exec();
 
@@ -259,7 +263,7 @@ export class WebhookService {
           data:   { balance_before: balanceBefore, balance_after: balanceAfter },
         });
 
-        this.logger.log(`Webhook #${tx.id}: nạp ${amount}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
+        this.logger.log(`Webhook #${txId}: nạp ${amount}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
         this.notification.sendTopupSuccess(user._id.toString(), { amount, balance: balanceAfter });
         allSteps.push(...steps);
         results.push(`#${tx.id}: processed → ${user.email}`);
