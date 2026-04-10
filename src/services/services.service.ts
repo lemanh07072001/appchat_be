@@ -17,7 +17,7 @@ export class ServicesService {
       .find({ status: true, api_enabled: true })
       .populate('country', 'name code')
       .select('_id name type proxy_type ip_version protocol isp pricing usage_type')
-      .sort({ createdAt: -1 })
+      .sort({ order: 1, createdAt: -1 })
       .lean()
       .exec();
   }
@@ -31,7 +31,7 @@ export class ServicesService {
       .find(filter)
       .populate('country', 'name code')
       .select('-partner -body_api')
-      .sort({ createdAt: -1 })
+      .sort({ order: 1, createdAt: -1 })
       .lean()
       .exec();
   }
@@ -70,7 +70,7 @@ export class ServicesService {
     const filter = andConditions.length > 0 ? { $and: andConditions } : {};
 
     const [data, total] = await Promise.all([
-      this.serviceModel.find(filter).populate('partner', 'name domain').populate('country', 'name code').skip(skip).limit(limit).sort({ createdAt: -1 }).lean().exec(),
+      this.serviceModel.find(filter).populate('partner', 'name domain').populate('country', 'name code').skip(skip).limit(limit).sort({ order: 1, createdAt: -1 }).lean().exec(),
       this.serviceModel.countDocuments(filter).exec(),
     ]);
 
@@ -157,6 +157,7 @@ export class ServicesService {
       pricing: service.pricing,
       badge: service.badge,
       duration_ids: service.duration_ids,
+      order: service.order,
     });
     return newService.save();
   }

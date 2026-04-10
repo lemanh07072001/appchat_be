@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsMongoId, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsMongoId, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString } from 'class-validator';
 
 export class CreateServiceDto {
   @IsNotEmpty()
@@ -77,4 +77,8 @@ export class CreateServiceDto {
   @IsOptional()
   @IsObject()
   duration_ids?: Record<string, string>;
+
+  @IsOptional()
+  @IsNumber()
+  order?: number;
 }

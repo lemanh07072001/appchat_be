@@ -15,6 +15,10 @@
       "Read(//d/Nextjs/proxy/src/**)",
       "Read(//d/Nextjs/proxy/src/app/**)",
       "Read(//d/Nextjs/proxy/**)"
+    ],
+    "additionalDirectories": [
+      "D:\\Nextjs\\proxy\\src\\services",
+      "D:\\Nextjs\\proxy\\src\\app\\admin\\services"
     ]
   }
 }

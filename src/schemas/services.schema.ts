@@ -66,6 +66,9 @@ export class Service {
   // VD: { "1": "uuid-1day", "7": "uuid-7day", "30": "uuid-30day" }
   @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
   duration_ids: Record<string, string>;
+
+  @Prop({ default: 0 })
+  order: number;
 }
 
 export const ServiceSchema = SchemaFactory.createForClass(Service);
