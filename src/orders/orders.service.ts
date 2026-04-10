@@ -838,7 +838,7 @@ export class OrdersService {
       return isp; // VD: "Viettel", "DatacenterA"
     }
 
-    if (partnerCode === '2proxy') {
+    if (partnerCode === 'twoproxy') {
       return isp; // VD: "Viettel_thuong_2"
     }
 

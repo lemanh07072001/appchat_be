@@ -159,8 +159,43 @@ export class TwoProxyProvider implements IProxyProvider {
 
   // ─── Gia hạn ────────────────────────────────────────────────────────────────
 
-  async renew(_params: ProviderRenewParams): Promise<RenewResult> {
-    throw new BadRequestException('2Proxy: chưa hỗ trợ gia hạn proxy');
+  async renew(params: ProviderRenewParams): Promise<RenewResult> {
+    const { token_api: key, provider_proxy_ids, duration_days, id_service } = params;
+
+    if (!provider_proxy_ids?.length) {
+      throw new BadRequestException('2Proxy renew: thiếu provider_proxy_ids');
+    }
+
+    if (!id_service) {
+      throw new BadRequestException('2Proxy renew: thiếu id_service (loaiproxy)');
+    }
+
+    // Gia hạn từng proxy
+    const results = await Promise.all(
+      provider_proxy_ids.map((idproxy) =>
+        this.request<{ maloi: number; message?: string }>({
+          key,
+          sukien: 'gia_han',
+          idproxy,
+          ngay: duration_days,
+          loaiproxy: id_service,
+        }),
+      ),
+    );
+
+    this.logger.log(`[RENEW] raw response: ${JSON.stringify(results)}`);
+
+    const failed = results.filter((r) => !r || r.maloi !== 0);
+    if (failed.length > 0) {
+      throw new BadRequestException(
+        `2Proxy renew error: ${JSON.stringify(failed)}`,
+      );
+    }
+
+    return {
+      success: true,
+      raw: results,
+    };
   }
 
   // ─── Xoay IP ─────────────────────────────────────────────────────────────────
