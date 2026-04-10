@@ -87,17 +87,23 @@ export class TwoProxyProvider implements IProxyProvider {
     }
 
     // Bước 1: Mua đơn
-    const buyRaw = await this.request<BuyResponse>({
+    this.logger.log(`[BUY] gọi API với loaiproxy=${id_service}, quantity=${quantity}, ngay=${duration_days}`);
+    const buyRaw = await this.request<BuyResponse | null>({
       key,
       sukien: 'mua',
       loaiproxy: id_service,
       quantity,
       ngay: duration_days,
     });
+    this.logger.log(`[BUY] raw response: ${JSON.stringify(buyRaw)}`);
 
-    if (buyRaw.maloi !== 0 || !buyRaw.order_code) {
+    if (!buyRaw) {
+      throw new BadRequestException(`2Proxy: API trả về response rỗng hoặc null`);
+    }
+
+    if (!buyRaw || buyRaw.maloi !== 0 || !buyRaw.order_code) {
       throw new BadRequestException(
-        `2Proxy buy error [maloi=${buyRaw.maloi}]: ${JSON.stringify(buyRaw)}`,
+        `2Proxy buy error${!buyRaw ? ' (response rỗng/null)' : ` [maloi=${buyRaw.maloi}]`}: ${JSON.stringify(buyRaw ?? {})}`,
       );
     }
 
@@ -116,11 +122,15 @@ export class TwoProxyProvider implements IProxyProvider {
   // ─── Lấy proxy theo mã đơn ──────────────────────────────────────────────────
 
   async fetchOrderProxies(token_api: string, provider_order_id: string): Promise<ProxyCredential[]> {
+    this.logger.log(`[LISTPROXY] gọi API với ma_don_hang=${provider_order_id}`);
+
     const raw = await this.request<ListProxyResponseItem[]>({
       key: token_api,
       sukien: 'listproxy',
       ma_don_hang: provider_order_id,
     });
+
+    this.logger.log(`[LISTPROXY] raw response: ${JSON.stringify(raw)}`);
 
     const items = Array.isArray(raw) ? raw : [raw];
 
