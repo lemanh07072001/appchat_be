@@ -966,7 +966,7 @@ export class OrdersService {
     const balanceBefore = balanceAfter + totalPrice;
     void this.walletTxService.log({
       user_id:        userId,
-      type:           WalletTxType.PURCHASE,
+      type:           WalletTxType.RENEW,
       amount:         totalPrice,
       direction:      'out',
       balance_before: balanceBefore,

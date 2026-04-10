@@ -9,6 +9,7 @@ export type WalletTransactionDocument = WalletTransaction & Document & {
 export enum WalletTxType {
   DEPOSIT   = 'deposit',   // Nạp tiền (bank / admin thủ công)
   PURCHASE  = 'purchase',  // Mua proxy
+  RENEW     = 'renew',     // Gia hạn proxy
   REFUND    = 'refund',    // Hoàn tiền
   DEDUCTION = 'deduction', // Admin trừ thủ công
 }
