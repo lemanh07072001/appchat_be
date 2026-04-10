@@ -109,13 +109,11 @@ export class TwoProxyProvider implements IProxyProvider {
 
     this.logger.log(`[BUY] order_code=${buyRaw.order_code}`);
 
-    // Bước 2: Lấy danh sách proxy
-    const proxies = await this.fetchOrderProxies(key, buyRaw.order_code);
-
+    // Proxy sẽ được lấy sau qua fetchOrderProxies (đơn async, proxy chưa ready ngay)
     return {
       provider_order_id: buyRaw.order_code,
-      proxies,
-      raw: { buy: buyRaw, proxies },
+      proxies: [],
+      raw: { buy: buyRaw },
     };
   }
 
@@ -124,7 +122,7 @@ export class TwoProxyProvider implements IProxyProvider {
   async fetchOrderProxies(token_api: string, provider_order_id: string): Promise<ProxyCredential[]> {
     this.logger.log(`[LISTPROXY] gọi API với ma_don_hang=${provider_order_id}`);
 
-    const raw = await this.request<ListProxyResponseItem[]>({
+    const raw = await this.request<ListProxyResponseItem[] | null>({
       key: token_api,
       sukien: 'listproxy',
       ma_don_hang: provider_order_id,
@@ -132,15 +130,20 @@ export class TwoProxyProvider implements IProxyProvider {
 
     this.logger.log(`[LISTPROXY] raw response: ${JSON.stringify(raw)}`);
 
+    // Trả [] thay vì throw — để worker polling tiếp
+    if (!raw) {
+      this.logger.warn(`[LISTPROXY] response null cho ma_don_hang=${provider_order_id} — trả [] để polling`);
+      return [];
+    }
+
     const items = Array.isArray(raw) ? raw : [raw];
 
     // maloi != 0 → chưa có proxy (đơn async, proxy chưa ready)
     const proxyItems = items.filter((item) => item.maloi === 0 && item.proxy);
 
     if (!proxyItems.length) {
-      throw new BadRequestException(
-        `2Proxy: không có proxy nào cho order "${provider_order_id}" (maloi != 0 hoặc chưa ready)`,
-      );
+      this.logger.warn(`[LISTPROXY] chưa có proxy cho ma_don_hang=${provider_order_id} — trả [] để polling`);
+      return [];
     }
 
     return proxyItems.map((item) => {
