@@ -48,6 +48,7 @@ export class ProxyProviderFactory implements OnModuleInit {
     }
   }
 
+  
   getProvider(partnerCode: string): IProxyProvider {
     const provider = this.registry.get(partnerCode);
     if (!provider) {
