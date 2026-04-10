@@ -20,16 +20,18 @@ import { TwoProxyProvider } from './impl/2proxy.provider';
 export class ProxyProviderFactory implements OnModuleInit {
   private readonly registry = new Map<string, IProxyProvider>();
 
+  private readonly logger = new Logger(ProxyProviderFactory.name);
+
   constructor(
     private readonly proxyv6:     Proxyv6Provider,
     private readonly homeproxy:   HomeproxyProvider,
     private readonly proxyvn:     ProxyvnProvider,
     private readonly proxysieutoc: ProxysieutocProvider,
-    private readonly twoProxy:    TwoProxyProvider,
+    private readonly twoproxy: TwoProxyProvider,
     // private readonly proxyseller: ProxysellerProvider,
-  ) {}
-
-  private readonly logger = new Logger(ProxyProviderFactory.name);
+  ) {
+    this.logger.warn('ProxyProviderFactory CONSTRUCTOR called — registry is empty until onModuleInit()');
+  }
 
   onModuleInit() {
     try {
@@ -37,7 +39,7 @@ export class ProxyProviderFactory implements OnModuleInit {
       this.registry.set('homeproxy', this.homeproxy);
       this.registry.set('proxyvn',   this.proxyvn);
       this.registry.set('proxysieutoc', this.proxysieutoc);
-      this.registry.set('2proxy', this.twoProxy);
+      this.registry.set('twoproxy', this.twoproxy);
       // this.registry.set('proxyseller', this.proxyseller);
       this.logger.log(`ProxyProviderFactory ready — providers: ${JSON.stringify([...this.registry.keys()])}`);
     } catch (err) {
