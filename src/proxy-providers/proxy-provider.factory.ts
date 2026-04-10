@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { IProxyProvider } from './proxy-provider.interface';
 import { Proxyv6Provider } from './impl/proxyv6.provider';
 import { HomeproxyProvider } from './impl/homeproxy.provider';
