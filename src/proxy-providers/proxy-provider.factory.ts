@@ -29,13 +29,21 @@ export class ProxyProviderFactory implements OnModuleInit {
     // private readonly proxyseller: ProxysellerProvider,
   ) {}
 
+  private readonly logger = new Logger(ProxyProviderFactory.name);
+
   onModuleInit() {
-    this.registry.set('proxyv6',   this.proxyv6);
-    this.registry.set('homeproxy', this.homeproxy);
-    this.registry.set('proxyvn',   this.proxyvn);
-    this.registry.set('proxysieutoc', this.proxysieutoc);
-    this.registry.set('2proxy', this.twoProxy);
-    // this.registry.set('proxyseller', this.proxyseller);
+    try {
+      this.registry.set('proxyv6',   this.proxyv6);
+      this.registry.set('homeproxy', this.homeproxy);
+      this.registry.set('proxyvn',   this.proxyvn);
+      this.registry.set('proxysieutoc', this.proxysieutoc);
+      this.registry.set('2proxy', this.twoProxy);
+      // this.registry.set('proxyseller', this.proxyseller);
+      this.logger.log(`ProxyProviderFactory ready — providers: ${JSON.stringify([...this.registry.keys()])}`);
+    } catch (err) {
+      this.logger.error('ProxyProviderFactory onModuleInit failed', err?.stack);
+      throw err;
+    }
   }
 
   getProvider(partnerCode: string): IProxyProvider {

@@ -30,7 +30,7 @@ interface ListProxyResponseItem {
 export class TwoProxyProvider implements IProxyProvider {
   private readonly logger     = new Logger(TwoProxyProvider.name);
   private readonly BASE_URL   = 'https://app.2proxy.vn/api/proxy.php';
-  private readonly TIMEOUT_MS = 30_000;
+  private readonly TIMEOUT_MS = 60_000;
 
   // ─── Helper HTTP ─────────────────────────────────────────────────────────────
 
