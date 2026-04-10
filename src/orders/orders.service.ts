@@ -838,6 +838,10 @@ export class OrdersService {
       return isp; // VD: "Viettel", "DatacenterA"
     }
 
+    if (partnerCode === '2proxy') {
+      return isp; // VD: "Viettel_thuong_2"
+    }
+
     return service?.id_service || '';
   }
 

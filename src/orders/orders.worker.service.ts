@@ -156,6 +156,9 @@ export class OrdersWorkerService implements OnModuleInit {
       } else if (partner.code === 'proxyvn') {
         // ProxyVN dùng tên loại proxy — capitalize chữ đầu (VD: viettel → Viettel)
         idService = isp;
+      } else if (partner.code === '2proxy') {
+        // 2Proxy dùng tên loại proxy (VD: "Viettel_thuong_2")
+        idService = isp;
       } else {
         idService = service?.id_service || '';
       }
