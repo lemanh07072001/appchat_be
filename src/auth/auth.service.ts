@@ -16,15 +16,15 @@ export class AuthService {
   async login(user: any) {
     const payload = { email: user.email, sub: user.id, role: user.role };
 
-    // 1️⃣ Access token (30 ngày)
+    // 1️⃣ Access token (365 ngày)
     const access_token = this.jwtService.sign(payload, {
-      expiresIn: '30d',
+      expiresIn: '365d',
       secret: process.env.JWT_SECRET,
     });
 
-    // 2️⃣ Refresh token (30 ngày — giữ nguyên, không dùng tạm thời)
+    // 2️⃣ Refresh token (365 ngày — giữ nguyên, không dùng tạm thời)
     const refresh_token = this.jwtService.sign(payload, {
-      expiresIn: '30d',
+      expiresIn: '365d',
       secret: process.env.JWT_REFRESH_SECRET,
     });
 
@@ -58,7 +58,7 @@ export class AuthService {
       const newAccessToken = this.jwtService.sign(
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         { email: payload.email, sub: payload.sub, role: payload.role },
-        { secret: process.env.JWT_SECRET, expiresIn: '30d' },
+        { secret: process.env.JWT_SECRET, expiresIn: '365d' },
       );
 
       return { access_token: newAccessToken };
