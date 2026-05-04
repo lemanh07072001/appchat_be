@@ -1120,11 +1120,13 @@ export class OrdersService {
     id = (id || '').trim();
     providerOrderId = (providerOrderId || '').trim();
 
-    // Cho phép :id là Mongo _id hoặc provider_order_id.
-    // Nếu :id là ObjectId hợp lệ → lookup theo _id; ngược lại → lookup theo provider_order_id.
+    // Cho phép :id là Mongo _id, order_code hoặc provider_order_id.
     let order: OrderDocument | null = null;
     if (Types.ObjectId.isValid(id) && id.length === 24) {
       order = await this.orderModel.findById(id).exec();
+    }
+    if (!order) {
+      order = await this.orderModel.findOne({ order_code: id }).exec();
     }
     if (!order) {
       order = await this.orderModel.findOne({ provider_order_id: id }).exec();
