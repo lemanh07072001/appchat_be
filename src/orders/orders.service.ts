@@ -1173,6 +1173,10 @@ export class OrdersService {
       return { message: 'Provider chưa trả proxy, hãy thử lại sau', imported: 0, total: 0, quantity: order.quantity };
     }
 
+    this.logger.log(
+      `syncProviderOrder: provider trả ${proxies.length} proxy. Sample: host=${proxies[0]?.host} port=${proxies[0]?.port} user=${proxies[0]?.username}`,
+    );
+
     // Tránh insert trùng theo (ip,port) trong cùng order
     const existing = await this.proxyModel
       .find({ order_id: order._id })
@@ -1205,11 +1209,20 @@ export class OrdersService {
         cdk_key:           isCdk ? crypto.randomBytes(16).toString('hex') : undefined,
       }));
 
+    let insertErrorMsg = '';
     if (docs.length) {
       try {
         await this.proxyModel.insertMany(docs, { ordered: false });
       } catch (err: any) {
         if (err?.code !== 11000) throw err;
+        const writeErrors = err?.writeErrors ?? err?.result?.result?.writeErrors ?? [];
+        insertErrorMsg = writeErrors
+          .slice(0, 3)
+          .map((e: any) => e?.errmsg ?? e?.err?.errmsg ?? JSON.stringify(e))
+          .join(' | ');
+        this.logger.warn(
+          `syncProviderOrder insertMany E11000: ${writeErrors.length}/${docs.length} duplicates. Sample: ${insertErrorMsg}`,
+        );
       }
     }
 
