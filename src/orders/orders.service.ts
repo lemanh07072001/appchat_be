@@ -1112,6 +1112,119 @@ export class OrdersService {
     };
   }
 
+  /**
+   * Admin nhập provider_order_id cho 1 đơn rồi gọi lại API provider để fetch proxy.
+   * Dùng khi BUY trả về rỗng/lỗi nhưng đơn đã được tạo bên provider.
+   */
+  async syncProviderOrder(id: string, providerOrderId: string, actor = 'admin') {
+    if (!providerOrderId?.trim()) {
+      throw new BadRequestException('Thiếu provider_order_id');
+    }
+    providerOrderId = providerOrderId.trim();
+
+    const order = await this.orderModel.findById(id).exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    const partner = order.partner_id
+      ? await this.partnerModel.findById(order.partner_id).select('code token_api').exec()
+      : null;
+
+    if (!partner?.code || !partner?.token_api) {
+      throw new BadRequestException('Order không có partner hợp lệ');
+    }
+
+    const provider = this.providerFactory.getProvider(partner.code);
+    if (!provider.fetchOrderProxies) {
+      throw new BadRequestException(`Provider "${partner.code}" không hỗ trợ fetchOrderProxies`);
+    }
+
+    // Cập nhật provider_order_id cho order (nếu khác)
+    if (order.provider_order_id !== providerOrderId) {
+      order.provider_order_id = providerOrderId;
+      await order.save();
+    }
+
+    const proxies = await provider.fetchOrderProxies(partner.token_api, providerOrderId);
+
+    if (!proxies || proxies.length === 0) {
+      void this.orderLogService.warn(
+        id,
+        OrderLogStep.POLLING_NO_PROXIES,
+        `Admin sync: provider chưa trả proxy cho provider_order_id=${providerOrderId}`,
+        { actor, provider_order_id: providerOrderId },
+      );
+      return { message: 'Provider chưa trả proxy, hãy thử lại sau', imported: 0, total: 0, quantity: order.quantity };
+    }
+
+    // Tránh insert trùng theo (ip,port) trong cùng order
+    const existing = await this.proxyModel
+      .find({ order_id: order._id })
+      .select('ip_address port')
+      .lean()
+      .exec();
+    const existingSet = new Set(existing.map((p) => `${p.ip_address}:${p.port}`));
+
+    const orderObjectId = new Types.ObjectId(order._id as any);
+    const isCdk = (order.config as any)?.is_cdk === true;
+    const docs = proxies
+      .filter((p: any) => !existingSet.has(`${p.host}:${Number(p.port)}`))
+      .map((p: any) => ({
+        order_id:          orderObjectId,
+        proxy_type_id:     order.service_id ?? null,
+        ip_address:        p.host,
+        port:              Number(p.port),
+        protocol:          (p.protocol?.toLowerCase() ?? 'http'),
+        auth_username:     p.username,
+        auth_password:     p.password,
+        provider_proxy_id: p.provider_proxy_id ?? undefined,
+        domain:            p.domain   ?? '',
+        prev_ip:           p.prev_ip  ?? '',
+        location:          p.location ?? '',
+        isp:               p.isp      ?? '',
+        provider:          partner.code,
+        country_code:      p.country_code ?? 'VN',
+        is_active:         true,
+        is_available:      false,
+        cdk_key:           isCdk ? crypto.randomBytes(16).toString('hex') : undefined,
+      }));
+
+    if (docs.length) {
+      try {
+        await this.proxyModel.insertMany(docs, { ordered: false });
+      } catch (err: any) {
+        if (err?.code !== 11000) throw err;
+      }
+    }
+
+    const total = await this.proxyModel.countDocuments({ order_id: order._id }).exec();
+
+    if (total >= order.quantity) {
+      order.status = OrderStatusEnum.ACTIVE;
+      order.error_message = '';
+      await order.save();
+    } else if (total > 0) {
+      order.status = OrderStatusEnum.PARTIAL;
+      (order as any).actual_quantity = total;
+      await order.save();
+    }
+
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_PROXY_IMPORTED,
+      `Admin sync provider_order_id=${providerOrderId}: nhận ${docs.length} proxy mới (tổng ${total}/${order.quantity})`,
+      { actor, provider_order_id: providerOrderId, imported: docs.length, total, quantity: order.quantity },
+      actor,
+    );
+
+    return {
+      message: `Đồng bộ thành công: thêm ${docs.length} proxy (tổng ${total}/${order.quantity})`,
+      imported: docs.length,
+      total,
+      quantity: order.quantity,
+      status: order.status,
+    };
+  }
+
   async delete(id: string, actor = 'admin') {
     const order = await this.orderModel.findByIdAndDelete(id).exec();
     if (!order) throw new BadRequestException('Order not found');

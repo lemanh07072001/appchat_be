@@ -163,6 +163,17 @@ export class OrdersController {
     return this.ordersService.retryOrder(id, actor);
   }
 
+  @Post('api/admin/orders/:id/sync-provider-order')
+  @UseGuards(AdminGuard)
+  syncProviderOrder(
+    @Param('id') id: string,
+    @Body('provider_order_id') providerOrderId: string,
+    @Req() req?: Request,
+  ) {
+    const actor = (req as any)?.user?.sub ?? 'admin';
+    return this.ordersService.syncProviderOrder(id, providerOrderId, actor);
+  }
+
   @Delete('api/admin/orders/:id')
   @UseGuards(AdminGuard)
   delete(@Param('id') id: string) {

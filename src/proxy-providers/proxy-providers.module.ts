@@ -5,7 +5,7 @@ import { HomeproxyProvider } from './impl/homeproxy.provider';
 import { ProxyvnProvider } from './impl/proxyvn.provider';
 import { ProxysieutocProvider } from './impl/proxysieutoc.provider';
 import { TwoProxyProvider } from './impl/2proxy.provider';
-// import { ProxysellerProvider } from './impl/proxyseller.provider';
+import { ProxysellerProvider } from './impl/proxyseller.provider';
 
 @Module({
   providers: [
@@ -15,7 +15,7 @@ import { TwoProxyProvider } from './impl/2proxy.provider';
     ProxyvnProvider,
     ProxysieutocProvider,
     TwoProxyProvider,
-    // ProxysellerProvider,
+    ProxysellerProvider,
   ],
   exports: [ProxyProviderFactory],
 })

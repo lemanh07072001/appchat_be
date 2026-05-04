@@ -1,0 +1,283 @@
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import {
+  IProxyProvider,
+  ProviderBuyParams,
+  ProviderCancelParams,
+  ProviderRenewParams,
+  ProviderRotateParams,
+  BuyResult,
+  RenewResult,
+  RotateResult,
+  ProxyCredential,
+} from '../proxy-provider.interface';
+
+interface PsResponse<T> {
+  status: 'success' | 'error';
+  data: T | null;
+  errors: { message: string; code: number; customData: any }[];
+}
+
+interface OrderMakeData {
+  orderId: number;
+  total: number;
+  listBaseOrderNumbers: string[];
+  balance: number;
+}
+
+interface ProxyListItem {
+  id: string;
+  ip: string;
+  protocol: string;        // "HTTP" | "SOCKS"
+  port_http: number;
+  port_socks: number;
+  login: string;
+  password: string;
+  country: string;
+  status: string;
+  date_start: string;
+  date_end: string;
+}
+
+interface ProxyListData {
+  items?: ProxyListItem[];
+  // khi không truyền type, API trả nhiều nhóm: { ipv4: { items: [] }, isp: { items: [] }, ... }
+  [key: string]: any;
+}
+
+@Injectable()
+export class ProxysellerProvider implements IProxyProvider {
+  private readonly logger     = new Logger(ProxysellerProvider.name);
+  private readonly BASE_URL   = 'https://proxy-seller.com/personal/api/v1';
+  private readonly TIMEOUT_MS = 60_000;
+  private readonly DEFAULT_TYPE = 'ipv4';
+
+  // ─── Helper HTTP ─────────────────────────────────────────────────────────────
+
+  private async request<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    body?: Record<string, any>,
+    query?: Record<string, string | number>,
+  ): Promise<PsResponse<T>> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
+
+    let url = `${this.BASE_URL}${path}`;
+    if (query && Object.keys(query).length) {
+      const qs = new URLSearchParams();
+      for (const [k, v] of Object.entries(query)) {
+        if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+      }
+      const qStr = qs.toString();
+      if (qStr) url += `?${qStr}`;
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method,
+        signal: controller.signal,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body:    body ? JSON.stringify(body) : undefined,
+      });
+    } catch (err: any) {
+      throw new BadRequestException(
+        err?.name === 'AbortError'
+          ? `ProxySeller API timeout after ${this.TIMEOUT_MS}ms`
+          : `ProxySeller network error: ${err?.message}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const data = (await res.json().catch(() => ({}))) as PsResponse<T>;
+    return data;
+  }
+
+  private resolveType(raw?: string): string {
+    const t = (raw || this.DEFAULT_TYPE).toLowerCase();
+    const allowed = ['ipv4', 'ipv6', 'mobile', 'isp', 'mix', 'mix_isp', 'resident'];
+    if (!allowed.includes(t)) {
+      throw new BadRequestException(`ProxySeller: id_service "${raw}" không hợp lệ. Cho phép: ${allowed.join(', ')}`);
+    }
+    return t;
+  }
+
+  // ─── Mua proxy ───────────────────────────────────────────────────────────────
+
+  async buy(params: ProviderBuyParams): Promise<BuyResult> {
+    const {
+      token_api: key,
+      quantity,
+      country_code,
+      protocol,
+      id_service,
+      body_api,
+    } = params;
+
+    const type = this.resolveType(id_service);
+
+    // periodId là bắt buộc theo doc — lấy từ body_api JSON ({ "periodId": "..." })
+    let extra: Record<string, any> = {};
+    if (body_api) {
+      try {
+        const normalized = body_api.replace(/(\w+)\s*:/g, '"$1":');
+        extra = JSON.parse(normalized);
+      } catch {
+        // bỏ qua, dùng object rỗng
+      }
+    }
+
+    if (!extra.periodId) {
+      throw new BadRequestException('ProxySeller: thiếu periodId trong body_api');
+    }
+
+    const payload: Record<string, any> = {
+      countryId:  country_code ? Number(country_code) : extra.countryId,
+      periodId:   String(extra.periodId),
+      paymentId:  extra.paymentId ?? 1,                     // 1 = balance
+      quantity,
+      coupon:     extra.coupon ?? '',
+      authorization: extra.authorization ?? '',
+      customTargetName: extra.customTargetName ?? '',
+    };
+
+    if (type === 'ipv6') {
+      payload.protocol = (protocol || 'HTTPS').toUpperCase() === 'SOCKS5' ? 'SOCKS5' : 'HTTPS';
+    }
+    if (['ipv4', 'isp', 'mix', 'mix_isp'].includes(type)) {
+      payload.generateAuth = extra.generateAuth ?? 'N';
+    }
+    if (type === 'mobile') {
+      payload.mobileServiceType = extra.mobileServiceType ?? 'shared';
+      if (extra.operatorId) payload.operatorId = extra.operatorId;
+      if (extra.rotationId) payload.rotationId = extra.rotationId;
+    }
+    if (type === 'resident' && extra.tarifId) {
+      payload.tarifId = extra.tarifId;
+    }
+
+    this.logger.log(`[BUY] type=${type} payload=${JSON.stringify(payload)}`);
+    const raw = await this.request<OrderMakeData>('POST', `/${key}/order/make/${type}`, payload);
+    this.logger.log(`[BUY] raw response: ${JSON.stringify(raw)}`);
+
+    if (raw.status !== 'success' || !raw.data?.orderId) {
+      throw new BadRequestException(`ProxySeller buy error: ${JSON.stringify(raw.errors ?? raw)}`);
+    }
+
+    // Lưu cả orderId và type để fetchOrderProxies/renew có thể dùng. Format: "{type}:{orderId}"
+    const composedId = `${type}:${raw.data.orderId}`;
+
+    return {
+      provider_order_id: composedId,
+      proxies: [],   // lấy sau qua fetchOrderProxies
+      raw,
+    };
+  }
+
+  // ─── Lấy proxy theo order ────────────────────────────────────────────────────
+
+  async fetchOrderProxies(token_api: string, provider_order_id: string): Promise<ProxyCredential[]> {
+    const [type, orderId] = provider_order_id.includes(':')
+      ? provider_order_id.split(':')
+      : [this.DEFAULT_TYPE, provider_order_id];
+
+    this.logger.log(`[LIST] type=${type} orderId=${orderId}`);
+    const raw = await this.request<ProxyListData>(
+      'GET',
+      `/${token_api}/proxy/list/${type}`,
+      undefined,
+      { orderId },
+    );
+    this.logger.log(`[LIST] raw response: ${JSON.stringify(raw)}`);
+
+    if (raw.status !== 'success' || !raw.data) {
+      this.logger.warn(`[LIST] chưa có proxy cho orderId=${orderId} — trả [] để polling`);
+      return [];
+    }
+
+    const items: ProxyListItem[] = Array.isArray(raw.data.items) ? raw.data.items : [];
+    if (!items.length) {
+      this.logger.warn(`[LIST] items rỗng cho orderId=${orderId} — trả [] để polling`);
+      return [];
+    }
+
+    return items.map((item) => {
+      const proto = (item.protocol || 'HTTP').toLowerCase();
+      const port = proto === 'socks' || proto === 'socks5' ? item.port_socks : item.port_http;
+      return {
+        host:              item.ip,
+        port:              Number(port),
+        username:          item.login,
+        password:          item.password,
+        protocol:          proto === 'socks' ? 'socks5' : proto,   // chuẩn hoá về 'socks5'
+        provider_proxy_id: String(item.id),
+        country_code:      item.country,
+      } as ProxyCredential;
+    });
+  }
+
+  // ─── Gia hạn ─────────────────────────────────────────────────────────────────
+
+  async renew(params: ProviderRenewParams): Promise<RenewResult> {
+    const {
+      token_api: key,
+      provider_order_id,
+      provider_proxy_ids,
+      duration_days,
+      id_service,
+    } = params;
+
+    // ưu tiên ids = từng proxy id; fallback dùng orderId nếu không có
+    const ids = provider_proxy_ids?.length
+      ? provider_proxy_ids.map((x) => Number(x)).filter((x) => !isNaN(x))
+      : [];
+
+    if (!ids.length) {
+      throw new BadRequestException('ProxySeller renew: thiếu provider_proxy_ids');
+    }
+
+    const [typeFromOrder] = provider_order_id?.includes(':')
+      ? provider_order_id.split(':')
+      : [id_service || this.DEFAULT_TYPE];
+    const type = this.resolveType(typeFromOrder);
+
+    // periodId truyền qua id_service (vd: "ipv4|7" — type|periodId) nếu không có cách khác.
+    // Tạm dùng duration_days map → periodId nếu khách dùng số ngày chuẩn của ProxySeller.
+    const periodId = String(duration_days);
+
+    const payload = {
+      ids,
+      periodId,
+      paymentId: 1,
+      coupon: '',
+    };
+
+    this.logger.log(`[RENEW] type=${type} payload=${JSON.stringify(payload)}`);
+    const raw = await this.request<OrderMakeData>('POST', `/${key}/prolong/make/${type}`, payload);
+    this.logger.log(`[RENEW] raw response: ${JSON.stringify(raw)}`);
+
+    if (raw.status !== 'success' || !raw.data?.orderId) {
+      throw new BadRequestException(`ProxySeller renew error: ${JSON.stringify(raw.errors ?? raw)}`);
+    }
+
+    return {
+      success: true,
+      raw,
+    };
+  }
+
+  // ─── Xoay IP (reboot) ────────────────────────────────────────────────────────
+  // Endpoint reboot ProxySeller dùng token gắn riêng cho từng proxy, không phải api key.
+  // Vì interface chỉ có provider_order_id → chưa support được rotate đúng nghĩa.
+
+  async rotate(_params: ProviderRotateParams): Promise<RotateResult> {
+    throw new BadRequestException('ProxySeller: chưa hỗ trợ xoay IP qua API key chung');
+  }
+
+  // ─── Huỷ ─────────────────────────────────────────────────────────────────────
+
+  async cancel(_params: ProviderCancelParams): Promise<void> {
+    throw new BadRequestException('ProxySeller: chưa hỗ trợ huỷ đơn hàng');
+  }
+}

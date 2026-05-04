@@ -5,7 +5,7 @@ import { HomeproxyProvider } from './impl/homeproxy.provider';
 import { ProxyvnProvider } from './impl/proxyvn.provider';
 import { ProxysieutocProvider } from './impl/proxysieutoc.provider';
 import { TwoProxyProvider } from './impl/2proxy.provider';
-// import { ProxysellerProvider } from './impl/proxyseller.provider';
+import { ProxysellerProvider } from './impl/proxyseller.provider';
 
 /**
  * Factory resolve đúng provider theo partner.code.
@@ -28,7 +28,7 @@ export class ProxyProviderFactory implements OnModuleInit {
     private readonly proxyvn:     ProxyvnProvider,
     private readonly proxysieutoc: ProxysieutocProvider,
     private readonly twoproxy: TwoProxyProvider,
-    // private readonly proxyseller: ProxysellerProvider,
+    private readonly proxyseller: ProxysellerProvider,
   ) {
     this.logger.warn('ProxyProviderFactory CONSTRUCTOR called — registry is empty until onModuleInit()');
   }
@@ -40,7 +40,7 @@ export class ProxyProviderFactory implements OnModuleInit {
       this.registry.set('proxyvn',   this.proxyvn);
       this.registry.set('proxysieutoc', this.proxysieutoc);
       this.registry.set('twoproxy', this.twoproxy);
-      // this.registry.set('proxyseller', this.proxyseller);
+      this.registry.set('proxyseller', this.proxyseller);
       this.logger.log(`ProxyProviderFactory ready — providers: ${JSON.stringify([...this.registry.keys()])}`);
     } catch (err) {
       this.logger.error('ProxyProviderFactory onModuleInit failed', err?.stack);
