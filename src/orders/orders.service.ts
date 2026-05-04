@@ -1117,13 +1117,28 @@ export class OrdersService {
    * Dùng khi BUY trả về rỗng/lỗi nhưng đơn đã được tạo bên provider.
    */
   async syncProviderOrder(id: string, providerOrderId: string, actor = 'admin') {
-    if (!providerOrderId?.trim()) {
-      throw new BadRequestException('Thiếu provider_order_id');
-    }
-    providerOrderId = providerOrderId.trim();
+    id = (id || '').trim();
+    providerOrderId = (providerOrderId || '').trim();
 
-    const order = await this.orderModel.findById(id).exec();
+    // Cho phép :id là Mongo _id hoặc provider_order_id.
+    // Nếu :id là ObjectId hợp lệ → lookup theo _id; ngược lại → lookup theo provider_order_id.
+    let order: OrderDocument | null = null;
+    if (Types.ObjectId.isValid(id) && id.length === 24) {
+      order = await this.orderModel.findById(id).exec();
+    }
+    if (!order) {
+      order = await this.orderModel.findOne({ provider_order_id: id }).exec();
+      // Nếu tìm thấy theo provider_order_id và body không truyền, dùng luôn :id làm provider_order_id
+      if (order && !providerOrderId) providerOrderId = id;
+    }
     if (!order) throw new BadRequestException('Order not found');
+
+    if (!providerOrderId) {
+      providerOrderId = order.provider_order_id || '';
+    }
+    if (!providerOrderId) {
+      throw new BadRequestException('Thiếu provider_order_id (truyền trong body hoặc nằm sẵn trong order)');
+    }
 
     const partner = order.partner_id
       ? await this.partnerModel.findById(order.partner_id).select('code token_api').exec()
