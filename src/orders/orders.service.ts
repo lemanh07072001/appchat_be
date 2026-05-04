@@ -1189,25 +1189,28 @@ export class OrdersService {
     const isCdk = (order.config as any)?.is_cdk === true;
     const docs = proxies
       .filter((p: any) => !existingSet.has(`${p.host}:${Number(p.port)}`))
-      .map((p: any) => ({
-        order_id:          orderObjectId,
-        proxy_type_id:     order.service_id ?? null,
-        ip_address:        p.host,
-        port:              Number(p.port),
-        protocol:          (p.protocol?.toLowerCase() ?? 'http'),
-        auth_username:     p.username,
-        auth_password:     p.password,
-        provider_proxy_id: p.provider_proxy_id ?? undefined,
-        domain:            p.domain   ?? '',
-        prev_ip:           p.prev_ip  ?? '',
-        location:          p.location ?? '',
-        isp:               p.isp      ?? '',
-        provider:          partner.code,
-        country_code:      p.country_code ?? 'VN',
-        is_active:         true,
-        is_available:      false,
-        cdk_key:           isCdk ? crypto.randomBytes(16).toString('hex') : undefined,
-      }));
+      .map((p: any) => {
+        const doc: Record<string, any> = {
+          order_id:          orderObjectId,
+          proxy_type_id:     order.service_id ?? null,
+          ip_address:        p.host,
+          port:              Number(p.port),
+          protocol:          (p.protocol?.toLowerCase() ?? 'http'),
+          auth_username:     p.username,
+          auth_password:     p.password,
+          domain:            p.domain   ?? '',
+          prev_ip:           p.prev_ip  ?? '',
+          location:          p.location ?? '',
+          isp:               p.isp      ?? '',
+          provider:          partner.code,
+          country_code:      p.country_code ?? 'VN',
+          is_active:         true,
+          is_available:      false,
+        };
+        if (p.provider_proxy_id) doc.provider_proxy_id = p.provider_proxy_id;
+        if (isCdk) doc.cdk_key = crypto.randomBytes(16).toString('hex');
+        return doc;
+      });
 
     let insertErrorMsg = '';
     if (docs.length) {
