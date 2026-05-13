@@ -52,6 +52,7 @@ export enum OrderLogStep {
   ADMIN_STATUS_UPDATED   = 'admin.status_updated',
   ADMIN_PAYMENT_UPDATED  = 'admin.payment_updated',
   ADMIN_REFUND_APPROVED  = 'admin.refund_approved',
+  ADMIN_REFUND_MISSING   = 'admin.refund_missing',
   ADMIN_ORDER_CREATED    = 'admin.order_created',
   ADMIN_ORDER_DELETED    = 'admin.order_deleted',
   ADMIN_ORDER_RENEWED    = 'admin.order_renewed',

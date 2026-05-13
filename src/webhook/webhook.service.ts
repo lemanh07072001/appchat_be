@@ -9,6 +9,9 @@ import { WebhookLog, WebhookLogDocument, WebhookStep, WebhookStepStatus } from '
 import { OrderStatusEnum } from '../enum/order.enum';
 import { NotificationGateway } from './notification.gateway';
 
+// Số tiền tối thiểu cho 1 lần nạp (VND). Nhỏ hơn sẽ bị từ chối, không cộng vào ví.
+const MIN_DEPOSIT_AMOUNT = 10_000;
+
 interface Pays2Transaction {
   id: number | string;
   gateway: string;
@@ -197,6 +200,54 @@ export class WebhookService {
           status: ok,
           data:   { user_id: user._id, email: user.email, code },
         });
+
+        // ─── Validate min deposit: dưới ngưỡng → từ chối, không cộng tiền ───
+        if (amount < MIN_DEPOSIT_AMOUNT) {
+          const reason = `Số tiền nạp ${amount.toLocaleString('vi-VN')}đ dưới mức tối thiểu ${MIN_DEPOSIT_AMOUNT.toLocaleString('vi-VN')}đ`;
+          // Upsert: tránh tạo trùng với cùng transaction_id nếu webhook bị retry
+          await this.txModel.findOneAndUpdate(
+            { transaction_id: txId },
+            {
+              $setOnInsert: {
+                transaction_id:     txId,
+                gateway:            tx.gateway,
+                transaction_date:   new Date(tx.transactionDate),
+                transaction_number: tx.transactionNumber,
+                account_number:     tx.accountNumber,
+                content:            tx.content,
+                code,
+                transfer_type:      tx.transferType,
+                transfer_amount:    amount,
+                checksum:           tx.checksum,
+                status:             TransactionStatus.REJECTED,
+                user_id:            user._id,
+                note:               reason,
+                raw_payload:        normalizedTx,
+                raw_headers:        headers ?? null,
+              },
+            },
+            { upsert: true, new: false },
+          ).exec();
+
+          steps.push({
+            step:   4,
+            title:  'Từ chối nạp tiền',
+            detail: reason,
+            status: err,
+            data:   { amount, min: MIN_DEPOSIT_AMOUNT, user_id: user._id, email: user.email },
+          });
+
+          this.notification.sendTopupRejected(user._id.toString(), {
+            amount,
+            min: MIN_DEPOSIT_AMOUNT,
+            reason,
+          });
+
+          this.logger.warn(`Webhook #${txId}: từ chối nạp ${amount}đ < min ${MIN_DEPOSIT_AMOUNT}đ — user ${user.email}`);
+          allSteps.push(...steps);
+          results.push(`#${txId}: rejected (below_min)`);
+          continue;
+        }
 
         // 4. Atomic: kiểm tra trùng + tạo transaction
         const existing = await this.txModel.findOneAndUpdate(

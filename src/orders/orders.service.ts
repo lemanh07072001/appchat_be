@@ -66,7 +66,7 @@ export class OrdersService {
     return found ? (found._id as Types.ObjectId) : null;
   }
 
-  async buy(userId: string, dto: BuyOrderDto): Promise<{
+  async buy(userId: string, dto: BuyOrderDto, idempotencyKey?: string): Promise<{
     success: boolean;
     message: string;
     data: {
@@ -88,6 +88,26 @@ export class OrdersService {
   }> {
     const t0 = Date.now();
     let orderId: string | null = null;
+
+    // Idempotency: nếu client gửi kèm key thì trả về kết quả cũ khi retry,
+    // và lock để chặn 2 request song song cùng key.
+    const idemCacheKey = idempotencyKey ? `idem:buy:${userId}:${idempotencyKey}` : null;
+    const idemLockKey  = idemCacheKey ? `${idemCacheKey}:lock` : null;
+
+    if (idemCacheKey) {
+      const cached = await this.redis.get(idemCacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed?.__error) {
+          throw new BadRequestException(parsed.message ?? 'Đặt hàng thất bại');
+        }
+        return parsed;
+      }
+      const lockOk = await this.redis.set(idemLockKey!, '1', 'EX', 60, 'NX');
+      if (!lockOk) {
+        throw new BadRequestException('Yêu cầu đang được xử lý, vui lòng chờ');
+      }
+    }
 
     try {
     // 1. Validate service
@@ -244,7 +264,7 @@ export class OrdersService {
       created_by:     'system',
     });
 
-    return {
+    const response = {
       success: true,
       message: 'Đặt hàng thành công, đang xử lý proxy',
       data: {
@@ -264,6 +284,13 @@ export class OrdersService {
         config:         dataOrder.config,
       },
     };
+
+    if (idemCacheKey) {
+      // Lưu 24h để mọi retry sau đó nhận lại cùng response, không trừ tiền nữa
+      await this.redis.set(idemCacheKey, JSON.stringify(response), 'EX', 86400);
+    }
+
+    return response;
     } catch (err: any) {
       // Nếu order đã được tạo thì ghi lỗi vào order_logs trước khi throw
       if (orderId) {
@@ -274,8 +301,20 @@ export class OrdersService {
           { error: err?.message, duration_ms: Date.now() - t0 },
           userId,
         );
+        // Đã tạo order ⇒ tiền đã trừ. Cache lỗi để retry không trừ thêm.
+        if (idemCacheKey) {
+          await this.redis.set(
+            idemCacheKey,
+            JSON.stringify({ __error: true, status: 400, message: err?.message ?? 'Đặt hàng thất bại' }),
+            'EX', 86400,
+          );
+        }
       }
       throw err;
+    } finally {
+      if (idemLockKey) {
+        await this.redis.del(idemLockKey).catch(() => {});
+      }
     }
   }
 
@@ -609,7 +648,7 @@ export class OrdersService {
     return saved;
   }
 
-  async buySync(userId: string, dto: BuyOrderDto): Promise<{
+  async buySync(userId: string, dto: BuyOrderDto, idempotencyKey?: string): Promise<{
     status: string;
     statusCode: number;
     message: string;
@@ -621,7 +660,7 @@ export class OrdersService {
     const MAX_WAIT_MS      = 60_000;
 
     // 1. Tạo order và trừ tiền
-    const buyResult = await this.buy(userId, dto);
+    const buyResult = await this.buy(userId, dto, idempotencyKey);
     const orderId   = buyResult.data.order_id;
 
     // 2. Poll DB cho đến khi ACTIVE / FAILED / timeout
@@ -770,6 +809,81 @@ export class OrdersService {
     );
 
     return { refunded_amount: refundAmount, balance_after: balanceAfter, order: saved };
+  }
+
+  /**
+   * Hoàn tiền số proxy còn thiếu cho đơn PARTIAL.
+   *
+   * - missing_qty    = quantity - actual_quantity
+   * - missing_amount = missing_qty × price_per_unit
+   *
+   * Sau khi hoàn:
+   * - Giữ nguyên quantity/total_price (số đã đặt mua ban đầu) → audit rõ ràng
+   * - refunded_amount += missing_amount (cộng dồn vào field hiện có)
+   * - status = PARTIAL_REFUNDED → để thống kê đơn "hoàn 1 phần do thiếu"
+   * - Ghi audit log riêng với step ADMIN_REFUND_MISSING (data chứa đầy đủ
+   *   missing_qty, missing_amount, original_qty, actual_qty, balance_after,
+   *   để sau này query thống kê: tổng số proxy thiếu, tổng tiền hoàn, ...)
+   */
+  async refundMissingQuantity(id: string, actor = 'admin') {
+    const order = await this.orderModel.findById(id).exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    if (order.status !== OrderStatusEnum.PARTIAL) {
+      throw new BadRequestException('Đơn không ở trạng thái PARTIAL (thiếu số lượng)');
+    }
+    const actualQty = order.actual_quantity;
+    if (actualQty == null) {
+      throw new BadRequestException('Đơn chưa có actual_quantity');
+    }
+    const originalQty = order.quantity ?? 0;
+    const missingQty  = originalQty - actualQty;
+    if (missingQty <= 0) {
+      throw new BadRequestException('Đơn không thiếu số lượng');
+    }
+    const missingAmount = missingQty * (order.price_per_unit ?? 0);
+    if (missingAmount <= 0) {
+      throw new BadRequestException('Số tiền thiếu không hợp lệ');
+    }
+
+    const note = `Hoàn tiền ${missingQty}/${originalQty} proxy thiếu (${missingAmount.toLocaleString()} VND)`;
+
+    // adminRefund() đã: cộng tiền vào ví user, cộng dồn refunded_amount,
+    // ghi wallet transaction (type=REFUND), ghi order log (ADMIN_REFUND_APPROVED).
+    // Truyền cancelOrder=false để KHÔNG đổi sang CANCELLED.
+    const result = await this.adminRefund(id, missingAmount, note, false, actor);
+
+    // Đổi status sang PARTIAL_REFUNDED để filter/thống kê
+    const fresh = await this.orderModel.findById(id).exec();
+    if (fresh) {
+      fresh.status = OrderStatusEnum.PARTIAL_REFUNDED;
+      await fresh.save();
+    }
+
+    // Audit log dành riêng cho "hoàn tiền thiếu số lượng"
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_REFUND_MISSING,
+      `Admin hoàn ${missingAmount.toLocaleString()} VND cho ${missingQty}/${originalQty} proxy thiếu`,
+      {
+        original_quantity: originalQty,
+        actual_quantity:   actualQty,
+        missing_quantity:  missingQty,
+        price_per_unit:    order.price_per_unit ?? 0,
+        missing_amount:    missingAmount,
+        total_refunded:    result.refunded_amount + (order.refunded_amount ?? 0) - missingAmount,
+        balance_after:     result.balance_after,
+      },
+      actor,
+    );
+
+    return {
+      ...result,
+      original_quantity: originalQty,
+      actual_quantity:   actualQty,
+      missing_quantity:  missingQty,
+      missing_amount:    missingAmount,
+    };
   }
 
   async retryOrder(id: string, actor = 'admin') {

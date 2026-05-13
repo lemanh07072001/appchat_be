@@ -78,6 +78,22 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
     );
   }
 
+  async sendTopupRejected(userId: string, data: { amount: number; min: number; reason: string }) {
+    this.logger.warn(`Emit topup_rejected → userId: ${userId} | amount: ${data.amount} | min: ${data.min}`);
+    this.server.to(userId).emit('topup_rejected', data);
+
+    // Telegram notify (admin biết để xử lý)
+    const user = await this.userModel.findById(userId).select('email name').lean();
+    const userLabel = user ? `${user.name || user.email} (${user.email})` : userId;
+    this.sendTelegram(
+      `⚠️ <b>Nạp tiền bị từ chối</b>\n\n` +
+      `👤 ${userLabel}\n` +
+      `💵 Số tiền: <b>${data.amount.toLocaleString('vi-VN')}đ</b>\n` +
+      `📉 Ngưỡng tối thiểu: <b>${data.min.toLocaleString('vi-VN')}đ</b>\n` +
+      `📝 ${data.reason}`,
+    );
+  }
+
   async sendOrderSuccess(userId: string, data: {
     order_code: string;
     service_name: string;

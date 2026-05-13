@@ -1,8 +1,8 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
+import { InjectModel, InjectConnection } from '@nestjs/mongoose';
 import { User, UserDocument } from '../schemas/users.schema';
 import { Transaction, TransactionDocument, TransactionStatus } from '../schemas/transactions.schema';
-import { Model } from 'mongoose';
+import { Connection, Model, Types } from 'mongoose';
 import { CreateUserDto } from '../dto/create-user.dto';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
@@ -18,6 +18,8 @@ export class UsersService {
     private userModel: Model<UserDocument>,
     @InjectModel(Transaction.name)
     private txModel: Model<TransactionDocument>,
+    @InjectConnection()
+    private readonly connection: Connection,
     private readonly walletTxService: WalletTransactionService,
   ) {}
 
@@ -338,5 +340,48 @@ export class UsersService {
   // ─── Xác thực API token ────────────────────────────────────────────────
   async findByApiToken(token: string): Promise<UserDocument | null> {
     return this.userModel.findOne({ api_token: token }).select('_id email money status role').exec();
+  }
+
+  // ─── Admin: tóm tắt tài chính + lịch sử nạp ──────────────────────────────
+  async getFinance(userId: string, page = 1, limit = 10) {
+    const user = await this.userModel.findById(userId).select('money').exec();
+    if (!user) throw new BadRequestException('User không tồn tại');
+
+    const oid = new Types.ObjectId(userId);
+
+    const [depositAgg, spentAgg, refundAgg, data, total] = await Promise.all([
+      this.txModel.aggregate([
+        { $match: { user_id: oid, transfer_type: 'IN', status: TransactionStatus.PROCESSED } },
+        { $group: { _id: null, total: { $sum: '$transfer_amount' } } },
+      ]).exec(),
+      this.connection.collection('orders').aggregate([
+        { $match: { user_id: oid, payment_status: 1, status: { $nin: [0, 6, 8, 11] } } },
+        { $group: { _id: null, total: { $sum: '$total_price' } } },
+      ]).toArray(),
+      this.connection.collection('orders').aggregate([
+        { $match: { user_id: oid, refunded_amount: { $gt: 0 } } },
+        { $group: { _id: null, total: { $sum: '$refunded_amount' } } },
+      ]).toArray(),
+      this.txModel.find({ user_id: oid, transfer_type: 'IN', status: TransactionStatus.PROCESSED })
+        .sort({ transaction_date: -1, createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean()
+        .exec(),
+      this.txModel.countDocuments({ user_id: oid, transfer_type: 'IN', status: TransactionStatus.PROCESSED }).exec(),
+    ]);
+
+    return {
+      summary: {
+        total_deposited: depositAgg[0]?.total ?? 0,
+        total_spent:     spentAgg[0]?.total ?? 0,
+        total_refunded:  refundAgg[0]?.total ?? 0,
+        current_balance: user.money,
+      },
+      deposits: {
+        data,
+        meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      },
+    };
   }
 }

@@ -85,4 +85,14 @@ export class UsersController {
   generateTopupCode(@Param('id') id: string) {
     return this.usersService.generateTopupCode(id);
   }
+
+  // ─── Admin: tóm tắt tài chính + lịch sử nạp ───────────────────────────
+  @Get(':id/finance')
+  getFinance(
+    @Param('id') id: string,
+    @Query('page')  page  = '1',
+    @Query('limit') limit = '10',
+  ) {
+    return this.usersService.getFinance(id, Number(page), Number(limit));
+  }
 }

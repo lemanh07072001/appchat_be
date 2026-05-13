@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { OrdersService } from './orders.service';
 import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
@@ -32,27 +32,39 @@ export class OrdersController {
 
   // ─── User: mua dịch vụ (qua JWT) ─────────────────────────
   @Post('api/orders/buy')
-  buy(@Req() req: Request, @Body() dto: BuyOrderDto) {
+  buy(
+    @Req() req: Request,
+    @Body() dto: BuyOrderDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
     const userId = (req as any).user.sub as string;
-    return this.ordersService.buy(userId, dto);
+    return this.ordersService.buy(userId, dto, idempotencyKey);
   }
 
   // ─── User: mua dịch vụ (qua API token) ───────────────────
   @Post('api/orders/buy-external')
   @Public()
   @UseGuards(ApiTokenGuard)
-  buyExternal(@Req() req: Request, @Body() dto: BuyOrderDto) {
+  buyExternal(
+    @Req() req: Request,
+    @Body() dto: BuyOrderDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
     const userId = (req as any).user.sub as string;
-    return this.ordersService.buy(userId, dto);
+    return this.ordersService.buy(userId, dto, idempotencyKey);
   }
 
   // ─── User: mua dịch vụ đồng bộ — trả về proxy ngay khi sẵn sàng ──
   @Post('api/orders/buy-sync')
   @Public()
   @UseGuards(ApiTokenGuard)
-  buySyncExternal(@Req() req: Request, @Body() dto: BuyOrderDto) {
+  buySyncExternal(
+    @Req() req: Request,
+    @Body() dto: BuyOrderDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
     const userId = (req as any).user.sub as string;
-    return this.ordersService.buySync(userId, dto);
+    return this.ordersService.buySync(userId, dto, idempotencyKey);
   }
 
   // ─── CDK: xoay proxy theo key (không cần auth) ────────────
@@ -134,6 +146,14 @@ export class OrdersController {
   ) {
     const actor = (req as any)?.user?.sub ?? 'admin';
     return this.ordersService.adminRefund(id, amount, note, cancelOrder, actor);
+  }
+
+  // ─── Admin: hoàn tiền số proxy thiếu cho đơn PARTIAL ──────────────────
+  @Post('api/admin/orders/:id/refund-missing')
+  @UseGuards(AdminGuard)
+  refundMissing(@Param('id') id: string, @Req() req?: Request) {
+    const actor = (req as any)?.user?.sub ?? 'admin';
+    return this.ordersService.refundMissingQuantity(id, actor);
   }
 
   @Post('api/admin/orders/:id/import-proxies')
