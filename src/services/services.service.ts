@@ -25,7 +25,7 @@ export class ServicesService {
   async findApiEnabledList() {
     return this.serviceModel
       .find({ status: true, api_enabled: true })
-      .populate('country', 'name code')
+      .populate('country', 'name code image_url')
       .select('_id name type proxy_type ip_version protocol isp pricing usage_type')
       .sort({ order: 1, createdAt: -1 })
       .lean()
@@ -39,7 +39,7 @@ export class ServicesService {
     if (ip_version) filter.ip_version = ip_version;
     return this.serviceModel
       .find(filter)
-      .populate('country', 'name code')
+      .populate('country', 'name code image_url')
       .select('-partner -body_api')
       .sort({ order: 1, createdAt: -1 })
       .lean()
@@ -100,7 +100,7 @@ export class ServicesService {
     const filter = andConditions.length > 0 ? { $and: andConditions } : {};
 
     const [data, total] = await Promise.all([
-      this.serviceModel.find(filter).populate('partner', 'name domain').populate('country', 'name code').skip(skip).limit(limit).sort({ order: 1, createdAt: -1 }).lean().exec(),
+      this.serviceModel.find(filter).populate('partner', 'name domain').populate('country', 'name code image_url').skip(skip).limit(limit).sort({ order: 1, createdAt: -1 }).lean().exec(),
       this.serviceModel.countDocuments(filter).exec(),
     ]);
 
