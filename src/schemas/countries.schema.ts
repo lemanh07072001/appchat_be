@@ -13,6 +13,9 @@ export class Country {
 
   @Prop({ default: '' })
   code: string;
+
+  @Prop({ default: '' })
+  image_url: string;
 }
 
 export const CountrySchema = SchemaFactory.createForClass(Country);

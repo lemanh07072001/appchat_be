@@ -1,15 +1,25 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Service, ServiceDocument } from '../schemas/services.schema';
+import { Partner } from '../schemas/partners.schema';
+import { Country } from '../schemas/countries.schema';
 import { Model, Types } from 'mongoose';
 import { CreateServiceDto } from '../dto/create-service.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 @Injectable()
 export class ServicesService {
   constructor(
     @InjectModel(Service.name)
     private serviceModel: Model<ServiceDocument>,
+    @InjectModel(Partner.name)
+    private partnerModel: Model<Partner>,
+    @InjectModel(Country.name)
+    private countryModel: Model<Country>,
   ) {}
 
   async findApiEnabledList() {
@@ -39,15 +49,24 @@ export class ServicesService {
   async findAllPaginated(query: PaginationQueryDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
-    const search = query.search ?? '';
+    const search = (query.search ?? '').trim();
     const skip = (page - 1) * limit;
 
     const andConditions: any[] = [];
 
     if (search) {
+      const safe = escapeRegex(search);
+      const rx = { $regex: safe, $options: 'i' };
       const orConditions: any[] = [
-        { name: { $regex: search, $options: 'i' } },
-        { type: { $regex: search, $options: 'i' } },
+        { name: rx },
+        { type: rx },
+        { proxy_type: rx },
+        { ip_version: rx },
+        { usage_type: rx },
+        { badge: rx },
+        { id_service: rx },
+        { 'isp.name': rx },
+        { 'isp.code': rx },
       ];
       if (Types.ObjectId.isValid(search)) {
         orConditions.push(
@@ -55,6 +74,17 @@ export class ServicesService {
           { partner: new Types.ObjectId(search) },
           { country: new Types.ObjectId(search) },
         );
+      }
+      // Lookup partner/country theo tên để admin search được "homeproxy", "vietnam"...
+      const [partners, countries] = await Promise.all([
+        this.partnerModel.find({ $or: [{ name: rx }, { code: rx }] }).select('_id').lean().exec(),
+        this.countryModel.find({ $or: [{ name: rx }, { code: rx }] }).select('_id').lean().exec(),
+      ]);
+      if (partners.length > 0) {
+        orConditions.push({ partner: { $in: partners.map((p) => p._id) } });
+      }
+      if (countries.length > 0) {
+        orConditions.push({ country: { $in: countries.map((c) => c._id) } });
       }
       andConditions.push({ $or: orConditions });
     }

@@ -72,6 +72,10 @@ export class CreateServiceDto {
 
   @IsOptional()
   @IsString()
+  pricing_mode?: string;
+
+  @IsOptional()
+  @IsString()
   badge?: string;
 
   @IsOptional()

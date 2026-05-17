@@ -50,7 +50,7 @@ export class CountriesService {
   }
 
   async findAllList() {
-    return this.countryModel.find().select('_id name code').exec();
+    return this.countryModel.find().select('_id name code image_url').exec();
   }
 
   async duplicate(id: string): Promise<CountryDocument> {
@@ -69,6 +69,7 @@ export class CountriesService {
     const newCountry = new this.countryModel({
       name: copyName,
       code: country.code,
+      image_url: country.image_url,
     });
     return newCountry.save();
   }
@@ -84,6 +85,7 @@ export class CountriesService {
     }
     country.name = data.name;
     country.code = data.code;
+    if (data.image_url !== undefined) country.image_url = data.image_url;
     return country.save();
   }
 

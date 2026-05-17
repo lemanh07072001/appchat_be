@@ -8,4 +8,8 @@ export class CreateCountryDto {
   @IsOptional()
   @IsString()
   code: string;
+
+  @IsOptional()
+  @IsString()
+  image_url?: string;
 }
