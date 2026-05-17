@@ -59,10 +59,12 @@ export class Service {
   @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
   pricing: Record<string, any>;
 
-  // 'quantity' = bán theo số lượng × thời gian (key pricing = số ngày)
-  // 'package'  = bán theo gói cố định (key pricing = số request/proxy của gói)
-  @Prop({ default: 'quantity', enum: ['quantity', 'package'] })
-  pricing_mode: string;
+  // Giới hạn số lượng proxy mua/đơn (mode duration: count × days).
+  @Prop({ default: 1, min: 1 })
+  min_quantity: number;
+
+  @Prop({ default: 100, min: 1 })
+  max_quantity: number;
 
   @Prop({ default: '' })
   badge: string;

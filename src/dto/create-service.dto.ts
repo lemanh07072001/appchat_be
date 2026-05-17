@@ -71,8 +71,12 @@ export class CreateServiceDto {
   pricing?: Record<string, any>;
 
   @IsOptional()
-  @IsString()
-  pricing_mode?: string;
+  @IsNumber()
+  min_quantity?: number;
+
+  @IsOptional()
+  @IsNumber()
+  max_quantity?: number;
 
   @IsOptional()
   @IsString()

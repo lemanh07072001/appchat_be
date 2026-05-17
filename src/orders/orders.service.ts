@@ -126,6 +126,14 @@ export class OrdersService {
     }
 
     const quantity      = dto.quantity ?? 1;
+
+    // Validate quantity nằm trong giới hạn admin set cho service
+    const minQty = (service as any).min_quantity && (service as any).min_quantity > 0 ? (service as any).min_quantity : 1;
+    const maxQty = (service as any).max_quantity && (service as any).max_quantity > 0 ? (service as any).max_quantity : 100;
+    if (quantity < minQty || quantity > maxQty) {
+      throw new BadRequestException(`Số lượng phải nằm trong khoảng ${minQty} - ${maxQty}`);
+    }
+
     const pricePerUnit  = pricing.price as number;
     const costPerUnit   = pricing.cost as number ?? null;
     const totalPrice    = pricePerUnit * quantity;
