@@ -14,6 +14,8 @@ import { PROCESSING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
 import { OrderLogStep } from '../schemas/order-log.schema';
+import { NotificationGateway } from '../webhook/notification.gateway';
+import { Service, ServiceDocument } from '../schemas/services.schema';
 
 /** Timeout BRPOP — block tối đa 5s chờ order mới */
 const BRPOP_TIMEOUT_SECONDS  = 5;
@@ -35,12 +37,14 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
   constructor(
     @InjectModel(Order.name)   private readonly orderModel:   Model<OrderDocument>,
     @InjectModel(Partner.name) private readonly partnerModel: Model<PartnerDocument>,
+    @InjectModel(Service.name) private readonly serviceModel: Model<ServiceDocument>,
     @InjectModel(Proxy.name)   private readonly proxyModel:   Model<ProxyDocument>,
     @Inject(REDIS_CLIENT)          private readonly redis:         Redis,
     @Inject(REDIS_BLOCKING_CLIENT) private readonly blockingRedis: Redis,
     private readonly providerFactory: ProxyProviderFactory,
     private readonly affiliateService: AffiliateService,
     private readonly orderLogService:  OrderLogService,
+    private readonly notification:     NotificationGateway,
   ) {}
 
   onModuleInit() {
@@ -206,6 +210,11 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
         const received = proxies.length;
         const ordered  = order.quantity;
 
+        const service = order.service_id
+          ? await this.serviceModel.findById(order.service_id).select('name').exec()
+          : null;
+        const serviceName = service?.name ?? '—';
+
         if (received < ordered) {
           order.status = OrderStatusEnum.PARTIAL;
           (order as any).actual_quantity = received;
@@ -216,6 +225,15 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
             `Order → PARTIAL: nhận ${received}/${ordered}`,
             { received, ordered, duration_ms: Date.now() - t0 },
           );
+
+          void this.notification.sendOrderPartial(order.user_id.toString(), {
+            order_code:    order.order_code,
+            service_name:  serviceName,
+            ordered,
+            received,
+            duration_days: order.duration_days,
+            total_price:   order.total_price,
+          });
         } else {
           await this.orderModel.findByIdAndUpdate(order._id, { status: OrderStatusEnum.ACTIVE }).exec();
           this.logger.log(`Order ${orderId} → ACTIVE, inserted ${received} proxies (${Date.now() - t0}ms)`);
@@ -226,6 +244,14 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
           );
 
           void this.affiliateService.handleOrderActive(order);
+
+          void this.notification.sendOrderActive(order.user_id.toString(), {
+            order_code:    order.order_code,
+            service_name:  serviceName,
+            quantity:      received,
+            duration_days: order.duration_days,
+            total_price:   order.total_price,
+          });
         }
 
         return; // Xong
@@ -240,11 +266,12 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
 
     // Hết MAX_POLL_ATTEMPTS → chuyển PENDING_REFUND
     const elapsed = Date.now() - t0;
+    const errorMsg = `Không nhận được proxy sau ${MAX_POLL_ATTEMPTS} lần poll (${elapsed}ms)`;
     this.logger.warn(`Order ${orderId}: hết ${MAX_POLL_ATTEMPTS} lần poll (${elapsed}ms) → PENDING_REFUND`);
 
     await this.orderModel.findByIdAndUpdate(orderId, {
       status:        OrderStatusEnum.PENDING_REFUND,
-      error_message: `Không nhận được proxy sau ${MAX_POLL_ATTEMPTS} lần poll (${elapsed}ms)`,
+      error_message: errorMsg,
       admin_note:    `Auto PENDING_REFUND: ProcessingWorker poll ${MAX_POLL_ATTEMPTS} lần không có proxy từ provider`,
     }).exec();
 
@@ -252,6 +279,24 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
       `Hết ${MAX_POLL_ATTEMPTS} lần poll → PENDING_REFUND`,
       { attempts: MAX_POLL_ATTEMPTS, elapsed_ms: elapsed },
     );
+
+    // Telegram notify (best-effort)
+    try {
+      const orderDoc = await this.orderModel.findById(orderId).populate('service_id').exec();
+      if (orderDoc) {
+        void this.notification.sendOrderFailed(orderDoc.user_id.toString(), {
+          order_code:    orderDoc.order_code,
+          service_name:  (orderDoc.service_id as any)?.name ?? '—',
+          quantity:      orderDoc.quantity,
+          duration_days: orderDoc.duration_days,
+          total_price:   orderDoc.total_price,
+          error_message: errorMsg,
+          stage:         'polling',
+        });
+      }
+    } catch (notifErr: any) {
+      this.logger.warn(`Failed to send order_failed telegram: ${notifErr?.message}`);
+    }
   }
 
   private sleep(ms: number): Promise<void> {

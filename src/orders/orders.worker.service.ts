@@ -14,6 +14,7 @@ import { PENDING_ORDERS_KEY, PROCESSING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
 import { OrderLogStep, OrderLogLevel } from '../schemas/order-log.schema';
+import { NotificationGateway } from '../webhook/notification.gateway';
 
 
 /** Timeout BRPOP — block tối đa 5 giây chờ order mới */
@@ -49,6 +50,7 @@ export class OrdersWorkerService implements OnModuleInit {
     private readonly providerFactory: ProxyProviderFactory,
     private readonly affiliateService: AffiliateService,
     private readonly orderLogService: OrderLogService,
+    private readonly notification: NotificationGateway,
   ) {}
 
   onModuleInit() {
@@ -97,6 +99,9 @@ export class OrdersWorkerService implements OnModuleInit {
     }
 
     void this.orderLogService.info(orderId, OrderLogStep.WORKER_LOCK_ACQUIRED, 'Worker đã giữ lock và bắt đầu xử lý');
+
+    // Khai báo ở scope ngoài để dùng được trong catch (gửi Telegram lỗi)
+    let lastProviderData: any = undefined;
 
     try {
       // Re-fetch từ DB để xác nhận vẫn còn PENDING (tránh race condition)
@@ -166,7 +171,6 @@ export class OrdersWorkerService implements OnModuleInit {
       // Retry buy() tối đa MAX_RETRIES lần
       const retryErrors: string[] = [];
       let result: any = null;
-      let lastProviderData: any = undefined;
       const tProviderStart = Date.now();
 
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -349,6 +353,14 @@ export class OrdersWorkerService implements OnModuleInit {
             { order_id: orderId, step: OrderLogStep.WORKER_PROXIES_INSERTED, message: `Insert ${received} proxies`, data: { received, ordered } },
             { order_id: orderId, step: OrderLogStep.WORKER_STATUS_PARTIAL, level: OrderLogLevel.WARN, message: `Order → PARTIAL: nhận ${received}/${ordered}`, data: { received, ordered, shortage } },
           ]);
+          void this.notification.sendOrderPartial(order!.user_id.toString(), {
+            order_code:    order!.order_code,
+            service_name:  service?.name ?? '—',
+            ordered,
+            received,
+            duration_days: order!.duration_days,
+            total_price:   order!.total_price,
+          });
         } else {
           order!.status = OrderStatusEnum.ACTIVE;
           await order!.save();
@@ -358,6 +370,13 @@ export class OrdersWorkerService implements OnModuleInit {
             { order_id: orderId, step: OrderLogStep.WORKER_STATUS_ACTIVE, message: `Order → ACTIVE`, data: { received, duration_ms: Date.now() - t0 } },
           ]);
           void this.affiliateService.handleOrderActive(order!);
+          void this.notification.sendOrderActive(order!.user_id.toString(), {
+            order_code:    order!.order_code,
+            service_name:  service?.name ?? '—',
+            quantity:      received,
+            duration_days: order!.duration_days,
+            total_price:   order!.total_price,
+          });
         }
       } else {
         // Provider trả proxy async (HomeProxy) → push vào processing queue
@@ -389,6 +408,26 @@ export class OrdersWorkerService implements OnModuleInit {
         `Order → PENDING_REFUND do lỗi: ${err?.message}`,
         { error: err?.message, duration_ms: Date.now() - t0 },
       );
+
+      // Telegram notify (best-effort, không throw)
+      try {
+        const orderDoc = await this.orderModel.findById(orderId).populate('service_id').exec();
+        if (orderDoc) {
+          const serviceName = (orderDoc.service_id as any)?.name ?? '—';
+          void this.notification.sendOrderFailed(orderDoc.user_id.toString(), {
+            order_code:    orderDoc.order_code,
+            service_name:  serviceName,
+            quantity:      orderDoc.quantity,
+            duration_days: orderDoc.duration_days,
+            total_price:   orderDoc.total_price,
+            error_message: err?.message ?? 'Worker error',
+            provider_data: lastProviderData,
+            stage:         'buy',
+          });
+        }
+      } catch (notifErr: any) {
+        this.logger.warn(`Failed to send order_failed telegram: ${notifErr?.message}`);
+      }
     } finally {
       await this.redis.del(lockKey);
     }

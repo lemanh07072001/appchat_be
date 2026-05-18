@@ -94,6 +94,10 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
     );
   }
 
+  /**
+   * @deprecated Dùng sendOrderActive sau khi API trả proxy thành công.
+   * Giữ alias để không vỡ code cũ.
+   */
   async sendOrderSuccess(userId: string, data: {
     order_code: string;
     service_name: string;
@@ -102,18 +106,105 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
     total_price: number;
     balance_after: number;
   }) {
-    // Telegram notify
+    return this.sendOrderActive(userId, data);
+  }
+
+  // Helper: format thông tin user cho footer Telegram
+  private async resolveUserLabel(userId: string): Promise<string> {
     const user = await this.userModel.findById(userId).select('email name').lean();
-    const userLabel = user ? `${user.name || user.email} (${user.email})` : userId;
+    return user ? `${user.name || user.email} (${user.email})` : userId;
+  }
+
+  // ─── Order ACTIVE: provider trả đủ proxy ─────────────────────────────
+  async sendOrderActive(userId: string, data: {
+    order_code:    string;
+    service_name:  string;
+    quantity:      number;
+    duration_days: number;
+    total_price:   number;
+    balance_after?: number;
+  }) {
+    const userLabel = await this.resolveUserLabel(userId);
+    const balanceLine = data.balance_after != null
+      ? `🏦 Số dư còn: <b>${data.balance_after.toLocaleString('vi-VN')}đ</b>\n`
+      : '';
     this.sendTelegram(
-      `🛒 <b>Đơn hàng mới</b>\n\n` +
+      `✅ <b>Đơn hàng giao thành công</b>\n\n` +
+      `👤 ${userLabel}\n` +
+      `📦 ${data.service_name}\n` +
+      `🔢 Số lượng: <b>${data.quantity}</b>\n` +
+      `📅 Thời hạn: ${data.duration_days} ngày\n` +
+      `💵 Tổng: <b>${data.total_price.toLocaleString('vi-VN')}đ</b>\n` +
+      balanceLine +
+      `🆔 Mã: ${data.order_code}`,
+      'order',
+    );
+  }
+
+  // ─── Order PARTIAL: thiếu số lượng ───────────────────────────────────
+  async sendOrderPartial(userId: string, data: {
+    order_code:    string;
+    service_name:  string;
+    ordered:       number;
+    received:      number;
+    duration_days: number;
+    total_price:   number;
+  }) {
+    const userLabel = await this.resolveUserLabel(userId);
+    const shortage = data.ordered - data.received;
+    const shortageAmount = data.total_price > 0 && data.ordered > 0
+      ? Math.round((data.total_price / data.ordered) * shortage)
+      : 0;
+    this.sendTelegram(
+      `⚠️ <b>Đơn hàng THIẾU số lượng</b>\n\n` +
+      `👤 ${userLabel}\n` +
+      `📦 ${data.service_name}\n` +
+      `🔢 Đã nhận: <b>${data.received}/${data.ordered}</b> (thiếu ${shortage})\n` +
+      `📅 Thời hạn: ${data.duration_days} ngày\n` +
+      `💵 Tổng đơn: ${data.total_price.toLocaleString('vi-VN')}đ\n` +
+      `💸 Cần hoàn: <b>${shortageAmount.toLocaleString('vi-VN')}đ</b>\n` +
+      `🆔 Mã: ${data.order_code}\n\n` +
+      `👉 Admin cần xử lý ở mục "Hoàn tiền số thiếu"`,
+      'order',
+    );
+  }
+
+  // ─── Order FAILED / PENDING_REFUND: provider lỗi ─────────────────────
+  async sendOrderFailed(userId: string, data: {
+    order_code:    string;
+    service_name:  string;
+    quantity:      number;
+    duration_days: number;
+    total_price:   number;
+    error_message: string;
+    provider_data?: any;
+    stage?:        string;  // 'buy' | 'polling' | ...
+  }) {
+    const userLabel = await this.resolveUserLabel(userId);
+    const stageLabel = data.stage === 'polling'
+      ? 'Polling provider'
+      : data.stage === 'buy'
+      ? 'Gọi API mua'
+      : 'Worker';
+    // Cắt provider_data nếu quá dài để không bị Telegram cắt cụt message
+    let providerSnippet = '';
+    if (data.provider_data) {
+      const raw = typeof data.provider_data === 'string'
+        ? data.provider_data
+        : JSON.stringify(data.provider_data);
+      providerSnippet = raw.length > 400 ? raw.slice(0, 400) + '…' : raw;
+    }
+    this.sendTelegram(
+      `❌ <b>Đơn hàng THẤT BẠI</b>\n\n` +
       `👤 ${userLabel}\n` +
       `📦 ${data.service_name}\n` +
       `🔢 Số lượng: ${data.quantity}\n` +
       `📅 Thời hạn: ${data.duration_days} ngày\n` +
-      `💵 Tổng: <b>${data.total_price.toLocaleString('vi-VN')}đ</b>\n` +
-      `🏦 Số dư còn: <b>${data.balance_after.toLocaleString('vi-VN')}đ</b>\n` +
-      `🆔 Mã: ${data.order_code}`,
+      `💵 Tổng: ${data.total_price.toLocaleString('vi-VN')}đ\n` +
+      `🆔 Mã: ${data.order_code}\n\n` +
+      `🚧 Giai đoạn: ${stageLabel}\n` +
+      `📝 Lỗi: <code>${(data.error_message || 'Unknown').slice(0, 500)}</code>` +
+      (providerSnippet ? `\n📡 Provider trả: <code>${providerSnippet}</code>` : ''),
       'order',
     );
   }
