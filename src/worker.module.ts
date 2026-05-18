@@ -9,6 +9,7 @@ import { OrderLog, OrderLogSchema } from './schemas/order-log.schema';
 import { RedisModule } from './redis/redis.module';
 import { ProxyProvidersModule } from './proxy-providers/proxy-providers.module';
 import { AffiliateModule } from './affiliate/affiliate.module';
+import { WebhookModule } from './webhook/webhook.module';
 import { OrdersWorkerService } from './orders/orders.worker.service';
 import { OrdersProcessingWorkerService } from './orders/orders-processing.worker.service';
 import { OrderLogService } from './orders/order-log.service';
@@ -44,6 +45,7 @@ import { OrderLogService } from './orders/order-log.service';
     RedisModule,
     ProxyProvidersModule,
     AffiliateModule,
+    WebhookModule,
   ],
   providers: [OrdersWorkerService, OrdersProcessingWorkerService, OrderLogService],
 })

@@ -219,15 +219,7 @@ export class OrdersService {
       userId,
     );
 
-    // Telegram notify
-    void this.notification.sendOrderSuccess(userId, {
-      order_code:   order.order_code,
-      service_name: service.name,
-      quantity,
-      duration_days: dto.duration_days,
-      total_price:   totalPrice,
-      balance_after: user.money,
-    });
+    // (Telegram notify đã chuyển sang worker — chỉ gửi sau khi provider trả proxy)
 
     // 6. Push order ID vào Redis List — worker BRPOP sẽ nhận ngay
     if (service.partner) {
