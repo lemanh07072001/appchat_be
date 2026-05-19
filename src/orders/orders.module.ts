@@ -14,7 +14,7 @@ import { ApiTokenGuard } from '../guards/api-token.guard';
 import { OrdersScheduler } from './orders.scheduler';
 import { OrdersProcessingScheduler } from './orders-processing.scheduler';
 import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
-import { OrdersRecoveryScheduler } from './orders-recovery.scheduler';
+// import { OrdersRecoveryScheduler } from './orders-recovery.scheduler'; // tạm tắt — bật lại khi cần fallback cho PENDING_REFUND
 import { OrderLogService } from './order-log.service';
 import { ProxyRotateService } from './proxy-rotate.service';
 import { ProxyProvidersModule } from '../proxy-providers/proxy-providers.module';
@@ -40,7 +40,7 @@ import { WebhookModule } from '../webhook/webhook.module';
     WebhookModule,
   ],
   controllers: [OrdersController],
-  providers: [OrdersService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler, OrdersRecoveryScheduler, OrderLogService, ProxyRotateService, ApiTokenGuard],
+  providers: [OrdersService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler, /* OrdersRecoveryScheduler, */ OrderLogService, ProxyRotateService, ApiTokenGuard],
   exports: [OrdersService],
 })
 export class OrdersModule {}
