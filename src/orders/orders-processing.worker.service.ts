@@ -20,9 +20,9 @@ import { Service, ServiceDocument } from '../schemas/services.schema';
 /** Timeout BRPOP — block tối đa 5s chờ order mới */
 const BRPOP_TIMEOUT_SECONDS  = 5;
 /** Delay giữa các lần poll khi chưa có proxy (ms) */
-const POLL_INTERVAL_MS       = 15_000;
+const POLL_INTERVAL_MS       = 5_000;
 /** Số lần poll tối đa trước khi bỏ cuộc */
-const MAX_POLL_ATTEMPTS      = 20;   // 20 × 15s = 5 phút tối đa
+const MAX_POLL_ATTEMPTS      = 20;   // 20 × 5s ≈ 1 phút 40 giây tối đa
 /** Số proxy insert mỗi batch */
 const INSERT_BATCH_SIZE      = 500;
 /** Số order xử lý đồng thời tối đa */
