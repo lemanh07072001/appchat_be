@@ -144,18 +144,23 @@ export class HomeproxyProvider implements IProxyProvider {
       page++;
     }
 
-    return allItems.map((p: any) => ({
+    return allItems.map((p: any) => {
+      // HomeProxy trả "SOCKS" cho SOCKS5 — chuẩn hoá về enum của ProxyProtocolEnum
+      const rawProto = (p.protocol ?? 'http').toLowerCase();
+      const normalizedProto = rawProto === 'socks' ? 'socks5' : rawProto;
+      return ({
       host:              p.proxy?.ipaddress?.ip ?? p.proxy?.ipaddress?.domain ?? '',
       port:              Number(p.proxy?.port ?? 0),
       username:          p.proxy?.username ?? '',
       password:          p.proxy?.password ?? '',
-      protocol:          (p.protocol ?? 'http').toLowerCase(),
+      protocol:          normalizedProto,
       provider_proxy_id: p.id != null ? String(p.id) : undefined,
       domain:            p.proxy?.ipaddress?.domain ?? undefined,
       prev_ip:           p.proxy?.ipaddress?.prevIp ?? undefined,
       location:          p.proxy?.ipaddress?.location ?? undefined,
       isp:               p.proxy?.ipaddress?.provider ?? undefined,
-    }));
+    });
+    });
   }
 
   // ─── Gia hạn ─────────────────────────────────────────────────────────────────

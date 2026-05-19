@@ -113,15 +113,22 @@ export class ProxyvnProvider implements IProxyProvider {
 
     const proxies: ProxyCredential[] = items
       .filter((item) => item?.status === 100)
-      .map((item) => ({
+      .map((item) => {
+        // Chuẩn hoá protocol về enum ProxyProtocolEnum (http/https/socks5):
+        // - "HTTPS" → "http" (proxy không phân biệt http/https phía client)
+        // - "SOCKS" → "socks5" (tránh Mongoose drop validation âm thầm)
+        const rawProto = (item.type ?? type).toLowerCase().replace('https', 'http');
+        const normalizedProto = rawProto === 'socks' ? 'socks5' : rawProto;
+        return ({
         host:              item.ip,
         port:              Number(item.port),
         username:          stripUserPrefix(item.user),
         password:          item.password ?? '',
-        protocol:          (item.type ?? type).toLowerCase().replace('https', 'http'),
+        protocol:          normalizedProto,
         provider_proxy_id: item.idproxy,
         isp:               item.loaiproxy ?? loaiproxy,
-      }));
+        });
+      });
 
     return { provider_order_id: '', proxies, raw };
   }

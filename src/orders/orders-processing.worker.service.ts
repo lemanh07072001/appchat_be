@@ -20,13 +20,13 @@ import { Service, ServiceDocument } from '../schemas/services.schema';
 /** Timeout BRPOP — block tối đa 5s chờ order mới */
 const BRPOP_TIMEOUT_SECONDS  = 5;
 /** Delay giữa các lần poll khi chưa có proxy (ms) */
-const POLL_INTERVAL_MS       = 2_000;
+const POLL_INTERVAL_MS       = 15_000;
 /** Số lần poll tối đa trước khi bỏ cuộc */
-const MAX_POLL_ATTEMPTS      = 20;   // 20 × 2s = 40s tối đa
+const MAX_POLL_ATTEMPTS      = 20;   // 20 × 15s = 5 phút tối đa
 /** Số proxy insert mỗi batch */
 const INSERT_BATCH_SIZE      = 500;
 /** Số order xử lý đồng thời tối đa */
-const MAX_CONCURRENCY        = 5;
+const MAX_CONCURRENCY        = 10;
 
 @Injectable()
 export class OrdersProcessingWorkerService implements OnModuleInit {
@@ -207,7 +207,18 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
           }
         }
 
-        const received = proxies.length;
+        // Safety net: Mongoose có thể silent-drop docs fail validation (vd: enum sai).
+        // Đếm thực tế và throw nếu lệch — outer catch sẽ log POLLING_FAILED, tránh ngầm ACTIVE-no-proxy
+        const actuallyInserted = await this.proxyModel.countDocuments({ order_id: order._id }).exec();
+        if (actuallyInserted < proxyDocs.length) {
+          const dropped = proxyDocs.length - actuallyInserted;
+          void this.orderLogService.error(orderId, OrderLogStep.POLLING_FAILED,
+            `Silent drop: gửi ${proxyDocs.length} doc, MongoDB lưu ${actuallyInserted} (drop ${dropped}) — kiểm tra schema validation`,
+            { sent: proxyDocs.length, saved: actuallyInserted, dropped, sample_doc: proxyDocs[0] });
+          throw new Error(`Mongoose drop ${dropped}/${proxyDocs.length} proxy doc do validation — sample: ${JSON.stringify(proxyDocs[0])}`);
+        }
+
+        const received = actuallyInserted;
         const ordered  = order.quantity;
 
         const service = order.service_id

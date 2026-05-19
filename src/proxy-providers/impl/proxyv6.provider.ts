@@ -64,13 +64,20 @@ export class Proxyv6Provider implements IProxyProvider {
     // Thay đổi mapping theo cấu trúc JSON thực tế trả về
     return {
       provider_order_id: String(raw.order_id ?? raw.id),
-      proxies: (raw.proxies ?? []).map((p: any) => ({
-        host:     p.ip ?? p.host,
-        port:     Number(p.port),
-        username: p.username ?? p.user,
-        password: p.password ?? p.pass,
-        protocol: p.protocol ?? params.protocol ?? 'http',
-      })),
+      proxies: (raw.proxies ?? []).map((p: any) => {
+        // Chuẩn hoá protocol về enum (http/https/socks5):
+        // - Lowercase phòng provider trả "SOCKS5", "HTTP", "Http"
+        // - "socks" → "socks5" để tránh Mongoose silent drop validation
+        const rawProto = String(p.protocol ?? params.protocol ?? 'http').toLowerCase();
+        const normalizedProto = rawProto === 'socks' ? 'socks5' : rawProto;
+        return ({
+          host:     p.ip ?? p.host,
+          port:     Number(p.port),
+          username: p.username ?? p.user,
+          password: p.password ?? p.pass,
+          protocol: normalizedProto,
+        });
+      }),
       raw,
     };
   }

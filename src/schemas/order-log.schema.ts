@@ -45,6 +45,11 @@ export enum OrderLogStep {
   POLLING_NO_PROXIES     = 'polling.no_proxies',
   POLLING_FAILED         = 'polling.failed',
 
+  // ─── Recovery scheduler (OrdersRecoveryScheduler) ───────────────────
+  RECOVERY_ATTEMPTED     = 'recovery.attempted',
+  RECOVERY_SUCCEEDED     = 'recovery.succeeded',
+  RECOVERY_FAILED        = 'recovery.failed',
+
   // ─── Expiration scheduler ────────────────────────────────────────────
   EXPIRED                = 'expired',
 

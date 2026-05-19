@@ -339,7 +339,18 @@ export class OrdersWorkerService implements OnModuleInit {
           }
         }
 
-        const received = result.proxies.length;
+        // Safety net: Mongoose có thể silent-drop docs fail validation (vd: enum sai)
+        // Đếm thực tế đã lưu — nếu lệch thì throw để order → PENDING_REFUND chứ không ngầm ACTIVE-no-proxy
+        const actuallyInserted = await this.proxyModel.countDocuments({ order_id: order!._id }).exec();
+        if (actuallyInserted < proxyDocs.length) {
+          const dropped = proxyDocs.length - actuallyInserted;
+          void this.orderLogService.error(orderId, OrderLogStep.WORKER_PROVIDER_FAIL,
+            `Silent drop: gửi ${proxyDocs.length} doc, MongoDB lưu ${actuallyInserted} (drop ${dropped}) — kiểm tra schema validation`,
+            { sent: proxyDocs.length, saved: actuallyInserted, dropped, sample_doc: proxyDocs[0] });
+          throw new Error(`Mongoose drop ${dropped}/${proxyDocs.length} proxy doc do validation — sample: ${JSON.stringify(proxyDocs[0])}`);
+        }
+
+        const received = actuallyInserted;
         const ordered  = order!.quantity;
 
         if (received < ordered) {
