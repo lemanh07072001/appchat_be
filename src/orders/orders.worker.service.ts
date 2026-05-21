@@ -209,6 +209,7 @@ export class OrdersWorkerService implements OnModuleInit {
             is_cdk:           bodyApi?.isCdk === true,
             username:         order.config?.username as string | undefined,
             password:         order.config?.password as string | undefined,
+            user_id:          order.user_id?.toString(),
           });
 
           const providerCallMs = Date.now() - tAttempt;

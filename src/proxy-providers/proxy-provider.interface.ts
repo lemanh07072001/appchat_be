@@ -14,6 +14,7 @@ export interface ProviderBuyParams {
   is_cdk?: boolean;          // true = key xoay (gửi lên HomeProxy để phân biệt), false = proxy xoay thường
   username?: string;         // username tự chọn — nếu không có thì provider tự random
   password?: string;         // password tự chọn — nếu không có thì provider tự random
+  user_id?: string;          // user của hệ thống (vd dùng để gắn customTargetName cho ProxySeller)
 }
 
 export interface ProviderRenewParams {

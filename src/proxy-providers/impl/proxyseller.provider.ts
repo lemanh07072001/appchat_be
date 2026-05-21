@@ -142,6 +142,7 @@ export class ProxysellerProvider implements IProxyProvider {
       id_service,
       body_api,
       duration_days,
+      user_id,
     } = params;
 
     const type = this.resolveType(id_service);
@@ -177,12 +178,17 @@ export class ProxysellerProvider implements IProxyProvider {
       );
     }
 
+    // customTargetName = "proxy" + userId để dễ trace từ phía ProxySeller
+    const customTargetName: string = user_id
+      ? `proxy${user_id}`
+      : ((extra.customTargetName as string | undefined) ?? '');
+
     const payload: Record<string, any> = {
       countryId: String(extra.countryId),
       periodId: String(periodId),
       paymentId: String(extra.paymentId ?? 1), // 1 = balance
       quantity,
-      customTargetName: extra.customTargetName ?? '',
+      customTargetName,
     };
 
     this.logger.log(`[BUY] type=${type} payload=${JSON.stringify(payload)}`);
