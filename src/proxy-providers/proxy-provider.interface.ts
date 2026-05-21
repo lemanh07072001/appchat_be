@@ -49,11 +49,13 @@ export interface ProxyCredential {
   location?:          string;   // location code (VD: HNI)
   isp?:               string;   // nhà mạng (VD: VIETTEL)
   country_code?:      string;
+  provider_metadata?: Record<string, any>; // raw item từ provider (lưu nguyên cho debug/rotate/...)
 }
 
 export interface BuyResult {
   provider_order_id: string;   // ID để dùng cho renew / rotate / cancel sau này
   proxies: ProxyCredential[];  // danh sách proxy trả về (static: nhiều IP, rotating: 1 gateway)
+  provider_metadata?: Record<string, any>; // metadata tự do persist vào order (vd: listBaseOrderNumbers)
   raw?: any;                   // raw response của provider (để debug / lưu log)
 }
 
@@ -75,6 +77,14 @@ export interface IProxyProvider {
   renew(params: ProviderRenewParams): Promise<RenewResult>;
   rotate(params: ProviderRotateParams): Promise<RotateResult>;
   cancel(params: ProviderCancelParams): Promise<void>;
-  /** Lấy danh sách proxy theo order ID (dành cho provider trả về proxy async) */
-  fetchOrderProxies?(token_api: string, provider_order_id: string): Promise<ProxyCredential[]>;
+  /**
+   * Lấy danh sách proxy theo order ID (dành cho provider trả về proxy async).
+   * `context.metadata` = `order.provider_metadata` lưu sẵn từ lúc buy() — provider có thể đọc
+   * các field cần thiết để gọi API (vd ProxySeller cần country trong query string).
+   */
+  fetchOrderProxies?(
+    token_api: string,
+    provider_order_id: string,
+    context?: { metadata?: Record<string, any> },
+  ): Promise<ProxyCredential[]>;
 }

@@ -1275,7 +1275,11 @@ export class OrdersService {
       await order.save();
     }
 
-    const proxies = await provider.fetchOrderProxies(partner.token_api, providerOrderId);
+    const proxies = await provider.fetchOrderProxies(
+      partner.token_api,
+      providerOrderId,
+      { metadata: order.provider_metadata },
+    );
 
     if (!proxies || proxies.length === 0) {
       void this.orderLogService.warn(

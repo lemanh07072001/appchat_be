@@ -151,6 +151,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
         const proxies = await provider.fetchOrderProxies(
           partner.token_api,
           order.provider_order_id,
+          { metadata: order.provider_metadata },
         );
         this.logger.log(`Order ${orderId}: [STEP 4] fetchOrderProxies returned ${proxies?.length ?? 0} proxies (${Date.now() - tPoll}ms)`);
 
@@ -184,6 +185,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
           auth_username:     p.username,
           auth_password:     p.password,
           provider_proxy_id: p.provider_proxy_id ?? undefined,
+          provider_metadata: p.provider_metadata ?? {},
           domain:            p.domain   ?? '',
           prev_ip:           p.prev_ip  ?? '',
           location:          p.location ?? '',

@@ -304,6 +304,9 @@ export class OrdersWorkerService implements OnModuleInit {
       await this.redis.del(failKey);
 
       order!.provider_order_id = result.provider_order_id;
+      if (result.provider_metadata && Object.keys(result.provider_metadata).length > 0) {
+        order!.provider_metadata = result.provider_metadata;
+      }
 
       // Nếu provider trả proxy ngay (ProxyVN) → lưu luôn
       if (result.proxies && result.proxies.length > 0) {
@@ -316,6 +319,7 @@ export class OrdersWorkerService implements OnModuleInit {
           auth_username:     p.username,
           auth_password:     p.password,
           provider_proxy_id: p.provider_proxy_id ?? undefined,
+          provider_metadata: p.provider_metadata ?? {},
           domain:            p.domain   ?? '',
           prev_ip:           p.prev_ip  ?? '',
           location:          p.location ?? '',

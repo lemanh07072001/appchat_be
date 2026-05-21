@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, Schema as MongooseSchema, Types } from 'mongoose';
 import { HealthStatusEnum, ProxyProtocolEnum } from '../enum/proxy.enum';
 
 export type ProxyDocument = Proxy & Document & {
@@ -41,6 +41,10 @@ export class Proxy {
 
   @Prop({ type: String })
   provider_proxy_id: string;
+
+  // Metadata thô từ provider (lưu raw item để debug + dùng cho rotate/cancel sau này)
+  @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
+  provider_metadata: Record<string, any>;
 
   // Key xoay CDK — chỉ có với proxy isCdk:true (HomeProxy). Không set default để sparse index hoạt động đúng
   @Prop({ type: String })

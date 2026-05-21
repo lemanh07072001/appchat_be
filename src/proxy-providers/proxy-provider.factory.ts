@@ -35,9 +35,9 @@ export class ProxyProviderFactory implements OnModuleInit {
 
   onModuleInit() {
     try {
-      this.registry.set('proxyv6',   this.proxyv6);
+      this.registry.set('proxyv6', this.proxyv6);
       this.registry.set('homeproxy', this.homeproxy);
-      this.registry.set('proxyvn',   this.proxyvn);
+      this.registry.set('proxyvn', this.proxyvn);
       this.registry.set('proxysieutoc', this.proxysieutoc);
       this.registry.set('twoproxy', this.twoproxy);
       this.registry.set('proxyseller', this.proxyseller);

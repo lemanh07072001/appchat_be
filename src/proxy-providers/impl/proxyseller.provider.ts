@@ -26,16 +26,31 @@ interface OrderMakeData {
 
 interface ProxyListItem {
   id: string;
+  order_id: string;
+  order_number: string;
+  base_order_number: string;
+  basket_id: string;
   ip: string;
-  protocol: string;        // "HTTP" | "SOCKS"
+  ip_only: string;
+  protocol: string; // "HTTP" | "SOCKS"
   port_http: number;
   port_socks: number;
   login: string;
   password: string;
-  country: string;
-  status: string;
-  date_start: string;
-  date_end: string;
+  auth_ip: string;
+  rotation: any;
+  link_reboot: string;
+  country: string; // tên quốc gia, vd "Japan"
+  country_alpha3: string; // ISO alpha-3, vd "JPN"
+  status: string; // vd "Active"
+  status_type: string; // vd "ACTIVE"
+  can_prolong: boolean;
+  date_start: string; // dd.mm.yyyy
+  date_end: string; // dd.mm.yyyy
+  comment: string;
+  auto_renew: string; // "Y" | "N"
+  auto_renew_period: string;
+  is_uptime?: boolean;
 }
 
 interface ProxyListData {
@@ -46,8 +61,8 @@ interface ProxyListData {
 
 @Injectable()
 export class ProxysellerProvider implements IProxyProvider {
-  private readonly logger     = new Logger(ProxysellerProvider.name);
-  private readonly BASE_URL   = 'https://proxy-seller.com/personal/api/v1';
+  private readonly logger = new Logger(ProxysellerProvider.name);
+  private readonly BASE_URL = 'https://proxy-seller.com/personal/api/v1';
   private readonly TIMEOUT_MS = 60_000;
   private readonly DEFAULT_TYPE = 'ipv4';
 
@@ -103,21 +118,35 @@ export class ProxysellerProvider implements IProxyProvider {
     return t;
   }
 
+  // Map duration_days → periodId theo format proxy-seller (1w, 2w, 1m, ...)
+  private mapDurationToPeriodId(days: number): string | null {
+    const map: Record<number, string> = {
+      1: '1d',
+      7: '1w',
+      14: '2w',
+      30: '1m',
+      60: '2m',
+      90: '3m',
+      180: '6m',
+      365: '1y',
+    };
+    return map[days] ?? null;
+  }
+
   // ─── Mua proxy ───────────────────────────────────────────────────────────────
 
   async buy(params: ProviderBuyParams): Promise<BuyResult> {
     const {
       token_api: key,
       quantity,
-      country_code,
-      protocol,
       id_service,
       body_api,
+      duration_days,
     } = params;
 
     const type = this.resolveType(id_service);
 
-    // periodId là bắt buộc theo doc — lấy từ body_api JSON ({ "periodId": "..." })
+    // body_api JSON cho phép override mặc định (vd: { "periodId": "1m", "countryId": 20 })
     let extra: Record<string, any> = {};
     if (body_api) {
       try {
@@ -128,37 +157,40 @@ export class ProxysellerProvider implements IProxyProvider {
       }
     }
 
-    if (!extra.periodId) {
-      throw new BadRequestException('ProxySeller: thiếu periodId trong body_api');
+    // periodId: ưu tiên body_api.periodId, fallback auto-map từ duration_days
+    const periodId = extra.periodId ?? this.mapDurationToPeriodId(duration_days);
+    if (!periodId) {
+      throw new BadRequestException(
+        `ProxySeller: không map được periodId cho duration_days=${duration_days}. ` +
+          `Hỗ trợ: 1, 7, 14, 30, 60, 90, 180, 365. Hoặc set periodId trong body_api.`,
+      );
+    }
+
+    // countryId: bắt buộc, luôn lấy từ body_api (vd: { "countryId": "1293" })
+    if (
+      extra.countryId === undefined ||
+      extra.countryId === null ||
+      extra.countryId === ''
+    ) {
+      throw new BadRequestException(
+        'ProxySeller: thiếu countryId trong body_api của service',
+      );
     }
 
     const payload: Record<string, any> = {
-      countryId:  country_code ? Number(country_code) : extra.countryId,
-      periodId:   String(extra.periodId),
-      paymentId:  extra.paymentId ?? 1,                     // 1 = balance
+      countryId: String(extra.countryId),
+      periodId: String(periodId),
+      paymentId: String(extra.paymentId ?? 1), // 1 = balance
       quantity,
-      coupon:     extra.coupon ?? '',
-      authorization: extra.authorization ?? '',
       customTargetName: extra.customTargetName ?? '',
     };
 
-    if (type === 'ipv6') {
-      payload.protocol = (protocol || 'HTTPS').toUpperCase() === 'SOCKS5' ? 'SOCKS5' : 'HTTPS';
-    }
-    if (['ipv4', 'isp', 'mix', 'mix_isp'].includes(type)) {
-      payload.generateAuth = extra.generateAuth ?? 'N';
-    }
-    if (type === 'mobile') {
-      payload.mobileServiceType = extra.mobileServiceType ?? 'shared';
-      if (extra.operatorId) payload.operatorId = extra.operatorId;
-      if (extra.rotationId) payload.rotationId = extra.rotationId;
-    }
-    if (type === 'resident' && extra.tarifId) {
-      payload.tarifId = extra.tarifId;
-    }
-
     this.logger.log(`[BUY] type=${type} payload=${JSON.stringify(payload)}`);
-    const raw = await this.request<OrderMakeData>('POST', `/${key}/order/make/${type}`, payload);
+    const raw = await this.request<OrderMakeData>(
+      'POST',
+      `/${key}/order/make`,
+      payload,
+    );
     this.logger.log(`[BUY] raw response: ${JSON.stringify(raw)}`);
 
     if (raw.status !== 'success' || !raw.data?.orderId) {
@@ -170,24 +202,37 @@ export class ProxysellerProvider implements IProxyProvider {
 
     return {
       provider_order_id: composedId,
-      proxies: [],   // lấy sau qua fetchOrderProxies
+      proxies: [], // lấy sau qua fetchOrderProxies
+      provider_metadata: {
+        proxyseller_order_id: raw.data.orderId,
+        listBaseOrderNumbers: raw.data.listBaseOrderNumbers ?? [],
+      },
       raw,
     };
   }
 
   // ─── Lấy proxy theo order ────────────────────────────────────────────────────
 
-  async fetchOrderProxies(token_api: string, provider_order_id: string): Promise<ProxyCredential[]> {
+  async fetchOrderProxies(
+    token_api: string,
+    provider_order_id: string,
+  ): Promise<ProxyCredential[]> {
     const [type, orderId] = provider_order_id.includes(':')
       ? provider_order_id.split(':')
       : [this.DEFAULT_TYPE, provider_order_id];
+
+    const query: Record<string, string | number> = {
+      orderId,
+      latest: 'N',
+      ends: 'Y',
+    };
 
     this.logger.log(`[LIST] type=${type} orderId=${orderId}`);
     const raw = await this.request<ProxyListData>(
       'GET',
       `/${token_api}/proxy/list/${type}`,
       undefined,
-      { orderId },
+      query,
     );
     this.logger.log(`[LIST] raw response: ${JSON.stringify(raw)}`);
 
@@ -206,13 +251,14 @@ export class ProxysellerProvider implements IProxyProvider {
       const proto = (item.protocol || 'HTTP').toLowerCase();
       const port = proto === 'socks' || proto === 'socks5' ? item.port_socks : item.port_http;
       return {
-        host:              item.ip,
-        port:              Number(port),
-        username:          item.login,
-        password:          item.password,
-        protocol:          proto === 'socks' ? 'socks5' : proto,   // chuẩn hoá về 'socks5'
+        host: item.ip,
+        port: Number(port),
+        username: item.login,
+        password: item.password,
+        protocol: proto === 'socks' ? 'socks5' : proto, // chuẩn hoá về 'socks5'
         provider_proxy_id: String(item.id),
-        country_code:      item.country,
+        country_code: (item.country_alpha3 || item.country || '').toLowerCase(),
+        provider_metadata: item, // lưu nguyên raw item
       } as ProxyCredential;
     });
   }

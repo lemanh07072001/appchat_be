@@ -112,6 +112,10 @@ export class Order {
   @Prop({ default: '' })
   provider_order_id: string;
 
+  // Metadata tự do từ provider (vd ProxySeller: { listBaseOrderNumbers: [...] })
+  @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
+  provider_metadata: Record<string, any>;
+
   // ─── Gia hạn ──────────────────────────────────────────────
   @Prop({ default: false })
   auto_renew: boolean;
