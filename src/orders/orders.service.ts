@@ -1327,6 +1327,7 @@ export class OrdersService {
           is_available:      false,
         };
         if (p.provider_proxy_id) doc.provider_proxy_id = p.provider_proxy_id;
+        if (p.provider_metadata) doc.provider_metadata = p.provider_metadata;
         if (isCdk) doc.cdk_key = crypto.randomBytes(16).toString('hex');
         return doc;
       });
