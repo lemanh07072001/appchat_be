@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import * as https from 'node:https';
 import {
   IProxyProvider,
   ProviderBuyParams,
@@ -67,6 +68,64 @@ export class ProxysellerProvider implements IProxyProvider {
   private readonly DEFAULT_TYPE = 'ipv4';
 
   // ─── Helper HTTP ─────────────────────────────────────────────────────────────
+
+  /**
+   * GET + body — fetch không cho phép, fallback sang raw node:https.
+   * ProxySeller `/proxy/list/{type}` chỉ đọc params từ body, không từ query string.
+   */
+  private getWithBody<T>(
+    path: string,
+    body: Record<string, any>,
+  ): Promise<PsResponse<T>> {
+    return new Promise((resolve, reject) => {
+      const url = new URL(`${this.BASE_URL}${path}`);
+      const payload = JSON.stringify(body);
+      const req = https.request(
+        {
+          hostname: url.hostname,
+          port: url.port || 443,
+          path: url.pathname + url.search,
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+          },
+          timeout: this.TIMEOUT_MS,
+        },
+        (res) => {
+          let data = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk) => (data += chunk));
+          res.on('end', () => {
+            try {
+              resolve(JSON.parse(data) as PsResponse<T>);
+            } catch {
+              reject(
+                new BadRequestException(
+                  `ProxySeller invalid JSON: ${data.slice(0, 200)}`,
+                ),
+              );
+            }
+          });
+        },
+      );
+      req.on('timeout', () => {
+        req.destroy();
+        reject(
+          new BadRequestException(
+            `ProxySeller API timeout after ${this.TIMEOUT_MS}ms`,
+          ),
+        );
+      });
+      req.on('error', (err) => {
+        reject(
+          new BadRequestException(`ProxySeller network error: ${err.message}`),
+        );
+      });
+      req.write(payload);
+      req.end();
+    });
+  }
 
   private async request<T>(
     method: 'GET' | 'POST',
@@ -249,18 +308,16 @@ export class ProxysellerProvider implements IProxyProvider {
       context?.metadata,
     );
 
-    const query: Record<string, string | number> = {
+    const body = {
       orderId,
       latest: 'N',
       ends: 'Y',
     };
 
     this.logger.log(`[LIST] type=${type} orderId=${orderId}`);
-    const raw = await this.request<ProxyListData>(
-      'GET',
+    const raw = await this.getWithBody<ProxyListData>(
       `/${token_api}/proxy/list/${type}`,
-      undefined,
-      query,
+      body,
     );
     this.logger.log(`[LIST] raw response: ${JSON.stringify(raw)}`);
 
