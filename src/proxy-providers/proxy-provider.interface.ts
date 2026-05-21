@@ -23,6 +23,7 @@ export interface ProviderRenewParams {
   duration_days: number;
   provider_proxy_ids?: string[]; // ID từng proxy (dùng cho provider gia hạn theo proxy, vd: ProxyVN)
   id_service?: string;           // loaiproxy (dùng cho ProxyVN)
+  provider_metadata?: Record<string, any>; // metadata lưu sẵn từ buy() (ProxySeller: lấy type ra)
 }
 
 export interface ProviderRotateParams {

@@ -1051,6 +1051,7 @@ export class OrdersService {
         duration_days,
         provider_proxy_ids: proxies.map(p => p.provider_proxy_id),
         id_service:         idService,
+        provider_metadata:  order.provider_metadata,
       });
     } catch (err: any) {
       // Rollback tiền nếu provider fail

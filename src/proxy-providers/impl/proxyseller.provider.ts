@@ -203,17 +203,37 @@ export class ProxysellerProvider implements IProxyProvider {
       throw new BadRequestException(`ProxySeller buy error: ${JSON.stringify(raw.errors ?? raw)}`);
     }
 
-    // Lưu cả orderId và type để fetchOrderProxies/renew có thể dùng. Format: "{type}:{orderId}"
-    const composedId = `${type}:${raw.data.orderId}`;
-
     return {
-      provider_order_id: composedId,
+      // raw orderId — type lưu vào provider_metadata.proxyseller_type
+      provider_order_id: String(raw.data.orderId),
       proxies: [], // lấy sau qua fetchOrderProxies
       provider_metadata: {
         proxyseller_order_id: raw.data.orderId,
+        proxyseller_type: type,
         listBaseOrderNumbers: raw.data.listBaseOrderNumbers ?? [],
       },
       raw,
+    };
+  }
+
+  // ─── Helper parse provider_order_id (backward-compat) ───────────────────────
+  /**
+   * Lấy `{ type, orderId }` từ provider_order_id + metadata.
+   * - Format mới: provider_order_id = "4742113" (raw), type ← metadata.proxyseller_type
+   * - Format cũ:  provider_order_id = "ipv4:4742113" (composed) → tách bằng dấu ":"
+   */
+  private parseOrderRef(
+    provider_order_id: string,
+    metadata?: Record<string, any>,
+  ): { type: string; orderId: string } {
+    if (provider_order_id.includes(':')) {
+      const [t, id] = provider_order_id.split(':');
+      return { type: t, orderId: id };
+    }
+    const metaType = metadata?.proxyseller_type as string | undefined;
+    return {
+      type: metaType || this.DEFAULT_TYPE,
+      orderId: provider_order_id,
     };
   }
 
@@ -222,10 +242,12 @@ export class ProxysellerProvider implements IProxyProvider {
   async fetchOrderProxies(
     token_api: string,
     provider_order_id: string,
+    context?: { metadata?: Record<string, any> },
   ): Promise<ProxyCredential[]> {
-    const [type, orderId] = provider_order_id.includes(':')
-      ? provider_order_id.split(':')
-      : [this.DEFAULT_TYPE, provider_order_id];
+    const { type, orderId } = this.parseOrderRef(
+      provider_order_id,
+      context?.metadata,
+    );
 
     const query: Record<string, string | number> = {
       orderId,
@@ -278,6 +300,7 @@ export class ProxysellerProvider implements IProxyProvider {
       provider_proxy_ids,
       duration_days,
       id_service,
+      provider_metadata,
     } = params;
 
     // ưu tiên ids = từng proxy id; fallback dùng orderId nếu không có
@@ -286,13 +309,19 @@ export class ProxysellerProvider implements IProxyProvider {
       : [];
 
     if (!ids.length) {
-      throw new BadRequestException('ProxySeller renew: thiếu provider_proxy_ids');
+      throw new BadRequestException(
+        'ProxySeller renew: thiếu provider_proxy_ids',
+      );
     }
 
-    const [typeFromOrder] = provider_order_id?.includes(':')
-      ? provider_order_id.split(':')
-      : [id_service || this.DEFAULT_TYPE];
-    const type = this.resolveType(typeFromOrder);
+    // Resolve type: provider_metadata.proxyseller_type > old "type:id" format > id_service > default
+    const parsed = this.parseOrderRef(
+      provider_order_id ?? '',
+      provider_metadata as Record<string, any> | undefined,
+    );
+    const type = this.resolveType(
+      parsed.type || id_service || this.DEFAULT_TYPE,
+    );
 
     // periodId truyền qua id_service (vd: "ipv4|7" — type|periodId) nếu không có cách khác.
     // Tạm dùng duration_days map → periodId nếu khách dùng số ngày chuẩn của ProxySeller.

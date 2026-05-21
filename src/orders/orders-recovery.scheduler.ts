@@ -120,7 +120,11 @@ export class OrdersRecoveryScheduler {
 
     let proxies: any[];
     try {
-      proxies = await provider.fetchOrderProxies(partner.token_api, order.provider_order_id);
+      proxies = await provider.fetchOrderProxies(
+        partner.token_api,
+        order.provider_order_id,
+        { metadata: order.provider_metadata },
+      );
     } catch (err: any) {
       this.logger.warn(`Recovery ${orderId}: fetchOrderProxies error — ${err?.message}`);
       void this.orderLogService.warn(orderId, OrderLogStep.RECOVERY_FAILED,

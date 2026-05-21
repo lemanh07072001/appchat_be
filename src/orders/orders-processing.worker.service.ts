@@ -82,7 +82,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
 
     const order = await this.orderModel
       .findById(orderId)
-      .select('_id provider_order_id partner_id service_id config user_id total_price quantity status')
+      .select('_id provider_order_id provider_metadata partner_id service_id config user_id total_price quantity status')
       .exec();
 
     if (!order) {
