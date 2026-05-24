@@ -191,6 +191,13 @@ export class ProxysellerProvider implements IProxyProvider {
       customTargetName,
     };
 
+    // Protocol: chỉ gửi nếu service config (body_api.protocol) hoặc order (params.protocol) có yêu cầu.
+    // ProxySeller chấp nhận "HTTP" hoặc "SOCKS" — chuẩn hoá từ socks/socks5 → "SOCKS", còn lại → "HTTP".
+    const rawProto = String(extra.protocol ?? params.protocol ?? '').toLowerCase();
+    if (rawProto) {
+      payload.protocol = rawProto === 'socks' || rawProto === 'socks5' ? 'SOCKS' : 'HTTP';
+    }
+
     this.logger.log(`[BUY] type=${type} payload=${JSON.stringify(payload)}`);
     const raw = await this.request<OrderMakeData>(
       'POST',
