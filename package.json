@@ -33,9 +33,11 @@
     "@nestjs/schedule": "^6.1.1",
     "@nestjs/serve-static": "^5.0.4",
     "@nestjs/websockets": "^11.1.16",
+    "axios": "^1.16.1",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
+    "https-proxy-agent": "^9.0.0",
     "ioredis": "^5.10.0",
     "mongoose": "^9.1.6",
     "multer": "^2.1.1",
@@ -43,7 +45,8 @@
     "passport-local": "^1.0.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "sharp": "^0.34.5"
+    "sharp": "^0.34.5",
+    "socks-proxy-agent": "^10.0.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

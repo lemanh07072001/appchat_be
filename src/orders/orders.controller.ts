@@ -4,6 +4,7 @@ import { OrdersService } from './orders.service';
 import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
 import { OrderLogService } from './order-log.service';
 import { ProxyRotateService } from './proxy-rotate.service';
+import { ProxyCheckService } from './proxy-check.service';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { BuyOrderDto } from '../dto/buy-order.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
@@ -22,6 +23,7 @@ export class OrdersController {
     private readonly expirationScheduler: OrdersExpirationScheduler,
     private readonly orderLogService: OrderLogService,
     private readonly proxyRotateService: ProxyRotateService,
+    private readonly proxyCheckService: ProxyCheckService,
   ) {}
 
   @Post('api/admin/orders/run-expiration')
@@ -95,6 +97,20 @@ export class OrdersController {
   ) {
     const userId = (req as any).user.sub as string;
     return this.ordersService.renewByUser(userId, id, duration_days);
+  }
+
+  // ─── User: kiểm tra 1 proxy còn sống & lấy IP thật ─────────
+  @Post('api/orders/proxies/:proxyId/check')
+  checkProxy(@Req() req: Request, @Param('proxyId') proxyId: string) {
+    const userId = (req as any).user.sub as string;
+    return this.proxyCheckService.checkOne(proxyId, userId);
+  }
+
+  // ─── User: kiểm tra toàn bộ proxy trong 1 order ────────────
+  @Post('api/orders/my/:id/check-all')
+  checkAllProxies(@Req() req: Request, @Param('id') id: string) {
+    const userId = (req as any).user.sub as string;
+    return this.proxyCheckService.checkMany(id, userId);
   }
 
   // ─── Admin ────────────────────────────────────────────────

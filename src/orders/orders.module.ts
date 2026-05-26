@@ -17,6 +17,7 @@ import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
 // import { OrdersRecoveryScheduler } from './orders-recovery.scheduler'; // tạm tắt — bật lại khi cần fallback cho PENDING_REFUND
 import { OrderLogService } from './order-log.service';
 import { ProxyRotateService } from './proxy-rotate.service';
+import { ProxyCheckService } from './proxy-check.service';
 import { ProxyProvidersModule } from '../proxy-providers/proxy-providers.module';
 import { AffiliateModule } from '../affiliate/affiliate.module';
 import { WalletModule } from '../wallet/wallet.module';
@@ -40,7 +41,7 @@ import { WebhookModule } from '../webhook/webhook.module';
     WebhookModule,
   ],
   controllers: [OrdersController],
-  providers: [OrdersService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler, /* OrdersRecoveryScheduler, */ OrderLogService, ProxyRotateService, ApiTokenGuard],
+  providers: [OrdersService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler, /* OrdersRecoveryScheduler, */ OrderLogService, ProxyRotateService, ProxyCheckService, ApiTokenGuard],
   exports: [OrdersService],
 })
 export class OrdersModule {}
