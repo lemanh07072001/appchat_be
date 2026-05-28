@@ -56,8 +56,17 @@ export class Service {
   @Prop({ default: true })
   show_user_pass: boolean;
 
+  @Prop({ default: true })
+  allow_renew: boolean;
+
   @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
   pricing: Record<string, any>;
+
+  // Giá ưu đãi cho user cụ thể, lưu số tiền giảm trên 1 proxy / ngày theo duration.
+  // Cấu trúc: { [userId]: { [duration_days]: discount_amount } }
+  // VD: { "6a1666...": { "30": 500 } } → user X mua gói 30 ngày, giá/proxy/ngày giảm 500đ.
+  @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
+  user_discounts: Record<string, Record<string, number>>;
 
   // Giới hạn số lượng proxy mua/đơn (mode duration: count × days).
   @Prop({ default: 1, min: 1 })

@@ -90,6 +90,31 @@ export class WebhookController {
     return this.webhookService.handleSepay(body, req.headers, req.ip);
   }
 
+  // ─── Binance Pay gọi vào đây khi có giao dịch (SKELETON) ───────────────
+  // TODO: Khi có Binance Merchant credentials, verify RSA signature từ các header:
+  // - BinancePay-Timestamp
+  // - BinancePay-Nonce
+  // - BinancePay-Signature
+  // - BinancePay-Certificate-SN
+  // Doc: https://developers.binance.com/docs/binance-pay/api-webhook
+  @Public()
+  @Post('webhook/binance-pay')
+  async handleBinancePay(
+    @Req() req: any,
+    @Body() body: any,
+  ) {
+    // Tạm thời chỉ check 1 secret token đơn giản trong header `BinancePay-Auth-Token`
+    // để chặn spam khi chưa có signature verify. Khi có cert → bỏ check này.
+    const expected = process.env.BINANCE_PAY_WEBHOOK_SECRET;
+    const provided = String(req.headers['binancepay-auth-token'] ?? '').trim();
+    if (expected && provided !== expected) {
+      await this.webhookService.saveErrorLog(body, req.headers, req.ip, 'Invalid Binance Pay token', 'binance_pay');
+      throw new UnauthorizedException('Invalid Binance Pay token');
+    }
+
+    return this.webhookService.handleBinancePay(body, req.headers, req.ip);
+  }
+
   // ─── Admin: webhook steps theo transaction ──────────────────────────────
   @UseGuards(AdminGuard)
   @Get('admin/transactions/:id/webhook-steps')

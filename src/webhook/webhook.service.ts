@@ -2,7 +2,8 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as crypto from 'crypto';
-import { Transaction, TransactionDocument, TransactionStatus } from '../schemas/transactions.schema';
+import { Transaction, TransactionDocument, TransactionStatus, PaymentMethod } from '../schemas/transactions.schema';
+import { USDT_VND_RATE, MIN_DEPOSIT_USDT } from './binance.constants';
 import { User, UserDocument } from '../schemas/users.schema';
 import { Order, OrderDocument } from '../schemas/orders.schema';
 import { WebhookLog, WebhookLogDocument, WebhookStep, WebhookStepStatus } from '../schemas/webhook-log.schema';
@@ -360,8 +361,186 @@ export class WebhookService {
     return this.handlePays2({ transactions: [normalized] }, headers, ip, 'sepay');
   }
 
+  // ─── Xử lý webhook từ Binance Pay (SKELETON) ─────────────────────────────
+  // TODO: Khi có Binance Merchant credentials, implement RSA signature verify
+  // theo doc Binance Pay (header `BinancePay-Signature` + `BinancePay-Timestamp`
+  // + `BinancePay-Nonce`). Hiện endpoint chỉ log + xử lý logic nghiệp vụ.
+  //
+  // Payload mẫu (rút gọn) Binance gửi:
+  // {
+  //   bizType:   "PAY",
+  //   bizStatus: "PAY_SUCCESS",
+  //   data: "{\"merchantTradeNo\":\"NAPxxxx\",\"orderAmount\":\"5.00\",\"currency\":\"USDT\",\"transactionId\":\"xxx\"}"
+  // }
+  // `data` được Binance đóng gói thành string JSON — phải parse trước khi dùng.
+  async handleBinancePay(
+    body: any,
+    headers?: Record<string, any>,
+    ip?: string,
+  ): Promise<{ success: boolean; message: string }> {
+    const steps: WebhookStep[] = [];
+    const ok   = WebhookStepStatus.OK;
+    const warn = WebhookStepStatus.WARN;
+    const err  = WebhookStepStatus.ERROR;
+    let results = '';
+
+    try {
+      steps.push({
+        step:   1,
+        title:  'Nhận webhook Binance Pay',
+        detail: `bizType=${body?.bizType ?? '?'} bizStatus=${body?.bizStatus ?? '?'}`,
+        status: ok,
+        data:   { ip },
+      });
+
+      if (body?.bizStatus !== 'PAY_SUCCESS') {
+        steps.push({ step: 2, title: 'Trạng thái giao dịch', detail: `Bỏ qua — ${body?.bizStatus}`, status: warn });
+        results = `skipped (${body?.bizStatus})`;
+      } else {
+        // Parse `data` field (Binance đóng gói JSON string)
+        let payload: any = body?.data;
+        if (typeof payload === 'string') {
+          try { payload = JSON.parse(payload); } catch { payload = {}; }
+        }
+        payload = payload ?? {};
+
+        const merchantTradeNo = String(payload.merchantTradeNo ?? '');
+        const transactionId   = String(payload.transactionId ?? payload.openTradeNo ?? '');
+        const usdtAmount      = Number(payload.orderAmount ?? payload.totalFee ?? 0);
+        const currency        = String(payload.currency ?? 'USDT');
+        const vndAmount       = Math.round(usdtAmount * USDT_VND_RATE);
+
+        steps.push({
+          step:   2,
+          title:  'Thông tin giao dịch',
+          detail: `${usdtAmount} ${currency} (~${vndAmount.toLocaleString('vi-VN')}đ), tx=${transactionId}`,
+          status: ok,
+          data:   { merchantTradeNo, transactionId, usdtAmount, currency, vndAmount },
+        });
+
+        // merchantTradeNo do frontend đặt khi tạo order Binance Pay — chứa topup_code
+        const user = await this.findUserFromContent(merchantTradeNo);
+
+        if (!user) {
+          steps.push({
+            step:   3,
+            title:  'Khớp user từ merchantTradeNo',
+            detail: `Không tìm được user trong: "${merchantTradeNo}"`,
+            status: err,
+          });
+          // Lưu lại để admin xử lý tay
+          if (transactionId) {
+            await this.txModel.findOneAndUpdate(
+              { tx_hash: transactionId, payment_method: PaymentMethod.BINANCE_PAY },
+              {
+                $setOnInsert: {
+                  transaction_id:   Date.now(), // placeholder số nguyên duy nhất
+                  gateway:          'BINANCE_PAY',
+                  transaction_date: new Date(),
+                  content:          merchantTradeNo,
+                  code:             '',
+                  transfer_type:    'IN',
+                  transfer_amount:  vndAmount,
+                  crypto_amount:    usdtAmount,
+                  tx_hash:          transactionId,
+                  payment_method:   PaymentMethod.BINANCE_PAY,
+                  status:           TransactionStatus.UNMATCHED,
+                  source:           'auto',
+                  note:             `Binance Pay — không match được user từ ${merchantTradeNo}`,
+                  raw_payload:      body,
+                  raw_headers:      headers ?? null,
+                },
+              },
+              { upsert: true, new: false },
+            ).exec();
+          }
+          results = `unmatched (${merchantTradeNo})`;
+        } else if (usdtAmount < MIN_DEPOSIT_USDT) {
+          const reason = `USDT ${usdtAmount} dưới ngưỡng tối thiểu ${MIN_DEPOSIT_USDT}`;
+          steps.push({ step: 3, title: 'Từ chối nạp', detail: reason, status: err });
+          results = `rejected (below_min)`;
+        } else {
+          // Atomic check duplicate + tạo transaction
+          const existing = await this.txModel.findOneAndUpdate(
+            { tx_hash: transactionId, payment_method: PaymentMethod.BINANCE_PAY },
+            {
+              $setOnInsert: {
+                transaction_id:   Date.now(),
+                gateway:          'BINANCE_PAY',
+                transaction_date: new Date(),
+                content:          merchantTradeNo,
+                code:             merchantTradeNo,
+                transfer_type:    'IN',
+                transfer_amount:  vndAmount,
+                crypto_amount:    usdtAmount,
+                tx_hash:          transactionId,
+                payment_method:   PaymentMethod.BINANCE_PAY,
+                status:           TransactionStatus.PROCESSED,
+                user_id:          user._id,
+                source:           'auto',
+                note:             `Binance Pay — ${usdtAmount} USDT → ${vndAmount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+                raw_payload:      body,
+                raw_headers:      headers ?? null,
+              },
+            },
+            { upsert: true, new: false },
+          ).exec();
+
+          if (existing) {
+            steps.push({ step: 3, title: 'Cộng tiền', detail: `Trùng tx=${transactionId} — bỏ qua`, status: warn });
+            results = `duplicate (${transactionId})`;
+          } else {
+            const updatedUser = await this.userModel.findByIdAndUpdate(
+              user._id,
+              { $inc: { money: vndAmount } },
+              { new: true },
+            ).exec();
+
+            const balanceAfter  = Number(updatedUser?.money ?? 0);
+            const balanceBefore = balanceAfter - vndAmount;
+
+            await this.txModel.findOneAndUpdate(
+              { tx_hash: transactionId, payment_method: PaymentMethod.BINANCE_PAY },
+              { balance_before: balanceBefore, balance_after: balanceAfter },
+            ).exec();
+
+            steps.push({
+              step:   3,
+              title:  'Tiền đã cộng',
+              detail: `+${vndAmount.toLocaleString('vi-VN')}đ. Số dư: ${balanceBefore.toLocaleString('vi-VN')} → ${balanceAfter.toLocaleString('vi-VN')}đ`,
+              status: ok,
+              data:   { balance_before: balanceBefore, balance_after: balanceAfter, user_id: user._id },
+            });
+
+            this.notification.sendTopupSuccess(user._id.toString(), { amount: vndAmount, balance: balanceAfter });
+            this.logger.log(`Binance Pay: nạp ${usdtAmount} USDT (~${vndAmount}đ) → ${user.email}`);
+            results = `processed → ${user.email}`;
+          }
+        }
+      }
+    } catch (e: any) {
+      steps.push({ step: steps.length + 1, title: 'Lỗi hệ thống', detail: e?.message ?? 'Unknown', status: err });
+      this.logger.error(`Binance Pay webhook lỗi: ${e?.message}`);
+      results = `error — ${e?.message}`;
+    }
+
+    const response = { success: true, message: results };
+
+    await this.webhookLogModel.create({
+      source:      'binance_pay',
+      headers:     headers ?? null,
+      payload:     body,
+      response,
+      steps,
+      status_code: 200,
+      ip:          ip ?? '',
+    });
+
+    return response;
+  }
+
   // ─── Lưu log lỗi (token sai, server lỗi...) ─────────────────────────────
-  async saveErrorLog(body: any, headers?: Record<string, any>, ip?: string, error?: string, source: 'pays2' | 'sepay' = 'pays2'): Promise<void> {
+  async saveErrorLog(body: any, headers?: Record<string, any>, ip?: string, error?: string, source: 'pays2' | 'sepay' | 'binance_pay' = 'pays2'): Promise<void> {
     try {
       await this.webhookLogModel.create({
         source,
