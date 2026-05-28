@@ -143,7 +143,6 @@ export class ProxysellerProvider implements IProxyProvider {
       body_api,
       duration_days,
       user_id,
-      protocol,
     } = params;
 
     const type = this.resolveType(id_service);
@@ -192,8 +191,11 @@ export class ProxysellerProvider implements IProxyProvider {
       customTargetName,
     };
 
-    if (protocol) {
-      payload.protocol = protocol;
+    // Protocol: chỉ gửi nếu service config (body_api.protocol) hoặc order (params.protocol) có yêu cầu.
+    // ProxySeller chấp nhận "HTTP" hoặc "SOCKS" — chuẩn hoá từ socks/socks5 → "SOCKS", còn lại → "HTTP".
+    const rawProto = String(extra.protocol ?? params.protocol ?? '').toLowerCase();
+    if (rawProto) {
+      payload.protocol = rawProto === 'socks' || rawProto === 'socks5' ? 'SOCKS' : 'HTTP';
     }
 
     this.logger.log(`[BUY] type=${type} payload=${JSON.stringify(payload)}`);
