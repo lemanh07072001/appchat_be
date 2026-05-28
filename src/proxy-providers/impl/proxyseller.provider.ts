@@ -143,6 +143,7 @@ export class ProxysellerProvider implements IProxyProvider {
       body_api,
       duration_days,
       user_id,
+      protocol,
     } = params;
 
     const type = this.resolveType(id_service);
@@ -190,6 +191,10 @@ export class ProxysellerProvider implements IProxyProvider {
       quantity,
       customTargetName,
     };
+
+    if (protocol) {
+      payload.protocol = protocol;
+    }
 
     this.logger.log(`[BUY] type=${type} payload=${JSON.stringify(payload)}`);
     const raw = await this.request<OrderMakeData>(

@@ -22,28 +22,57 @@ export class ServicesService {
     private countryModel: Model<Country>,
   ) {}
 
-  async findApiEnabledList() {
-    return this.serviceModel
+  /**
+   * Áp discount user-specific lên pricing và xoá field user_discounts trước khi trả về cho user.
+   * Tránh leak danh sách user khác qua API public.
+   */
+  private applyUserDiscount(service: any, userId: string | null) {
+    const discounts = userId ? service.user_discounts?.[userId] : null;
+    if (discounts && service.pricing) {
+      const newPricing: Record<string, any> = {};
+      for (const [duration, p] of Object.entries(service.pricing)) {
+        const disc = Number(discounts[duration]) || 0;
+        const price = (p as any)?.price ?? 0;
+        newPricing[duration] = {
+          ...(p as any),
+          price: Math.max(0, price - disc),
+        };
+      }
+      service.pricing = newPricing;
+    }
+    if (service.user_discounts) delete service.user_discounts;
+    return service;
+  }
+
+  async findApiEnabledList(userId: string | null = null) {
+    const services = await this.serviceModel
       .find({ status: true, api_enabled: true })
       .populate('country', 'name code image_url')
-      .select('_id name type proxy_type ip_version protocol isp pricing usage_type')
+      .select('_id name type proxy_type ip_version protocol isp pricing usage_type user_discounts')
       .sort({ order: 1, createdAt: -1 })
       .lean()
       .exec();
+    return services.map((s) => this.applyUserDiscount(s, userId));
   }
 
-  async findPublicList(category?: 'static' | 'rotating', usage_type?: string, ip_version?: string) {
+  async findPublicList(
+    category?: 'static' | 'rotating',
+    usage_type?: string,
+    ip_version?: string,
+    userId: string | null = null,
+  ) {
     const filter: any = { status: true };
     if (category) filter.type = category;
     if (usage_type) filter.usage_type = usage_type;
     if (ip_version) filter.ip_version = ip_version;
-    return this.serviceModel
+    const services = await this.serviceModel
       .find(filter)
       .populate('country', 'name code image_url')
       .select('-partner -body_api')
       .sort({ order: 1, createdAt: -1 })
       .lean()
       .exec();
+    return services.map((s) => this.applyUserDiscount(s, userId));
   }
 
   async findAllPaginated(query: PaginationQueryDto) {
@@ -146,6 +175,7 @@ export class ServicesService {
     service.markModified('pricing');
     service.markModified('duration_ids');
     service.markModified('note');
+    service.markModified('user_discounts');
     return service.save();
   }
 

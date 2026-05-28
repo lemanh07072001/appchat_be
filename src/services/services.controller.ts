@@ -1,31 +1,52 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import type { Request } from 'express';
 import { ServicesService } from './services.service';
 import { CreateServiceDto } from '../dto/create-service.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
 import { Public } from '../guards/public.decorator';
 import { ApiTokenGuard } from '../guards/api-token.guard';
+import { jwtConstants } from '../guards/constants';
 
 @Controller()
 @UseGuards(AuthGuard)
 export class ServicesController {
-  constructor(private readonly servicesService: ServicesService) {}
+  constructor(
+    private readonly servicesService: ServicesService,
+    private readonly jwtService: JwtService,
+  ) {}
+
+  /** Soft-parse JWT từ Authorization header — không throw nếu thiếu/invalid. */
+  private async resolveUserId(req: Request): Promise<string | null> {
+    const [type, token] = req.headers.authorization?.split(' ') ?? [];
+    if (type !== 'Bearer' || !token) return null;
+    try {
+      const payload = await this.jwtService.verifyAsync(token, { secret: jwtConstants.secret });
+      return (payload?.sub as string) ?? null;
+    } catch {
+      return null;
+    }
+  }
 
   @Public()
   @UseGuards(ApiTokenGuard)
   @Get('api/services/api-list')
-  findApiEnabledList() {
-    return this.servicesService.findApiEnabledList();
+  async findApiEnabledList(@Req() req: Request) {
+    const userId = (req as any).user?.id ?? (req as any).user?._id ?? null;
+    return this.servicesService.findApiEnabledList(userId);
   }
 
   @Public()
   @Get('api/services')
-  findPublicList(
+  async findPublicList(
+    @Req() req: Request,
     @Query('category') category?: 'static' | 'rotating',
     @Query('usage_type') usage_type?: string,
     @Query('ip_version') ip_version?: string,
   ) {
-    return this.servicesService.findPublicList(category, usage_type, ip_version);
+    const userId = await this.resolveUserId(req);
+    return this.servicesService.findPublicList(category, usage_type, ip_version, userId);
   }
 
   @Get('api/admin/services')

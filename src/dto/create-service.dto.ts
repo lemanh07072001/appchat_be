@@ -63,6 +63,10 @@ export class CreateServiceDto {
   show_user_pass?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  allow_renew?: boolean;
+
+  @IsOptional()
   @IsString()
   id_service?: string;
 
@@ -85,6 +89,10 @@ export class CreateServiceDto {
   @IsOptional()
   @IsObject()
   duration_ids?: Record<string, string>;
+
+  @IsOptional()
+  @IsObject()
+  user_discounts?: Record<string, Record<string, number>>;
 
   @IsOptional()
   @IsNumber()

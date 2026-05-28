@@ -52,13 +52,19 @@ export class Order {
 
   // ─── Giá ──────────────────────────────────────────────────
   @Prop({ type: Number, required: true })
-  price_per_unit: number;
+  price_per_unit: number;                  // sau discount (giá user thực trả)
+
+  @Prop({ type: Number, default: null })
+  base_price_per_unit: number;             // giá gốc trước discount (null = không có ưu đãi)
 
   @Prop({ type: Number, default: null })
   cost_per_unit: number;
 
   @Prop({ type: Number, default: 0 })
-  discount_amount: number;
+  discount_amount: number;                 // tổng tiền giảm (gốc − thực trả) × quantity × duration
+
+  @Prop({ type: Number, default: 0 })
+  discount_per_unit: number;               // số tiền giảm trên 1 proxy/ngày
 
   @Prop({ type: Number, required: true })
   total_price: number;               // sau discount

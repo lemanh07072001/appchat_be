@@ -15,6 +15,13 @@ export enum TransactionStatus {
   REJECTED   = 'rejected',    // Admin huỷ giao dịch
 }
 
+export enum PaymentMethod {
+  BANK        = 'bank',
+  BINANCE_PAY = 'binance_pay',
+  USDT_TRC20  = 'usdt_trc20',
+  USDT_BEP20  = 'usdt_bep20',
+}
+
 @Schema({ timestamps: true })
 export class Transaction {
   // ─── Dữ liệu gốc từ pays2 ─────────────────────────────────────────────────
@@ -64,6 +71,15 @@ export class Transaction {
   @Prop({ default: 'auto' })
   source: string;                    // auto | manual
 
+  @Prop({ default: PaymentMethod.BANK })
+  payment_method: PaymentMethod;     // bank | binance_pay | usdt_trc20 | usdt_bep20
+
+  @Prop({ type: Number, default: 0 })
+  crypto_amount: number;             // Số USDT đã chuyển (0 nếu payment_method=bank)
+
+  @Prop({ default: '' })
+  tx_hash: string;                   // Tx hash on-chain (TRC20/BEP20) hoặc Binance Pay order id
+
   @Prop({ default: '' })
   note: string;                     // Ghi chú xử lý (lỗi, lý do, ...)
 
@@ -82,3 +98,5 @@ TransactionSchema.index({ user_id: 1 });
 TransactionSchema.index({ gateway: 1 });
 TransactionSchema.index({ transaction_date: -1 });
 TransactionSchema.index({ createdAt: -1 });
+TransactionSchema.index({ payment_method: 1 });
+TransactionSchema.index({ tx_hash: 1 }, { sparse: true });

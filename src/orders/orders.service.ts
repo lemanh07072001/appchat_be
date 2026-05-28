@@ -134,10 +134,15 @@ export class OrdersService {
       throw new BadRequestException(`Số lượng phải nằm trong khoảng ${minQty} - ${maxQty}`);
     }
 
-    const pricePerUnit  = pricing.price as number;
+    // Áp discount user-specific (per duration). Floor pricePerUnit ở 0.
+    const basePrice = pricing.price as number;
+    const rawDiscount = (service as any).user_discounts?.[userId]?.[String(dto.duration_days)] ?? 0;
+    const discountPerUnit = Math.min(basePrice, Number(rawDiscount) || 0);
+    const pricePerUnit  = basePrice - discountPerUnit;
     const costPerUnit   = pricing.cost as number ?? null;
     const totalPrice    = pricePerUnit * quantity;
     const totalCost     = costPerUnit != null ? costPerUnit * quantity : null;
+    const discountAmount = discountPerUnit * quantity;
 
     // 3. Resolve country_id
     const countryId = await this.resolveCountryId(dto.country) ?? service.country ?? null;
@@ -169,6 +174,9 @@ export class OrdersService {
       quantity,
       duration_days:  dto.duration_days,
       price_per_unit: pricePerUnit,
+      base_price_per_unit: discountPerUnit > 0 ? basePrice : null,
+      discount_per_unit:   discountPerUnit,
+      discount_amount:     discountAmount,
       cost_per_unit:  costPerUnit,
       total_price:    totalPrice,
       total_cost:     totalCost,
@@ -216,6 +224,9 @@ export class OrdersService {
         quantity,
         duration_days:  dto.duration_days,
         price_per_unit: pricePerUnit,
+        base_price_per_unit: discountPerUnit > 0 ? basePrice : null,
+        discount_per_unit:   discountPerUnit,
+        discount_amount:     discountAmount,
         total_price:    totalPrice,
         payment_method: PaymentMethodEnum.BALANCE,
         balance_after:  user.money,
@@ -376,7 +387,7 @@ export class OrdersService {
       this.orderModel
         .find(filter)
         .populate('user_id', 'email full_name')
-        .populate('service_id', 'name proxy_type ip_version')
+        .populate('service_id', 'name proxy_type ip_version allow_renew')
         .populate('country_id', 'name code')
         .populate('partner_id', 'name domain')
         .skip(skip)
@@ -418,7 +429,7 @@ export class OrdersService {
     const [orders, total] = await Promise.all([
       this.orderModel
         .find(filter)
-        .populate('service_id', 'name proxy_type ip_version')
+        .populate('service_id', 'name proxy_type ip_version allow_renew')
         .populate('country_id', 'name code')
         .select('-admin_note -cost_per_unit -total_cost -profit -partner_id')
         .skip(skip)
@@ -459,7 +470,7 @@ export class OrdersService {
   async findOneByUser(userId: string, orderId: string, query: PaginationQueryDto) {
     const order = await this.orderModel
       .findOne({ _id: new Types.ObjectId(orderId), user_id: new Types.ObjectId(userId) })
-      .populate('service_id', 'name proxy_type ip_version')
+      .populate('service_id', 'name proxy_type ip_version allow_renew')
       .populate('country_id', 'name code')
       .populate('partner_id', '_id code name')
       .select('-admin_note -cost_per_unit -total_cost -profit -provider_order_id -error_message -credentials')
@@ -509,7 +520,7 @@ export class OrdersService {
     const order = await this.orderModel
       .findById(id)
       .populate('user_id', 'email full_name')
-      .populate('service_id', 'name proxy_type ip_version')
+      .populate('service_id', 'name proxy_type ip_version allow_renew')
       .populate('country_id', 'name code')
       .populate('partner_id', 'name code')
       .lean()
@@ -1010,6 +1021,10 @@ export class OrdersService {
     }
 
     const service = order.service_id as any;
+
+    if (service?.allow_renew === false) {
+      throw new BadRequestException('Dịch vụ này không hỗ trợ gia hạn');
+    }
 
     const proxies = await this.proxyModel
       .find({ order_id: order._id, provider_proxy_id: { $exists: true, $ne: '' } })
