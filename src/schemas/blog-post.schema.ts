@@ -39,7 +39,7 @@ export class BlogPost {
   views: number;
 
   // ─── New fields ─────────────────────────────────────
-  @Prop({ default: 'FastProxyVN' })
+  @Prop({ default: 'TaiNguyenProxy' })
   author: string;
 
   @Prop({ default: '' })

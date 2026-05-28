@@ -367,7 +367,7 @@ const STATUS_DISTRIBUTION = [
       transaction_date: txDate,
       transaction_number: 'FT' + randAlphaNum(10),
       account_number: '0' + rand(100000000, 999999999),
-      content: `NAP${randAlphaNum(8)} nap tien fastproxyvn`,
+      content: `NAP${randAlphaNum(8)} nap tien tainguyenproxy`,
       code: 'NAP' + randAlphaNum(8),
       transfer_type: 'IN',
       transfer_amount: amount,

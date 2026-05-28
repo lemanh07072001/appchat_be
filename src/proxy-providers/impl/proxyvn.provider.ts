@@ -111,16 +111,16 @@ export class ProxyvnProvider implements IProxyProvider {
     // Auth username thực tế chỉ là phần suffix random sau prefix. Cắt prefix để lưu đúng.
     const stripUserPrefix = (raw: string) => (raw ?? '').replace(/^\d{10}.{2}/, '');
 
-    const proxies: ProxyCredential[] = items
-      .filter((item) => item?.status === 100)
-      .map((item) => {
-        // Chuẩn hoá protocol về enum ProxyProtocolEnum (http/https/socks5):
-        // - "HTTPS" → "http" (proxy không phân biệt http/https phía client)
-        // - "SOCKS" → "socks5" (tránh Mongoose drop validation âm thầm)
-        const rawProto = (item.type ?? type).toLowerCase().replace('https', 'http');
-        const normalizedProto = rawProto === 'socks' ? 'socks5' : rawProto;
-        return ({
-        host:              item.ip,
+                                                                                    const proxies: ProxyCredential[] = items
+                                                                                      .filter((item) => item?.status === 100)
+                                                                                      .map((item) => {
+                                                                                        // Chuẩn hoá protocol về enum ProxyProtocolEnum (http/https/socks5):
+                                                                                        // - "HTTPS" → "http" (proxy không phân biệt http/https phía client)
+                                                                                        // - "SOCKS" → "socks5" (tránh Mongoose drop validation âm thầm)
+                                                                                        const rawProto = (item.type ?? type).toLowerCase().replace('https', 'http');
+                                                                                        const normalizedProto = rawProto === 'socks' ? 'socks5' : rawProto;
+                                                                                        return ({
+                                                                                        host:              item.ip,
         port:              Number(item.port),
         username:          stripUserPrefix(item.user),
         password:          item.password ?? '',

@@ -1,4 +1,4 @@
-# FastProxy Server — API Documentation
+# TaiNguyenProxy Server — API Documentation
 
 ## Authentication
 

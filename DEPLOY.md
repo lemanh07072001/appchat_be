@@ -157,7 +157,7 @@ mkdir -p logs
 | Bien | Mo ta | Mac dinh |
 |------|-------|----------|
 | `MONGO_URI` | MongoDB connection string | `mongodb://localhost:27017/proxydb` |
-| `PORT` | HTTP server port | `8080` |
+| `PORT` | HTTP server port | `8081` |
 | `REDIS_HOST` | Redis host | `localhost` |
 | `REDIS_PORT` | Redis port | `6379` |
 | `REDIS_PASSWORD` | Redis password (bo trong neu khong dat) | _(trong)_ |
