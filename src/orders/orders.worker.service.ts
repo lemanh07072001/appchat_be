@@ -305,6 +305,7 @@ export class OrdersWorkerService implements OnModuleInit {
       await this.redis.del(failKey);
 
       order!.provider_order_id = result.provider_order_id;
+      order!.provider_raw_response = result.raw ?? null;
       if (result.provider_metadata && Object.keys(result.provider_metadata).length > 0) {
         order!.provider_metadata = result.provider_metadata;
       }

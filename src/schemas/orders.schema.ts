@@ -122,6 +122,10 @@ export class Order {
   @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
   provider_metadata: Record<string, any>;
 
+  // Response nguyên văn từ API mua (API 1) của provider — lưu để debug/đối soát
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  provider_raw_response: any;
+
   // ─── Gia hạn ──────────────────────────────────────────────
   @Prop({ default: false })
   auto_renew: boolean;

@@ -149,6 +149,7 @@ export class OrdersRecoveryScheduler {
       auth_username:     p.username,
       auth_password:     p.password,
       provider_proxy_id: p.provider_proxy_id ?? undefined,
+      provider_metadata: p.provider_metadata ?? {},
       domain:            p.domain   ?? '',
       prev_ip:           p.prev_ip  ?? '',
       location:          p.location ?? '',

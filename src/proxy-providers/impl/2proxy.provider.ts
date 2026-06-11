@@ -153,6 +153,7 @@ export class TwoProxyProvider implements IProxyProvider {
         provider_proxy_id: item.idproxy,
         isp:               item.loaiproxy ?? '',
         location:          item.ip ?? undefined,
+        provider_metadata: item, // lưu nguyên raw item (maloi, idproxy, loaiproxy, proxy, ip, time, type)
       };
     });
   }

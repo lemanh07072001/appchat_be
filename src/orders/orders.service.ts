@@ -386,6 +386,7 @@ export class OrdersService {
     const [raw, total] = await Promise.all([
       this.orderModel
         .find(filter)
+        .select('-provider_raw_response')
         .populate('user_id', 'email full_name')
         .populate('service_id', 'name proxy_type ip_version allow_renew')
         .populate('country_id', 'name code')
@@ -431,7 +432,7 @@ export class OrdersService {
         .find(filter)
         .populate('service_id', 'name proxy_type ip_version allow_renew')
         .populate('country_id', 'name code')
-        .select('-admin_note -cost_per_unit -total_cost -profit -partner_id')
+        .select('-admin_note -cost_per_unit -total_cost -profit -partner_id -provider_raw_response')
         .skip(skip)
         .limit(limit)
         .sort({ createdAt: -1 })
@@ -473,7 +474,7 @@ export class OrdersService {
       .populate('service_id', 'name proxy_type ip_version allow_renew')
       .populate('country_id', 'name code')
       .populate('partner_id', '_id code name')
-      .select('-admin_note -cost_per_unit -total_cost -profit -provider_order_id -error_message -credentials')
+      .select('-admin_note -cost_per_unit -total_cost -profit -provider_order_id -error_message -credentials -provider_raw_response')
       .lean()
       .exec();
     if (!order) throw new BadRequestException('Order not found');
@@ -535,7 +536,7 @@ export class OrdersService {
     const [proxies, totalProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location')
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location provider_metadata')
         .skip(skip)
         .limit(limit)
         .lean()

@@ -127,10 +127,20 @@ export class ProxyvnProvider implements IProxyProvider {
         protocol:          normalizedProto,
         provider_proxy_id: item.idproxy,
         isp:               item.loaiproxy ?? loaiproxy,
+        provider_metadata: item, // lưu nguyên raw item (status, loaiproxy, idproxy, ip, port, user, password, type, proxy, time)
         });
       });
 
-    return { provider_order_id: '', proxies, raw };
+    // Item summary (status=200/201, vd: {"status":200,"comen":"You have successfully purchased 2"})
+    // → persist vào order.provider_metadata
+    const summary = items.find((i) => i?.status === 200 || i?.status === 201);
+
+    return {
+      provider_order_id: '',
+      proxies,
+      provider_metadata: summary ? { proxyvn_summary: summary } : undefined,
+      raw,
+    };
   }
 
   // ─── Gia hạn ────────────────────────────────────────────────────────────────

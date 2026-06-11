@@ -159,6 +159,7 @@ export class HomeproxyProvider implements IProxyProvider {
       prev_ip:           p.proxy?.ipaddress?.prevIp ?? undefined,
       location:          p.proxy?.ipaddress?.location ?? undefined,
       isp:               p.proxy?.ipaddress?.provider ?? undefined,
+      provider_metadata: p, // lưu nguyên raw item từ HomeProxy
     });
     });
   }
