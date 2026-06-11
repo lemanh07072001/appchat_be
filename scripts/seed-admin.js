@@ -1,18 +1,21 @@
 /**
- * Tạo (hoặc cập nhật) tài khoản admin
- *   email:    admin@admin.com
- *   password: password
- *   role:     0 (ADMIN)
+ * Tạo (hoặc cập nhật) tài khoản admin (role 0).
  *
- * Run: node scripts/seed-admin.js
+ * Run: ADMIN_EMAIL=... ADMIN_PASSWORD=... node scripts/seed-admin.js
  */
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/proxydb';
-const EMAIL = 'admin@admin.com';
-const PASSWORD = 'password';
+const EMAIL = process.env.ADMIN_EMAIL;
+const PASSWORD = process.env.ADMIN_PASSWORD;
+
+if (!EMAIL || !PASSWORD) {
+  console.error('Thiếu biến môi trường ADMIN_EMAIL / ADMIN_PASSWORD');
+  process.exit(1);
+}
+
 const ROLE_ADMIN = 0;
 const STATUS_ACTIVE = 1;
 
