@@ -19,6 +19,7 @@ import { IpsModule } from './ips/ips.module';
 import { UploadModule } from './upload/upload.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { BlogModule } from './blog/blog.module';
+import { SettingsModule } from './settings/settings.module';
 
 @Module({
   imports: [
@@ -69,6 +70,8 @@ import { BlogModule } from './blog/blog.module';
     AnnouncementsModule,
 
     BlogModule,
+
+    SettingsModule,
 
     // Serve static files (uploads)
     ServeStaticModule.forRoot({
