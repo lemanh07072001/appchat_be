@@ -43,6 +43,9 @@ const STATUS_ACTIVE = 1;
     console.log(`Updated admin: ${EMAIL} (_id=${existing._id})`);
   } else {
     const topup_code = 'NAP' + crypto.randomBytes(4).toString('hex').toUpperCase();
+    // referral_code: null tường minh vẫn bị unique index bắt (sparse chỉ bỏ qua field THIẾU)
+    // → sinh mã giống flow đăng ký (affiliate.service generateUniqueCode)
+    const referral_code = 'REF_' + crypto.randomBytes(4).toString('hex');
     const result = await users.insertOne({
       name: 'Admin',
       email: EMAIL,
@@ -55,7 +58,7 @@ const STATUS_ACTIVE = 1;
       money: 0,
       country: '',
       topup_code,
-      referral_code: null,
+      referral_code,
       referred_by: null,
       affiliate_balance: 0,
       commission_rate: null,
