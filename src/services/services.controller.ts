@@ -44,9 +44,10 @@ export class ServicesController {
     @Query('category') category?: 'static' | 'rotating',
     @Query('usage_type') usage_type?: string,
     @Query('ip_version') ip_version?: string,
+    @Query('locale') locale?: string,
   ) {
     const userId = await this.resolveUserId(req);
-    return this.servicesService.findPublicList(category, usage_type, ip_version, userId);
+    return this.servicesService.findPublicList(category, usage_type, ip_version, userId, locale);
   }
 
   @Get('api/admin/services')

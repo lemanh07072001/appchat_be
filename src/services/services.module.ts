@@ -8,6 +8,7 @@ import { Country, CountrySchema } from '../schemas/countries.schema';
 import { ServicesService } from './services.service';
 import { ServicesController } from './services.controller';
 import { ApiTokenGuard } from '../guards/api-token.guard';
+import { TranslationsModule } from '../translations/translations.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { ApiTokenGuard } from '../guards/api-token.guard';
       { name: Country.name, schema: CountrySchema },
     ]),
     JwtModule,
+    TranslationsModule,
   ],
   controllers: [ServicesController],
   providers: [ServicesService, ApiTokenGuard],

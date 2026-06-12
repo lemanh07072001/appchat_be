@@ -20,6 +20,7 @@ import { UploadModule } from './upload/upload.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { BlogModule } from './blog/blog.module';
 import { SettingsModule } from './settings/settings.module';
+import { TranslationsModule } from './translations/translations.module';
 
 @Module({
   imports: [
@@ -68,6 +69,8 @@ import { SettingsModule } from './settings/settings.module';
     UploadModule,
 
     AnnouncementsModule,
+
+    TranslationsModule,
 
     BlogModule,
 

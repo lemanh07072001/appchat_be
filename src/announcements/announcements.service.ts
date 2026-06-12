@@ -2,12 +2,14 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Announcement, AnnouncementDocument } from '../schemas/announcements.schema';
+import { TranslationsService } from '../translations/translations.service';
 
 @Injectable()
 export class AnnouncementsService {
   constructor(
     @InjectModel(Announcement.name)
     private model: Model<AnnouncementDocument>,
+    private readonly translationsService: TranslationsService,
   ) {}
 
   // ─── Admin: danh sách phân trang ──────────────────────────────────────
@@ -34,12 +36,27 @@ export class AnnouncementsService {
   }
 
   // ─── Public: danh sách thông báo đang hoạt động ──────────────────────
-  async findPublicList() {
-    return this.model
+  async findPublicList(locale?: string) {
+    const docs = await this.model
       .find({ is_active: true })
       .select('title description image tag display_type order createdAt')
       .sort({ order: 1, createdAt: -1 })
+      .lean()
       .exec();
+
+    // Overlay bản dịch khi locale = en — thiếu bản dịch thì giữ tiếng Việt
+    if (locale?.toLowerCase().startsWith('en') && docs.length) {
+      const ids = docs.map((d) => d._id?.toString()).filter(Boolean);
+      const translations = await this.translationsService.findByEntities('announcement', ids, 'en');
+      const map = new Map(translations.map((t: any) => [t.entity_id.toString(), t.fields ?? {}]));
+      for (const doc of docs as any[]) {
+        const fields = map.get(doc._id?.toString());
+        if (!fields) continue;
+        if (typeof fields.title === 'string' && fields.title.trim()) doc.title = fields.title;
+        if (typeof fields.description === 'string' && fields.description.trim()) doc.description = fields.description;
+      }
+    }
+    return docs;
   }
 
   async findById(id: string) {

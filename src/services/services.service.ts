@@ -6,6 +6,7 @@ import { Country } from '../schemas/countries.schema';
 import { Model, Types } from 'mongoose';
 import { CreateServiceDto } from '../dto/create-service.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
+import { TranslationsService } from '../translations/translations.service';
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -20,7 +21,25 @@ export class ServicesService {
     private partnerModel: Model<Partner>,
     @InjectModel(Country.name)
     private countryModel: Model<Country>,
+    private readonly translationsService: TranslationsService,
   ) {}
+
+  /**
+   * Overlay bản dịch (bảng translations) lên danh sách service khi locale = en.
+   * Chỉ ghi đè field có dữ liệu dịch — thiếu bản dịch thì giữ tiếng Việt.
+   */
+  private async applyTranslations(docs: any[], locale?: string) {
+    if (!locale?.toLowerCase().startsWith('en') || !docs.length) return;
+    const ids = docs.map((d) => d._id?.toString()).filter(Boolean);
+    const translations = await this.translationsService.findByEntities('service', ids, 'en');
+    const map = new Map(translations.map((t: any) => [t.entity_id.toString(), t.fields ?? {}]));
+    for (const doc of docs) {
+      const fields = map.get(doc._id?.toString());
+      if (!fields) continue;
+      if (typeof fields.name === 'string' && fields.name.trim()) doc.name = fields.name;
+      if (fields.note && typeof fields.note === 'object' && Object.keys(fields.note).length) doc.note = fields.note;
+    }
+  }
 
   /**
    * Áp discount user-specific lên pricing và xoá field user_discounts trước khi trả về cho user.
@@ -60,6 +79,7 @@ export class ServicesService {
     usage_type?: string,
     ip_version?: string,
     userId: string | null = null,
+    locale?: string,
   ) {
     const filter: any = { status: true };
     if (category) filter.type = category;
@@ -72,7 +92,9 @@ export class ServicesService {
       .sort({ order: 1, createdAt: -1 })
       .lean()
       .exec();
-    return services.map((s) => this.applyUserDiscount(s, userId));
+    const result = services.map((s) => this.applyUserDiscount(s, userId));
+    await this.applyTranslations(result, locale);
+    return result;
   }
 
   async findAllPaginated(query: PaginationQueryDto) {

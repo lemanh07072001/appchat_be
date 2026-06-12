@@ -12,8 +12,8 @@ export class AnnouncementsController {
   // ─── Public: danh sách thông báo đang hiển thị ──────────────────────
   @Public()
   @Get('announcements')
-  getPublicList() {
-    return this.service.findPublicList();
+  getPublicList(@Query('locale') locale?: string) {
+    return this.service.findPublicList(locale);
   }
 
   // ─── Admin: CRUD ────────────────────────────────────────────────────
