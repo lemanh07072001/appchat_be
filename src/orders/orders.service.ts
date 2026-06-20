@@ -1394,6 +1394,114 @@ export class OrdersService {
     };
   }
 
+  /**
+   * Admin chọn 1 số proxy (theo _id) rồi "Lấy từ NCC" → gọi provider lấy lại
+   * dữ liệu mới nhất theo provider_proxy_id (idproxy) và GHI ĐÈ ip/port/user/pass.
+   * Áp dụng mọi NCC: ưu tiên fetchProxiesByIds, fallback fetchOrderProxies + lọc theo id.
+   */
+  async refetchProxies(id: string, proxyIds: string[], actor = 'admin') {
+    id = (id || '').trim();
+    proxyIds = (proxyIds ?? []).map((x) => String(x).trim()).filter(Boolean);
+    if (!proxyIds.length) {
+      throw new BadRequestException('Chưa chọn proxy nào để lấy lại');
+    }
+
+    const order = await this.orderModel.findById(id).populate('service_id').exec();
+    if (!order) throw new BadRequestException('Order not found');
+
+    const partner = order.partner_id
+      ? await this.partnerModel.findById(order.partner_id).select('code token_api').exec()
+      : null;
+    if (!partner?.code || !partner?.token_api) {
+      throw new BadRequestException('Order không có partner hợp lệ');
+    }
+
+    const provider = this.providerFactory.getProvider(partner.code);
+
+    // Proxy đã chọn (bắt buộc thuộc đúng order này)
+    const validIds = proxyIds.filter((x) => Types.ObjectId.isValid(x) && x.length === 24);
+    const selected = await this.proxyModel
+      .find({ _id: { $in: validIds.map((x) => new Types.ObjectId(x)) }, order_id: order._id })
+      .exec();
+    if (!selected.length) {
+      throw new BadRequestException('Không tìm thấy proxy đã chọn trong đơn này');
+    }
+
+    const providerProxyIds = selected
+      .map((p) => (p as any).provider_proxy_id)
+      .filter((x: any): x is string => !!x)
+      .map((x: any) => String(x));
+    if (!providerProxyIds.length) {
+      throw new BadRequestException('Proxy đã chọn không có ID nhà cung cấp (provider_proxy_id)');
+    }
+
+    const service = order.service_id as any;
+    const idService = this.deriveIdService(partner.code, order, service);
+
+    // Lấy dữ liệu mới từ NCC
+    let fresh: any[] = [];
+    if (provider.fetchProxiesByIds) {
+      fresh = await provider.fetchProxiesByIds(partner.token_api, providerProxyIds, {
+        id_service: idService,
+        metadata: order.provider_metadata,
+      });
+    } else if (provider.fetchOrderProxies) {
+      const all = await provider.fetchOrderProxies(
+        partner.token_api,
+        order.provider_order_id || '',
+        { metadata: order.provider_metadata },
+      );
+      const wanted = new Set(providerProxyIds);
+      fresh = (all ?? []).filter(
+        (p) => p.provider_proxy_id && wanted.has(String(p.provider_proxy_id)),
+      );
+    } else {
+      throw new BadRequestException(`Provider "${partner.code}" không hỗ trợ lấy lại proxy`);
+    }
+
+    const freshById = new Map<string, any>(
+      fresh
+        .filter((p) => p?.provider_proxy_id)
+        .map((p) => [String(p.provider_proxy_id), p]),
+    );
+
+    let updated = 0;
+    for (const proxy of selected) {
+      const pid = (proxy as any).provider_proxy_id
+        ? String((proxy as any).provider_proxy_id)
+        : '';
+      const f = pid ? freshById.get(pid) : undefined;
+      if (!f) continue;
+      proxy.ip_address    = f.host;
+      proxy.port          = Number(f.port);
+      proxy.auth_username = f.username;
+      proxy.auth_password = f.password;
+      if (f.protocol) (proxy as any).protocol = f.protocol;
+      if (f.domain)   proxy.domain = f.domain;
+      if (f.isp)      (proxy as any).isp = f.isp;
+      proxy.is_active = true;
+      await proxy.save();
+      updated++;
+    }
+
+    void this.orderLogService.info(
+      id,
+      OrderLogStep.ADMIN_PROXY_IMPORTED,
+      `Admin lấy lại ${updated}/${selected.length} proxy từ NCC ${partner.code}`,
+      { actor, updated, total: selected.length, provider_proxy_ids: providerProxyIds },
+      actor,
+    );
+
+    return {
+      message:
+        updated > 0
+          ? `Đã cập nhật ${updated}/${selected.length} proxy từ NCC`
+          : 'NCC chưa trả dữ liệu cho các proxy đã chọn — thử lại sau',
+      updated,
+      total: selected.length,
+    };
+  }
+
   async delete(id: string, actor = 'admin') {
     const order = await this.orderModel.findByIdAndDelete(id).exec();
     if (!order) throw new BadRequestException('Order not found');

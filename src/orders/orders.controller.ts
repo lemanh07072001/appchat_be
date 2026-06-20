@@ -210,6 +210,17 @@ export class OrdersController {
     return this.ordersService.syncProviderOrder(id, providerOrderId, actor);
   }
 
+  @Post('api/admin/orders/:id/refetch-proxies')
+  @UseGuards(AdminGuard)
+  refetchProxies(
+    @Param('id') id: string,
+    @Body('proxy_ids') proxyIds: string[],
+    @Req() req?: Request,
+  ) {
+    const actor = (req as any)?.user?.sub ?? 'admin';
+    return this.ordersService.refetchProxies(id, proxyIds ?? [], actor);
+  }
+
   @Delete('api/admin/orders/:id')
   @UseGuards(AdminGuard)
   delete(@Param('id') id: string) {

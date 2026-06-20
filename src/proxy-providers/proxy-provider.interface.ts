@@ -89,4 +89,15 @@ export interface IProxyProvider {
     provider_order_id: string,
     context?: { metadata?: Record<string, any> },
   ): Promise<ProxyCredential[]>;
+
+  /**
+   * Lấy lại proxy theo danh sách provider_proxy_id (idproxy) — dùng để admin
+   * refresh dữ liệu (ip/user/pass) của đúng các proxy đã chọn.
+   * `context.id_service` = loaiproxy (ProxyVN cần để gọi listproxy.php).
+   */
+  fetchProxiesByIds?(
+    token_api: string,
+    provider_proxy_ids: string[],
+    context?: { id_service?: string; metadata?: Record<string, any> },
+  ): Promise<ProxyCredential[]>;
 }
