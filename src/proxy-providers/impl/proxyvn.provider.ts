@@ -240,25 +240,26 @@ export class ProxyvnProvider implements IProxyProvider {
     this.logger.debug(`[LISTPROXY] ← ${JSON.stringify(raw)}`);
 
     const items = Array.isArray(raw) ? raw : [raw];
-    // ProxyVN trả user có prefix timestamp 10 số + 2 ký tự — cắt như buy()
-    const stripUserPrefix = (s: string) => (s ?? '').replace(/^\d{10}.{2}/, '');
     const wanted = new Set(ids);
 
     return items
-      .filter((item) => item && (item.ip ?? item.host) && item.port)
+      // listproxy.php trả proxy gộp dạng "ip:port:user:pass" trong field `proxy`
+      // (khác muaproxy.php có field port/user/password rời) — phải tách chuỗi.
+      .filter((item) => item && (item.proxy || item.ip))
       // chỉ giữ đúng idproxy đã yêu cầu (an toàn khi API trả 'all')
       .filter((item) => wanted.size === 0 || wanted.has(String(item.idproxy)))
       .map((item) => {
-        const rawProto = (item.type ?? 'http').toLowerCase().replace('https', 'http');
+        const parts = String(item.proxy ?? '').split(':');
+        const rawProto = String(item.type ?? 'http').toLowerCase().replace('https', 'http');
         const normalizedProto = rawProto === 'socks' ? 'socks5' : rawProto;
         return {
-          host:              item.ip ?? item.host,
-          port:              Number(item.port),
-          username:          stripUserPrefix(item.user ?? item.username),
-          password:          item.password ?? '',
+          host:              parts[0] || item.ip,
+          port:              Number(parts[1]),
+          username:          parts[2] ?? '',
+          password:          parts[3] ?? '',
           protocol:          normalizedProto,
           provider_proxy_id: String(item.idproxy ?? ''),
-          isp:               item.loaiproxy ?? loaiproxy,
+          isp:               loaiproxy,
         } as ProxyCredential;
       });
   }
