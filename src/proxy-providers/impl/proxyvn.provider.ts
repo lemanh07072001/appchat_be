@@ -196,6 +196,63 @@ export class ProxyvnProvider implements IProxyProvider {
     };
   }
 
+  // ─── Lấy lại proxy theo idproxy ──────────────────────────────────────────────
+  // ProxyVN không có "order id"; list proxy theo loaiproxy + idproxy (danh sách
+  // id, cách nhau dấu phẩy). Dùng để admin refresh dữ liệu proxy đã chọn.
+
+  async fetchProxiesByIds(
+    token_api: string,
+    provider_proxy_ids: string[],
+    context?: { id_service?: string },
+  ): Promise<ProxyCredential[]> {
+    const loaiproxy = (context?.id_service ?? '').trim();
+    if (!loaiproxy) {
+      throw new BadRequestException(
+        'ProxyVN: thiếu loaiproxy (id_service = order.config.isp) để list proxy',
+      );
+    }
+
+    const ids = (provider_proxy_ids ?? [])
+      .map((x) => String(x).trim())
+      .filter(Boolean);
+    const idParam = ids.length ? ids.join(',') : 'all';
+
+    const url =
+      `${this.BASE_URL}/listproxy.php` +
+      `?key=${encodeURIComponent(token_api)}` +
+      `&loaiproxy=${encodeURIComponent(loaiproxy)}` +
+      `&idproxy=${encodeURIComponent(idParam)}`;
+
+    const safeUrl = url.replace(/key=[^&]+/, 'key=***');
+    this.logger.log(`[LISTPROXY] → ${safeUrl}`);
+
+    const raw = await this.request<any[]>(url);
+    this.logger.debug(`[LISTPROXY] ← ${JSON.stringify(raw)}`);
+
+    const items = Array.isArray(raw) ? raw : [raw];
+    // ProxyVN trả user có prefix timestamp 10 số + 2 ký tự — cắt như buy()
+    const stripUserPrefix = (s: string) => (s ?? '').replace(/^\d{10}.{2}/, '');
+    const wanted = new Set(ids);
+
+    return items
+      .filter((item) => item && (item.ip ?? item.host) && item.port)
+      // chỉ giữ đúng idproxy đã yêu cầu (an toàn khi API trả 'all')
+      .filter((item) => wanted.size === 0 || wanted.has(String(item.idproxy)))
+      .map((item) => {
+        const rawProto = (item.type ?? 'http').toLowerCase().replace('https', 'http');
+        const normalizedProto = rawProto === 'socks' ? 'socks5' : rawProto;
+        return {
+          host:              item.ip ?? item.host,
+          port:              Number(item.port),
+          username:          stripUserPrefix(item.user ?? item.username),
+          password:          item.password ?? '',
+          protocol:          normalizedProto,
+          provider_proxy_id: String(item.idproxy ?? ''),
+          isp:               item.loaiproxy ?? loaiproxy,
+        } as ProxyCredential;
+      });
+  }
+
   // ─── Xoay IP ────────────────────────────────────────────────────────────────
   // TODO: implement khi có tài liệu API rotate của ProxyVN
 
