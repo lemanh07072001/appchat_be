@@ -151,7 +151,10 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
         const proxies = await provider.fetchOrderProxies(
           partner.token_api,
           order.provider_order_id,
-          { metadata: order.provider_metadata },
+          {
+            metadata: order.provider_metadata,
+            protocol: (order.config as any)?.protocol ?? (order as any).protocol,
+          },
         );
         this.logger.log(`Order ${orderId}: [STEP 4] fetchOrderProxies returned ${proxies?.length ?? 0} proxies (${Date.now() - tPoll}ms)`);
 

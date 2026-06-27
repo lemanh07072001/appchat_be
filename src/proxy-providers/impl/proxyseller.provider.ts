@@ -249,7 +249,7 @@ export class ProxysellerProvider implements IProxyProvider {
   async fetchOrderProxies(
     token_api: string,
     provider_order_id: string,
-    context?: { metadata?: Record<string, any> },
+    context?: { metadata?: Record<string, any>; protocol?: string },
   ): Promise<ProxyCredential[]> {
     const { type, orderId } = this.parseOrderRef(
       provider_order_id,
@@ -276,15 +276,19 @@ export class ProxysellerProvider implements IProxyProvider {
       return [];
     }
 
+    // Chọn port theo protocol ĐÃ MUA (order): HTTP → port_http, SOCKS5 → port_socks.
+    // Fallback item.protocol nếu order không truyền protocol.
+    const orderProto = String(context?.protocol ?? '').toLowerCase();
     return items.map((item) => {
-      const proto = (item.protocol || 'HTTP').toLowerCase();
-      const port = proto === 'socks' || proto === 'socks5' ? item.port_socks : item.port_http;
+      const proto = orderProto || (item.protocol || 'HTTP').toLowerCase();
+      const isSocks = proto === 'socks' || proto === 'socks5';
+      const port = isSocks ? item.port_socks : item.port_http;
       return {
         host: item.ip,
         port: Number(port),
         username: item.login,
         password: item.password,
-        protocol: proto === 'socks' ? 'socks5' : proto, // chuẩn hoá về 'socks5'
+        protocol: isSocks ? 'socks5' : 'http', // chuẩn hoá: http | socks5
         provider_proxy_id: String(item.id),
         country_code: (item.country_alpha3 || item.country || '').toLowerCase(),
         provider_metadata: item, // lưu nguyên raw item

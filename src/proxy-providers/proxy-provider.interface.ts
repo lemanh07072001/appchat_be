@@ -87,7 +87,7 @@ export interface IProxyProvider {
   fetchOrderProxies?(
     token_api: string,
     provider_order_id: string,
-    context?: { metadata?: Record<string, any> },
+    context?: { metadata?: Record<string, any>; protocol?: string },
   ): Promise<ProxyCredential[]>;
 
   /**

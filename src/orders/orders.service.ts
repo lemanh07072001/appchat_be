@@ -1294,7 +1294,10 @@ export class OrdersService {
     const proxies = await provider.fetchOrderProxies(
       partner.token_api,
       providerOrderId,
-      { metadata: order.provider_metadata },
+      {
+        metadata: order.provider_metadata,
+        protocol: (order.config as any)?.protocol ?? (order as any).protocol,
+      },
     );
 
     if (!proxies || proxies.length === 0) {
@@ -1448,7 +1451,10 @@ export class OrdersService {
       const all = await provider.fetchOrderProxies(
         partner.token_api,
         order.provider_order_id || '',
-        { metadata: order.provider_metadata },
+        {
+          metadata: order.provider_metadata,
+          protocol: (order.config as any)?.protocol ?? (order as any).protocol,
+        },
       );
       const wanted = new Set(providerProxyIds);
       fresh = (all ?? []).filter(
