@@ -209,6 +209,37 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
     );
   }
 
+  // ─── Gia hạn THẤT BẠI / THIẾU: cần admin xử lý ───────────────────────
+  async sendRenewFailed(userId: string, data: {
+    order_code:    string;
+    service_name:  string;
+    total:         number;
+    successCount:  number;
+    failCount:     number;
+    duration_days: number;
+    total_price:   number;
+    error?:        string;
+    refunded?:     boolean;  // true = fail toàn bộ, đã hoàn tiền
+  }) {
+    const userLabel = await this.resolveUserLabel(userId);
+    const title = data.refunded ? 'Gia hạn THẤT BẠI (đã hoàn tiền)' : 'Gia hạn THIẾU';
+    const icon  = data.refunded ? '❌' : '⚠️';
+    this.sendTelegram(
+      `${icon} <b>${title}</b>\n\n` +
+      `👤 ${userLabel}\n` +
+      `📦 ${data.service_name}\n` +
+      `🆔 Mã: ${data.order_code}\n` +
+      `✅ Gia hạn: <b>${data.successCount}/${data.total}</b>` +
+      (data.failCount ? ` — ❌ lỗi ${data.failCount}` : '') + `\n` +
+      `📅 +${data.duration_days} ngày\n` +
+      `💵 Tiền: ${data.total_price.toLocaleString('vi-VN')}đ` +
+      (data.refunded ? ' (đã hoàn)' : '') + `\n` +
+      (data.error ? `📝 Lỗi: <code>${(data.error || '').slice(0, 400)}</code>\n` : '') +
+      `👉 Admin cần gia hạn tay / hoàn phần thiếu bên NCC`,
+      'order',
+    );
+  }
+
   @SubscribeMessage('admin_join')
   handleAdminJoin(client: Socket) {
     client.join('admin_chat');

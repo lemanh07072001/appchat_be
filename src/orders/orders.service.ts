@@ -431,7 +431,7 @@ export class OrdersService {
         .find(filter)
         .populate('service_id', 'name proxy_type ip_version allow_renew')
         .populate('country_id', 'name code')
-        .select('-admin_note -cost_per_unit -total_cost -profit -partner_id')
+        .select('-admin_note -cost_per_unit -total_cost -profit -partner_id -provider_order_id -provider_metadata')
         .skip(skip)
         .limit(limit)
         .sort({ createdAt: -1 })
@@ -472,8 +472,7 @@ export class OrdersService {
       .findOne({ _id: new Types.ObjectId(orderId), user_id: new Types.ObjectId(userId) })
       .populate('service_id', 'name proxy_type ip_version allow_renew')
       .populate('country_id', 'name code')
-      .populate('partner_id', '_id code name')
-      .select('-admin_note -cost_per_unit -total_cost -profit -provider_order_id -error_message -credentials')
+      .select('-admin_note -cost_per_unit -total_cost -profit -provider_order_id -error_message -credentials -partner_id -provider_metadata')
       .lean()
       .exec();
     if (!order) throw new BadRequestException('Order not found');
@@ -486,7 +485,8 @@ export class OrdersService {
     const [proxies, totalProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location')
+        // KHÔNG trả `provider` / `provider_proxy_id` cho user (ẩn danh tính NCC)
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain location')
         .skip(skip)
         .limit(limit)
         .lean()
@@ -1079,12 +1079,37 @@ export class OrdersService {
         { duration_days, totalPrice, error: err?.message },
         userId,
       );
+      void this.notification.sendRenewFailed(userId, {
+        order_code:    order.order_code,
+        service_name:  service?.name ?? '',
+        total:         proxies.length,
+        successCount:  0,
+        failCount:     proxies.length,
+        duration_days,
+        total_price:   totalPrice,
+        error:         err?.message,
+        refunded:      true,
+      });
       throw new BadRequestException(`Gia hạn thất bại: ${err?.message ?? 'Unknown'}`);
     }
 
     const raw = result.raw ?? {};
     const successCount = raw.successCount ?? proxies.length;
     const failCount    = raw.failCount ?? 0;
+
+    // Gia hạn THIẾU (một số proxy fail bên NCC) → báo admin (user đã trả đủ tiền)
+    if (failCount > 0) {
+      void this.notification.sendRenewFailed(userId, {
+        order_code:    order.order_code,
+        service_name:  service?.name ?? '',
+        total:         proxies.length,
+        successCount,
+        failCount,
+        duration_days,
+        total_price:   totalPrice,
+        refunded:      false,
+      });
+    }
 
     // 4. Update order.end_date
     const oldEndDate = new Date(order.end_date);

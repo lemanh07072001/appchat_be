@@ -170,7 +170,6 @@ export class ProxyRotateService {
       ip:         newIp,
       prev_ip:    proxy.ip_address,
       location:   raw.location   ?? null,
-      provider:   raw.provider   ?? null,
       lastRotate: raw.lastRotate != null ? String(raw.lastRotate) : null,
     };
 

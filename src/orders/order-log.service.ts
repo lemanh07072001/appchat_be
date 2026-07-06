@@ -86,7 +86,30 @@ export class OrderLogService {
       .exec();
   }
 
-  /** Lấy log của order — chỉ trả về nếu order thuộc về userId */
+  // Field nhạy cảm trong log.data — KHÔNG trả cho user (ẩn danh tính NCC)
+  private static readonly SENSITIVE_LOG_KEYS = new Set([
+    'partner_code', 'partner_id', 'provider', 'provider_order_id',
+    'provider_proxy_id', 'provider_proxy_ids', 'provider_metadata',
+    'provider_raw_response', 'raw_response', 'token_api', 'key',
+  ]);
+
+  // Tên NCC xuất hiện trong message → thay bằng "nhà cung cấp"
+  private static readonly PROVIDER_NAME_RE =
+    /\b(proxyvn|proxyseller|proxy-seller|homeproxy|twoproxy|2proxy|proxysieutoc|proxyv6|proxy\.vn)\b/gi;
+
+  private sanitizeLogForUser(log: Record<string, any>) {
+    const data: Record<string, any> = { ...(log.data ?? {}) };
+    for (const k of Object.keys(data)) {
+      if (OrderLogService.SENSITIVE_LOG_KEYS.has(k)) delete data[k];
+    }
+    const message = String(log.message ?? '').replace(
+      OrderLogService.PROVIDER_NAME_RE,
+      'nhà cung cấp',
+    );
+    return { ...log, message, data };
+  }
+
+  /** Lấy log của order — chỉ trả nếu order thuộc userId (đã ẩn thông tin NCC) */
   async findByOrderForUser(orderId: string, userId: string) {
     const order = await this.orderModel
       .findOne({ _id: new Types.ObjectId(orderId), user_id: new Types.ObjectId(userId) })
@@ -94,6 +117,7 @@ export class OrderLogService {
       .lean()
       .exec();
     if (!order) throw new ForbiddenException('Order không tồn tại hoặc không có quyền truy cập');
-    return this.findByOrder(orderId);
+    const logs = await this.findByOrder(orderId);
+    return logs.map((l) => this.sanitizeLogForUser(l));
   }
 }
