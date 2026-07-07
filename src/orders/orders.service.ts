@@ -1159,6 +1159,100 @@ export class OrdersService {
     };
   }
 
+  /**
+   * Admin gia hạn order tại NCC ("Gia hạn NCC"):
+   * - KHÔNG trừ tiền user (thao tác admin)
+   * - Gọi provider.renew() gia hạn proxy bên NCC
+   * - Update end_date + duration_days
+   */
+  async renewByAdmin(orderId: string, duration_days: number, actor = 'admin') {
+    if (!duration_days || duration_days < 1) {
+      throw new BadRequestException('duration_days phải >= 1');
+    }
+
+    if (!Types.ObjectId.isValid(orderId)) {
+      throw new BadRequestException('Order id không hợp lệ');
+    }
+
+    const order = await this.orderModel
+      .findById(orderId)
+      .populate('service_id')
+      .populate('partner_id')
+      .exec();
+    if (!order) throw new BadRequestException('Order không tồn tại');
+
+    const partner = order.partner_id as any;
+    if (!partner?.token_api || !partner?.code) {
+      throw new BadRequestException('Order không có thông tin NCC');
+    }
+
+    const service = order.service_id as any;
+
+    const proxies = await this.proxyModel
+      .find({ order_id: order._id, provider_proxy_id: { $exists: true, $ne: '' } })
+      .select('provider_proxy_id')
+      .lean()
+      .exec();
+
+    if (proxies.length === 0) {
+      throw new BadRequestException('Không có proxy nào để gia hạn');
+    }
+
+    // Gọi provider.renew()
+    const provider = this.providerFactory.getProvider(partner.code);
+    const idService = this.deriveIdServiceForRenew(partner.code, order, service);
+    let result;
+    try {
+      result = await provider.renew({
+        token_api:          partner.token_api,
+        provider_order_id:  order.provider_order_id ?? '',
+        duration_days,
+        provider_proxy_ids: proxies.map(p => p.provider_proxy_id),
+        id_service:         idService,
+        provider_metadata:  order.provider_metadata,
+      });
+    } catch (err: any) {
+      this.logger.error(`Order ${orderId}: admin renew fail: ${err?.message}`);
+      void this.orderLogService.error(
+        orderId,
+        OrderLogStep.ADMIN_ORDER_RENEWED,
+        `Admin gia hạn NCC thất bại`,
+        { duration_days, error: err?.message },
+        actor,
+      );
+      throw new BadRequestException(`Gia hạn thất bại: ${err?.message ?? 'Unknown'}`);
+    }
+
+    const raw = result.raw ?? {};
+    const successCount = raw.successCount ?? proxies.length;
+    const failCount    = raw.failCount ?? 0;
+
+    // Update order.end_date
+    const oldEndDate = new Date(order.end_date);
+    const newEndDate = result.new_end_date
+      ? new Date(result.new_end_date)
+      : new Date(oldEndDate.getTime() + duration_days * 86400000);
+    order.end_date = newEndDate;
+    order.duration_days = (order.duration_days ?? 0) + duration_days;
+    await order.save();
+
+    this.logger.log(`Order ${orderId}: admin gia hạn NCC ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`);
+    void this.orderLogService.info(
+      orderId,
+      OrderLogStep.ADMIN_ORDER_RENEWED,
+      `Admin gia hạn NCC ${successCount} proxy thêm ${duration_days} ngày (đến ${newEndDate.toLocaleDateString('vi-VN')})${failCount > 0 ? `, ${failCount} proxy thất bại` : ''}`,
+      { duration_days, successCount, failCount, old_end_date: oldEndDate, new_end_date: newEndDate },
+      actor,
+    );
+
+    return {
+      message: `Gia hạn thành công ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`,
+      successCount,
+      failCount,
+      new_end_date: newEndDate,
+    };
+  }
+
   async updateProxy(proxyId: string, data: { ip_address?: string; port?: number; auth_username?: string; auth_password?: string; provider_proxy_id?: string }) {
     if (!Types.ObjectId.isValid(proxyId)) throw new BadRequestException('Invalid proxy ID');
     const proxy = await this.proxyModel.findById(proxyId).exec();

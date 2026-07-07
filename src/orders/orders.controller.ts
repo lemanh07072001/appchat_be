@@ -194,6 +194,17 @@ export class OrdersController {
     return this.ordersService.syncProviderOrder(id, providerOrderId, actor);
   }
 
+  @Post('api/admin/orders/:id/renew-provider')
+  @UseGuards(AdminGuard)
+  renewProvider(
+    @Param('id') id: string,
+    @Body('duration_days') duration_days: number,
+    @Req() req?: Request,
+  ) {
+    const actor = (req as any)?.user?.sub ?? 'admin';
+    return this.ordersService.renewByAdmin(id, duration_days, actor);
+  }
+
   @Post('api/admin/orders/:id/refetch-proxies')
   @UseGuards(AdminGuard)
   refetchProxies(
