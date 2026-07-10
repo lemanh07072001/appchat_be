@@ -79,6 +79,14 @@ export class Proxy {
 
   @Prop({ type: Date, default: null })
   last_checked_at: Date;
+
+  // Soft-delete: khi user gia hạn mà bỏ chọn proxy → đánh dấu xoá (không xoá cứng)
+  // để admin vẫn tra được lịch sử và có thể khôi phục.
+  @Prop({ default: false })
+  is_deleted: boolean;
+
+  @Prop({ type: Date, default: null })
+  deleted_at: Date | null;
 }
 
 export const ProxySchema = SchemaFactory.createForClass(Proxy);

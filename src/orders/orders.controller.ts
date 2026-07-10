@@ -92,9 +92,10 @@ export class OrdersController {
     @Req() req: Request,
     @Param('id') id: string,
     @Body('duration_days') duration_days: number,
+    @Body('delete_proxy_ids') deleteProxyIds: string[],
   ) {
     const userId = (req as any).user.sub as string;
-    return this.ordersService.renewByUser(userId, id, duration_days);
+    return this.ordersService.renewByUser(userId, id, duration_days, deleteProxyIds ?? []);
   }
 
   // ─── Admin ────────────────────────────────────────────────
