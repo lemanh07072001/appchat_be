@@ -443,7 +443,7 @@ export class OrdersService {
     // Lookup proxies cho tất cả orders trong 1 query
     const orderIds = orders.map((o) => o._id);
     const proxies = await this.proxyModel
-      .find({ order_id: { $in: orderIds }, is_deleted: { $ne: true } })
+      .find({ order_id: { $in: orderIds } })
       .select('order_id ip_address port protocol auth_username auth_password country_code region city isp is_active health_status')
       .lean()
       .exec();
@@ -481,7 +481,7 @@ export class OrdersService {
     const limit = query.limit ?? 10;
     const skip  = (page - 1) * limit;
 
-    const proxyFilter = { order_id: order._id, is_deleted: { $ne: true } };
+    const proxyFilter = { order_id: order._id };
     const [proxies, totalProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
@@ -535,7 +535,7 @@ export class OrdersService {
     const [proxies, totalProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location is_deleted deleted_at')
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location')
         .skip(skip)
         .limit(limit)
         .lean()
@@ -990,7 +990,7 @@ export class OrdersService {
    * - Nếu fail toàn bộ → rollback tiền
    * - Nếu thành công → update end_date, log wallet tx
    */
-  async renewByUser(userId: string, orderId: string, duration_days: number, deleteProxyIds: string[] = []) {
+  async renewByUser(userId: string, orderId: string, duration_days: number) {
     if (!duration_days || duration_days < 1) {
       throw new BadRequestException('duration_days phải >= 1');
     }
@@ -1026,34 +1026,20 @@ export class OrdersService {
       throw new BadRequestException('Dịch vụ này không hỗ trợ gia hạn');
     }
 
-    const allProxies = await this.proxyModel
-      .find({ order_id: order._id, is_deleted: { $ne: true }, provider_proxy_id: { $exists: true, $ne: '' } })
-      .select('_id ip_address port provider_proxy_id')
+    const proxies = await this.proxyModel
+      .find({ order_id: order._id, provider_proxy_id: { $exists: true, $ne: '' } })
+      .select('provider_proxy_id')
       .lean()
       .exec();
 
-    if (allProxies.length === 0) {
+    if (proxies.length === 0) {
       throw new BadRequestException('Không có proxy nào để gia hạn');
     }
 
-    // Proxy user BỎ chọn (deleteProxyIds) → soft-delete; còn lại → gia hạn.
-    // deleteProxyIds rỗng = gia hạn tất cả (giữ hành vi cũ ở màn danh sách đơn).
-    const deleteSet = new Set((deleteProxyIds ?? []).map((x) => String(x)));
-    const toRenew  = allProxies.filter((p) => !deleteSet.has(String(p._id)));
-    const toDelete = allProxies.filter((p) => deleteSet.has(String(p._id)));
-
-    if (toRenew.length === 0) {
-      throw new BadRequestException('Phải chọn ít nhất 1 proxy để gia hạn');
-    }
-
-    // Rút gọn proxy cho log snapshot (admin xem chi tiết before/after)
-    const snap = (list: any[]) =>
-      list.map((p) => ({ ip: p.ip_address, port: p.port, provider_proxy_id: p.provider_proxy_id }));
-
-    // 1. Tính phí gia hạn — theo SỐ PROXY GIA HẠN (không tính proxy bị xoá)
+    // 1. Tính phí gia hạn
     const pricePerUnit = Number(order.price_per_unit ?? 0);
-    const renewCount   = toRenew.length;
-    const totalPrice   = pricePerUnit * renewCount * duration_days;
+    const quantity     = Number(order.quantity ?? 0);
+    const totalPrice   = pricePerUnit * quantity * duration_days;
     if (totalPrice <= 0) {
       throw new BadRequestException('Không thể xác định giá gia hạn');
     }
@@ -1078,12 +1064,12 @@ export class OrdersService {
         token_api:          partner.token_api,
         provider_order_id:  order.provider_order_id ?? '',
         duration_days,
-        provider_proxy_ids: toRenew.map(p => p.provider_proxy_id),
+        provider_proxy_ids: proxies.map(p => p.provider_proxy_id),
         id_service:         idService,
         provider_metadata:  order.provider_metadata,
       });
     } catch (err: any) {
-      // Rollback tiền nếu provider fail (chưa xoá proxy nào)
+      // Rollback tiền nếu provider fail
       await this.userModel.findByIdAndUpdate(userId, { $inc: { money: totalPrice } }).exec();
       this.logger.error(`Order ${orderId}: user renew fail — rollback ${totalPrice} VND: ${err?.message}`);
       void this.orderLogService.error(
@@ -1096,9 +1082,9 @@ export class OrdersService {
       void this.notification.sendRenewFailed(userId, {
         order_code:    order.order_code,
         service_name:  service?.name ?? '',
-        total:         renewCount,
+        total:         proxies.length,
         successCount:  0,
-        failCount:     renewCount,
+        failCount:     proxies.length,
         duration_days,
         total_price:   totalPrice,
         error:         err?.message,
@@ -1108,7 +1094,7 @@ export class OrdersService {
     }
 
     const raw = result.raw ?? {};
-    const successCount = raw.successCount ?? renewCount;
+    const successCount = raw.successCount ?? proxies.length;
     const failCount    = raw.failCount ?? 0;
 
     // Gia hạn THIẾU (một số proxy fail bên NCC) → báo admin (user đã trả đủ tiền)
@@ -1116,7 +1102,7 @@ export class OrdersService {
       void this.notification.sendRenewFailed(userId, {
         order_code:    order.order_code,
         service_name:  service?.name ?? '',
-        total:         renewCount,
+        total:         proxies.length,
         successCount,
         failCount,
         duration_days,
@@ -1125,16 +1111,7 @@ export class OrdersService {
       });
     }
 
-    // 4. Soft-delete proxy user bỏ chọn (giữ DB cho admin tra cứu/khôi phục)
-    if (toDelete.length > 0) {
-      await this.proxyModel.updateMany(
-        { _id: { $in: toDelete.map(p => p._id) } },
-        { $set: { is_deleted: true, deleted_at: new Date(), is_active: false, is_available: false } },
-      ).exec();
-      order.quantity = renewCount; // số proxy còn lại sau khi xoá
-    }
-
-    // 5. Update order.end_date
+    // 4. Update order.end_date
     const oldEndDate = new Date(order.end_date);
     const newEndDate = result.new_end_date
       ? new Date(result.new_end_date)
@@ -1153,43 +1130,28 @@ export class OrdersService {
       direction:      'out',
       balance_before: balanceBefore,
       balance_after:  balanceAfter,
-      description:    `Gia hạn proxy: ${service.name ?? ''} x${renewCount} (${duration_days} ngày)`,
+      description:    `Gia hạn proxy: ${service.name ?? ''} x${quantity} (${duration_days} ngày)`,
       ref_id:         orderId,
       ref_type:       'order',
       created_by:     userId,
     });
 
-    // 7. Log order — SNAPSHOT before/renewed/deleted để admin biết chi tiết trước/sau
-    this.logger.log(`Order ${orderId}: user gia hạn ${successCount}/${renewCount} proxy, xoá ${toDelete.length}, +${duration_days} ngày, trừ ${totalPrice} VND`);
+    // 6. Log order
+    this.logger.log(`Order ${orderId}: user gia hạn ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày, trừ ${totalPrice} VND`);
     void this.orderLogService.info(
       orderId,
       OrderLogStep.USER_ORDER_RENEWED,
-      `User gia hạn ${successCount}/${renewCount} proxy thêm ${duration_days} ngày (đến ${newEndDate.toLocaleDateString('vi-VN')})` +
-        `${failCount > 0 ? `, ${failCount} proxy thất bại` : ''}` +
-        `${toDelete.length > 0 ? `, xoá ${toDelete.length} proxy không chọn` : ''} — trừ ${totalPrice.toLocaleString('vi-VN')} VND`,
-      {
-        duration_days,
-        successCount,
-        failCount,
-        totalPrice,
-        old_end_date: oldEndDate,
-        new_end_date: newEndDate,
-        balance_after: balanceAfter,
-        before:  { count: allProxies.length, list: snap(allProxies) },
-        renewed: { count: renewCount,        list: snap(toRenew) },
-        deleted: { count: toDelete.length,   list: snap(toDelete) },
-      },
+      `User gia hạn ${successCount} proxy thêm ${duration_days} ngày (đến ${newEndDate.toLocaleDateString('vi-VN')})${failCount > 0 ? `, ${failCount} proxy thất bại` : ''} — trừ ${totalPrice.toLocaleString('vi-VN')} VND`,
+      { duration_days, successCount, failCount, totalPrice, old_end_date: oldEndDate, new_end_date: newEndDate, balance_after: balanceAfter },
       userId,
     );
 
     return {
       success: true,
-      message: `Gia hạn thành công ${successCount}/${renewCount} proxy thêm ${duration_days} ngày` +
-        `${toDelete.length > 0 ? `, đã xoá ${toDelete.length} proxy không chọn` : ''}`,
+      message: `Gia hạn thành công ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`,
       data: {
         successCount,
         failCount,
-        deletedCount: toDelete.length,
         totalPrice,
         new_end_date:  newEndDate,
         balance_after: balanceAfter,
