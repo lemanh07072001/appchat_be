@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { Transaction, TransactionSchema } from '../schemas/transactions.schema';
 import { User, UserSchema } from '../schemas/users.schema';
 import { Order, OrderSchema } from '../schemas/orders.schema';
+import { WalletTransaction, WalletTransactionSchema } from '../schemas/wallet-transaction.schema';
 import { WebhookLog, WebhookLogSchema } from '../schemas/webhook-log.schema';
 import { ChatMessage, ChatMessageSchema } from '../schemas/chat-message.schema';
 import { WebhookService } from './webhook.service';
@@ -17,6 +18,7 @@ import { NotificationGateway } from './notification.gateway';
       { name: Transaction.name,  schema: TransactionSchema },
       { name: User.name,         schema: UserSchema },
       { name: Order.name,        schema: OrderSchema },
+      { name: WalletTransaction.name, schema: WalletTransactionSchema },
       { name: WebhookLog.name,   schema: WebhookLogSchema },
       { name: ChatMessage.name,  schema: ChatMessageSchema },
     ]),

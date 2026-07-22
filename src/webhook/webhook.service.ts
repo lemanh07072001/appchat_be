@@ -6,8 +6,9 @@ import { Transaction, TransactionDocument, TransactionStatus, PaymentMethod } fr
 import { USDT_VND_RATE, MIN_DEPOSIT_USDT } from './binance.constants';
 import { User, UserDocument } from '../schemas/users.schema';
 import { Order, OrderDocument } from '../schemas/orders.schema';
+import { WalletTransaction, WalletTransactionDocument, WalletTxType } from '../schemas/wallet-transaction.schema';
 import { WebhookLog, WebhookLogDocument, WebhookStep, WebhookStepStatus } from '../schemas/webhook-log.schema';
-import { OrderStatusEnum } from '../enum/order.enum';
+import { OrderStatusEnum, PaymentStatusEnum } from '../enum/order.enum';
 import { NotificationGateway } from './notification.gateway';
 
 // Số tiền tối thiểu cho 1 lần nạp (VND). Nhỏ hơn sẽ bị từ chối, không cộng vào ví.
@@ -49,6 +50,7 @@ export class WebhookService {
     @InjectModel(Transaction.name)  private txModel: Model<TransactionDocument>,
     @InjectModel(User.name)         private userModel: Model<UserDocument>,
     @InjectModel(Order.name)        private orderModel: Model<OrderDocument>,
+    @InjectModel(WalletTransaction.name) private walletTxModel: Model<WalletTransactionDocument>,
     @InjectModel(WebhookLog.name)   private webhookLogModel: Model<WebhookLogDocument>,
     private readonly notification: NotificationGateway,
   ) {}
@@ -870,17 +872,57 @@ export class WebhookService {
   async getAdminDashboard() {
     const now = new Date();
 
-    // Đầu ngày hôm nay (UTC+7)
-    const startOfToday = new Date(now);
-    startOfToday.setHours(0, 0, 0, 0);
+    // Đầu ngày hôm nay / đầu tháng / 30 ngày trước — neo theo UTC+7
+    // (khớp timezone '+07:00' của $dateToString trong chart, không phụ thuộc TZ server)
+    const VN_OFFSET = 7 * 3600000;
+    const vnNow = new Date(now.getTime() + VN_OFFSET);
+    const startOfToday = new Date(
+      Date.UTC(vnNow.getUTCFullYear(), vnNow.getUTCMonth(), vnNow.getUTCDate()) - VN_OFFSET,
+    );
+    const startOfMonth = new Date(
+      Date.UTC(vnNow.getUTCFullYear(), vnNow.getUTCMonth(), 1) - VN_OFFSET,
+    );
+    const days30Ago = new Date(startOfToday.getTime() - 29 * 86400000);
 
-    // Đầu tháng này
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    // Đơn đã thanh toán & hợp lệ để tính doanh thu / giá vốn
+    // (đúng convention "spend" của users.service.getFinance: loại PENDING, CANCELLED, FAILED, REFUNDED)
+    const validPaidOrder = {
+      payment_status: PaymentStatusEnum.PAID,
+      status: {
+        $nin: [
+          OrderStatusEnum.PENDING,
+          OrderStatusEnum.CANCELLED,
+          OrderStatusEnum.FAILED,
+          OrderStatusEnum.REFUNDED,
+        ],
+      },
+    };
 
-    // 30 ngày trước
-    const days30Ago = new Date(now);
-    days30Ago.setDate(days30Ago.getDate() - 29);
-    days30Ago.setHours(0, 0, 0, 0);
+    // Doanh thu thuần = total_price − refunded_amount (tiền hoàn KHÔNG tính vào doanh thu)
+    const netRevenueExpr = {
+      $subtract: ['$total_price', { $ifNull: ['$refunded_amount', 0] }],
+    };
+    const costExpr = { $ifNull: ['$total_cost', 0] };
+
+    const financeGroup = {
+      _id: null,
+      revenue: { $sum: netRevenueExpr },
+      cost: { $sum: costExpr },
+      orders: { $sum: 1 },
+      cost_missing: { $sum: { $cond: [{ $eq: ['$total_cost', null] }, 1, 0] } },
+    };
+    // Lũy kế: theo orders.refunded_amount (đủ dữ liệu kể cả khi chưa có wallet ledger)
+    const ordersRefundGroup = {
+      _id: null,
+      total: { $sum: '$refunded_amount' },
+      count: { $sum: 1 },
+    };
+    // Theo thời kỳ: theo wallet transaction (đúng thời điểm hoàn tiền)
+    const walletRefundGroup = {
+      _id: null,
+      total: { $sum: '$amount' },
+      count: { $sum: 1 },
+    };
 
     const [
       totalUsers,
@@ -900,6 +942,15 @@ export class WebhookService {
       recentOrders,
       recentUsers,
       topUsers,
+      ordersByStatus,
+      financeAll,
+      financeToday,
+      financeMonth,
+      refundAll,
+      refundToday,
+      refundMonth,
+      financeChart,
+      refundChart,
     ] = await Promise.all([
       // ── Stats ──
       this.userModel.countDocuments(),
@@ -1002,6 +1053,121 @@ export class WebhookService {
           },
         },
       ]),
+
+      // ── Orders theo status ──
+      this.orderModel.aggregate([
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+
+      // ── Tài chính: doanh thu thuần / giá vốn (3 mốc thời gian) ──
+      this.orderModel.aggregate([
+        { $match: validPaidOrder },
+        { $group: financeGroup },
+      ]),
+      this.orderModel.aggregate([
+        { $match: { ...validPaidOrder, createdAt: { $gte: startOfToday } } },
+        { $group: financeGroup },
+      ]),
+      this.orderModel.aggregate([
+        { $match: { ...validPaidOrder, createdAt: { $gte: startOfMonth } } },
+        { $group: financeGroup },
+      ]),
+
+      // ── Tiền hoàn lũy kế: orders.refunded_amount (đúng convention
+      //    total_refunded của users.service.getFinance) ──
+      this.orderModel.aggregate([
+        { $match: { refunded_amount: { $gt: 0 } } },
+        { $group: ordersRefundGroup },
+      ]),
+      // ── Tiền hoàn hôm nay / tháng này: wallet transaction type refund
+      //    (order không có refunded_at → chỉ wallet ledger có thời điểm hoàn đúng) ──
+      this.walletTxModel.aggregate([
+        { $match: { type: WalletTxType.REFUND, direction: 'in', createdAt: { $gte: startOfToday } } },
+        { $group: walletRefundGroup },
+      ]),
+      this.walletTxModel.aggregate([
+        { $match: { type: WalletTxType.REFUND, direction: 'in', createdAt: { $gte: startOfMonth } } },
+        { $group: walletRefundGroup },
+      ]),
+
+      // ── Finance chart 30 ngày (theo ngày tạo đơn, tz +07:00) ──
+      this.orderModel.aggregate([
+        { $match: { createdAt: { $gte: days30Ago } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: '+07:00' } },
+            revenue: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ['$payment_status', PaymentStatusEnum.PAID] },
+                      {
+                        $not: [
+                          {
+                            $in: [
+                              '$status',
+                              [
+                                OrderStatusEnum.PENDING,
+                                OrderStatusEnum.CANCELLED,
+                                OrderStatusEnum.FAILED,
+                                OrderStatusEnum.REFUNDED,
+                              ],
+                            ],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  netRevenueExpr,
+                  0,
+                ],
+              },
+            },
+            cost: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ['$payment_status', PaymentStatusEnum.PAID] },
+                      {
+                        $not: [
+                          {
+                            $in: [
+                              '$status',
+                              [
+                                OrderStatusEnum.PENDING,
+                                OrderStatusEnum.CANCELLED,
+                                OrderStatusEnum.FAILED,
+                                OrderStatusEnum.REFUNDED,
+                              ],
+                            ],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  costExpr,
+                  0,
+                ],
+              },
+            },
+            orders: { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]),
+
+      // ── Tiền hoàn theo ngày (theo thời điểm hoàn, từ wallet) ──
+      this.walletTxModel.aggregate([
+        { $match: { type: WalletTxType.REFUND, direction: 'in', createdAt: { $gte: days30Ago } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: '+07:00' } },
+            refunded: { $sum: '$amount' },
+          },
+        },
+      ]),
     ]);
 
     // Fill missing days in revenue chart
@@ -1011,13 +1177,40 @@ export class WebhookService {
     }
     const filledChart: { date: string; revenue: number; deposits: number }[] = [];
     for (let i = 0; i < 30; i++) {
-      const d = new Date(days30Ago);
-      d.setDate(d.getDate() + i);
-      const key = d.toISOString().slice(0, 10);
+      const d = new Date(days30Ago.getTime() + i * 86400000);
+      const key = new Date(d.getTime() + VN_OFFSET).toISOString().slice(0, 10);
       filledChart.push({
         date: key,
         revenue: chartMap.get(key)?.revenue ?? 0,
         deposits: chartMap.get(key)?.deposits ?? 0,
+      });
+    }
+
+    // Fill 30 ngày cho finance chart (ngày không có dữ liệu = 0)
+    // Key ngày tính theo UTC+7 (d.getTime() + VN_OFFSET) để khớp bucket của $dateToString
+    const financeMap = new Map<string, { revenue: number; cost: number; orders: number }>();
+    for (const item of financeChart as any[]) {
+      financeMap.set(item._id, {
+        revenue: item.revenue,
+        cost: item.cost,
+        orders: item.orders,
+      });
+    }
+    const refundDayMap = new Map<string, number>();
+    for (const item of refundChart as any[]) {
+      refundDayMap.set(item._id, item.refunded);
+    }
+    const filledFinanceChart: { date: string; revenue: number; cost: number; refunded: number; orders: number }[] = [];
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(days30Ago.getTime() + i * 86400000);
+      const key = new Date(d.getTime() + VN_OFFSET).toISOString().slice(0, 10);
+      const v = financeMap.get(key);
+      filledFinanceChart.push({
+        date: key,
+        revenue: v?.revenue ?? 0,
+        cost: v?.cost ?? 0,
+        refunded: refundDayMap.get(key) ?? 0,
+        orders: v?.orders ?? 0,
       });
     }
 
@@ -1048,6 +1241,25 @@ export class WebhookService {
         expired_orders: expiredOrders,
       },
       revenue_chart: filledChart,
+      finance: {
+        revenue: (financeAll as any[])[0]?.revenue ?? 0,
+        cost: (financeAll as any[])[0]?.cost ?? 0,
+        refunded: (refundAll as any[])[0]?.total ?? 0,
+        refunded_orders: (refundAll as any[])[0]?.count ?? 0,
+        orders_count: (financeAll as any[])[0]?.orders ?? 0,
+        cost_missing_count: (financeAll as any[])[0]?.cost_missing ?? 0,
+        revenue_today: (financeToday as any[])[0]?.revenue ?? 0,
+        cost_today: (financeToday as any[])[0]?.cost ?? 0,
+        refunded_today: (refundToday as any[])[0]?.total ?? 0,
+        revenue_this_month: (financeMonth as any[])[0]?.revenue ?? 0,
+        cost_this_month: (financeMonth as any[])[0]?.cost ?? 0,
+        refunded_this_month: (refundMonth as any[])[0]?.total ?? 0,
+      },
+      finance_chart: filledFinanceChart,
+      orders_by_status: (ordersByStatus as { _id: number; count: number }[]).map((item) => ({
+        status: item._id,
+        count: item.count,
+      })),
       recent_deposits: recentDeposits,
       recent_orders: formattedOrders,
       recent_users: recentUsers,
