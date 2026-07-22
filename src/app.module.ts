@@ -19,6 +19,7 @@ import { IpsModule } from './ips/ips.module';
 import { UploadModule } from './upload/upload.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { BlogModule } from './blog/blog.module';
+import { StatsModule } from './stats/stats.module';
 
 @Module({
   imports: [
@@ -61,6 +62,7 @@ import { BlogModule } from './blog/blog.module';
     AffiliateModule,
 
     WebhookModule,
+    StatsModule,
 
     IpsModule,
 
