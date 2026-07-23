@@ -1757,7 +1757,12 @@ export class OrdersService {
 
     const proxies = await this.proxyModel
       .find({ order_id: { $in: orders.map((o) => o._id) } })
-      .select('order_id ip_address port domain is_active health_status provider_proxy_id')
+      // auth_* + cdk_key để user copy được proxy ngay tại trang gia hạn
+      // (provider_proxy_id chỉ dùng nội bộ tính eligible, không trả ra ngoài)
+      .select(
+        'order_id ip_address port domain is_active health_status provider_proxy_id ' +
+        'auth_username auth_password cdk_key',
+      )
       .sort({ ip_address: 1 })
       .lean()
       .exec();
@@ -1786,6 +1791,9 @@ export class OrdersService {
           ip_address: p.ip_address,
           port: p.port,
           domain: p.domain || undefined,
+          auth_username: p.auth_username,
+          auth_password: p.auth_password,
+          cdk_key: p.cdk_key || undefined,
           is_active: p.is_active !== false,
           health_status: p.health_status,
           eligible: !reason && !!p.provider_proxy_id,
