@@ -240,6 +240,50 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
     );
   }
 
+  /**
+   * Kết quả lịch tự gia hạn: báo user đang online (socket) + báo admin (Telegram).
+   * Trạng thái bền vẫn lưu ở renewal_selections.last_run_* để user offline vào
+   * trang /renew vẫn đọc được.
+   */
+  async sendAutoRenewResult(userId: string, data: {
+    selection_name: string;
+    status:         'success' | 'partial' | 'failed' | 'disabled';
+    message:        string;
+    renewed_orders: number;
+    total_price:    number;
+    balance_after?: number;
+  }) {
+    this.logger.log(
+      `Emit auto_renew_result → userId: ${userId} | ${data.status} | bộ "${data.selection_name}"`,
+    );
+    // Gateway có thể chưa sẵn sàng (cron chạy ngoài ngữ cảnh HTTP) — không được
+    // để lỗi socket làm hỏng luồng gia hạn.
+    try {
+      this.server?.to(userId).emit('auto_renew_result', data);
+    } catch (err: any) {
+      this.logger.warn(`Emit auto_renew_result failed: ${err?.message}`);
+    }
+
+    const ICONS = { success: '🔄', partial: '⚠️', failed: '❌', disabled: '🚫' } as const;
+    const TITLES = {
+      success:  'Tự gia hạn thành công',
+      partial:  'Tự gia hạn THIẾU',
+      failed:   'Tự gia hạn THẤT BẠI',
+      disabled: 'Lịch tự gia hạn BỊ TẮT (thiếu số dư)',
+    } as const;
+
+    const userLabel = await this.resolveUserLabel(userId);
+    this.sendTelegram(
+      `${ICONS[data.status]} <b>${TITLES[data.status]}</b>\n\n` +
+      `👤 ${userLabel}\n` +
+      `🔖 Bộ: ${data.selection_name}\n` +
+      `📦 Đơn gia hạn: <b>${data.renewed_orders}</b>\n` +
+      `💵 Tiền: ${data.total_price.toLocaleString('vi-VN')}đ\n` +
+      `📝 ${data.message}`,
+      'order',
+    );
+  }
+
   @SubscribeMessage('admin_join')
   handleAdminJoin(client: Socket) {
     client.join('admin_chat');

@@ -1,10 +1,12 @@
 import {
   IsArray,
+  IsBoolean,
   IsInt,
   IsMongoId,
   IsNotEmpty,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -25,4 +27,16 @@ export class UpdateSelectionDto {
   @IsInt()
   @Min(1)
   duration_days?: number;
+
+  /** Bật/tắt lịch tự gia hạn (chỉ áp dụng cho bộ đặt tên) */
+  @IsOptional()
+  @IsBoolean()
+  auto_renew_enabled?: boolean;
+
+  /** Tự gia hạn khi còn <= N ngày */
+  @IsOptional()
+  @IsInt()
+  @Min(1, { message: 'threshold_days phải từ 1 đến 30' })
+  @Max(30, { message: 'threshold_days phải từ 1 đến 30' })
+  threshold_days?: number;
 }

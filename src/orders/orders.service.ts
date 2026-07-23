@@ -1107,8 +1107,15 @@ export class OrdersService {
     userId: string;
     chargeQuantity: number;
     bulkRef?: string;
+    /** Ai thực hiện: mặc định là userId; cron tự gia hạn truyền 'auto-renew' */
+    actor?: string;
   }): Promise<PerOrderRenewResult> {
     const { order, proxies, duration_days, userId, chargeQuantity, bulkRef } = params;
+    const actor = params.actor ?? userId;
+    const isAuto = actor !== userId;
+    const logStep = isAuto
+      ? OrderLogStep.AUTO_ORDER_RENEWED
+      : OrderLogStep.USER_ORDER_RENEWED;
     const orderId = order._id.toString();
     const partner = order.partner_id as any;
     const service = order.service_id as any;
@@ -1149,13 +1156,13 @@ export class OrdersService {
       const refunded = await this.userModel
         .findByIdAndUpdate(userId, { $inc: { money: totalPrice } }, { new: true })
         .exec();
-      this.logger.error(`Order ${orderId}: user renew fail — rollback ${totalPrice} VND: ${err?.message}`);
+      this.logger.error(`Order ${orderId}: ${actor} renew fail — rollback ${totalPrice} VND: ${err?.message}`);
       void this.orderLogService.error(
         orderId,
-        OrderLogStep.USER_ORDER_RENEWED,
-        `Gia hạn thất bại, đã hoàn tiền ${totalPrice.toLocaleString('vi-VN')} VND`,
+        logStep,
+        `${isAuto ? 'Tự động gia hạn' : 'Gia hạn'} thất bại, đã hoàn tiền ${totalPrice.toLocaleString('vi-VN')} VND`,
         { duration_days, totalPrice, error: err?.message, bulk_ref: bulkRef },
-        userId,
+        actor,
       );
       void this.notification.sendRenewFailed(userId, {
         order_code:    order.order_code,
@@ -1220,20 +1227,20 @@ export class OrdersService {
       direction:      'out',
       balance_before: balanceBefore,
       balance_after:  balanceAfter,
-      description:    `Gia hạn proxy: ${service?.name ?? ''} x${chargeQuantity} (${duration_days} ngày)`,
+      description:    `${isAuto ? 'Tự động gia hạn' : 'Gia hạn'} proxy: ${service?.name ?? ''} x${chargeQuantity} (${duration_days} ngày)`,
       ref_id:         orderId,
       ref_type:       'order',
-      created_by:     userId,
+      created_by:     actor,
     });
 
     // 6. Log order
-    this.logger.log(`Order ${orderId}: user gia hạn ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày, trừ ${totalPrice} VND`);
+    this.logger.log(`Order ${orderId}: ${actor} gia hạn ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày, trừ ${totalPrice} VND`);
     void this.orderLogService.info(
       orderId,
-      OrderLogStep.USER_ORDER_RENEWED,
-      `User gia hạn ${successCount} proxy thêm ${duration_days} ngày (đến ${newEndDate.toLocaleDateString('vi-VN')})${failCount > 0 ? `, ${failCount} proxy thất bại` : ''} — trừ ${totalPrice.toLocaleString('vi-VN')} VND`,
+      logStep,
+      `${isAuto ? 'Tự động gia hạn' : 'User gia hạn'} ${successCount} proxy thêm ${duration_days} ngày (đến ${newEndDate.toLocaleDateString('vi-VN')})${failCount > 0 ? `, ${failCount} proxy thất bại` : ''} — trừ ${totalPrice.toLocaleString('vi-VN')} VND`,
       { duration_days, successCount, failCount, totalPrice, old_end_date: oldEndDate, new_end_date: newEndDate, balance_after: balanceAfter, bulk_ref: bulkRef },
-      userId,
+      actor,
     );
 
     return {
@@ -1811,7 +1818,13 @@ export class OrdersService {
    * TRỪ TỔNG 1 LẦN (atomic) → xử lý tuần tự từng đơn.
    * Đơn nào NCC lỗi thì hoàn lại đúng phần tiền của đơn đó (không mất tiền của user).
    */
-  async bulkRenewByUser(userId: string, proxyIds: string[], duration_days: number) {
+  async bulkRenewByUser(
+    userId: string,
+    proxyIds: string[],
+    duration_days: number,
+    opts?: { actor?: string },
+  ) {
+    const actor = opts?.actor ?? userId;
     if (!duration_days || duration_days < 1) {
       throw new BadRequestException('duration_days phải >= 1');
     }
@@ -1932,6 +1945,7 @@ export class OrdersService {
           userId,
           chargeQuantity: list.length,
           bulkRef,
+          actor,
         });
         results.push(res);
         balanceAfter = res.balance_after;

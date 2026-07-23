@@ -85,6 +85,11 @@ export class RenewService {
         proxy_ids: kept,
         duration_days: s.duration_days,
         pruned: ids.length - kept.length,
+        auto_renew_enabled: s.auto_renew_enabled ?? false,
+        threshold_days: s.threshold_days ?? 3,
+        last_run_at: s.last_run_at ?? null,
+        last_run_status: s.last_run_status ?? null,
+        last_run_message: s.last_run_message ?? '',
         createdAt: (s as any).createdAt,
         updatedAt: (s as any).updatedAt,
       };
@@ -127,6 +132,33 @@ export class RenewService {
       update.proxy_ids = dto.proxy_ids.map((pid) => new Types.ObjectId(pid));
     }
     if (dto.duration_days !== undefined) update.duration_days = dto.duration_days;
+    if (dto.threshold_days !== undefined) update.threshold_days = dto.threshold_days;
+
+    if (dto.auto_renew_enabled !== undefined) {
+      if (dto.auto_renew_enabled) {
+        // Chỉ bộ đặt tên mới đặt lịch được — bộ "lần trước" (name = null) bị ghi đè
+        // sau mỗi lần gia hạn nên không phù hợp để tự chạy.
+        const current = await this.selectionModel
+          .findOne({ _id: new Types.ObjectId(id), user_id: new Types.ObjectId(userId) })
+          .select('name proxy_ids')
+          .lean()
+          .exec();
+        if (!current) throw new NotFoundException('Không tìm thấy bộ lựa chọn');
+        if (current.name == null) {
+          throw new BadRequestException(
+            'Chỉ bộ đã đặt tên mới đặt lịch tự gia hạn được — hãy lưu thành bộ trước',
+          );
+        }
+        const willHaveProxies = dto.proxy_ids ?? current.proxy_ids ?? [];
+        if (willHaveProxies.length === 0) {
+          throw new BadRequestException('Bộ rỗng không thể bật lịch tự gia hạn');
+        }
+      }
+      update.auto_renew_enabled = dto.auto_renew_enabled;
+      // Bật/tắt lại thì xoá trạng thái lần chạy cũ cho khỏi gây hiểu nhầm
+      update.last_run_status = null;
+      update.last_run_message = '';
+    }
 
     if (Object.keys(update).length === 0) {
       throw new BadRequestException('Không có thay đổi nào');
@@ -189,6 +221,11 @@ export class RenewService {
       proxy_ids: (s.proxy_ids ?? []).map((id: Types.ObjectId) => id.toString()),
       duration_days: s.duration_days,
       pruned: 0,
+      auto_renew_enabled: s.auto_renew_enabled ?? false,
+      threshold_days: s.threshold_days ?? 3,
+      last_run_at: s.last_run_at ?? null,
+      last_run_status: s.last_run_status ?? null,
+      last_run_message: s.last_run_message ?? '',
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
     };

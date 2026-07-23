@@ -8,8 +8,10 @@ import {
 import { Proxy, ProxySchema } from '../schemas/proxies.schema';
 import { Order, OrderSchema } from '../schemas/orders.schema';
 import { OrdersModule } from '../orders/orders.module';
+import { WebhookModule } from '../webhook/webhook.module';
 import { RenewController } from './renew.controller';
 import { RenewService } from './renew.service';
+import { RenewScheduler } from './renew.scheduler';
 
 @Module({
   imports: [
@@ -20,8 +22,9 @@ import { RenewService } from './renew.service';
     ]),
     JwtModule,
     OrdersModule,
+    WebhookModule,
   ],
   controllers: [RenewController],
-  providers: [RenewService],
+  providers: [RenewService, RenewScheduler],
 })
 export class RenewModule {}
