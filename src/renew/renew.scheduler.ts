@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -28,7 +28,7 @@ function isInsufficientBalance(message?: string): boolean {
 }
 
 @Injectable()
-export class RenewScheduler {
+export class RenewScheduler implements OnModuleInit {
   private readonly logger = new Logger(RenewScheduler.name);
 
   constructor(
@@ -40,6 +40,26 @@ export class RenewScheduler {
     private readonly ordersService: OrdersService,
     private readonly notification: NotificationGateway,
   ) {}
+
+  /**
+   * Backfill cờ is_renewed cho đơn đã gia hạn trước khi có cờ này
+   * (chạy 1 lần lúc khởi động, idempotent — lần sau không còn gì để cập nhật).
+   */
+  async onModuleInit(): Promise<void> {
+    try {
+      const res = await this.orderModel.updateMany(
+        { renew_count: { $gt: 0 }, is_renewed: { $ne: true } },
+        { $set: { is_renewed: true } },
+      ).exec();
+      if (res.modifiedCount > 0) {
+        this.logger.log(
+          `[auto-renew] Backfill is_renewed cho ${res.modifiedCount} đơn đã gia hạn`,
+        );
+      }
+    } catch (err: any) {
+      this.logger.warn(`[auto-renew] Backfill is_renewed lỗi: ${err?.message}`);
+    }
+  }
 
   /**
    * Báo kết quả — thông báo là phụ trợ, lỗi ở đây tuyệt đối không được

@@ -133,6 +133,9 @@ export class Order {
   renewed_to: Types.ObjectId;     // order mới sau khi gia hạn
 
   // ─── Dấu vết gia hạn (hiện badge cho user & admin) ───────
+  @Prop({ type: Boolean, default: false })
+  is_renewed: boolean;                // cờ để sắp đơn đã gia hạn lên đầu danh sách
+
   @Prop({ type: Number, default: 0 })
   renew_count: number;                // số lần đơn này đã được gia hạn
 
@@ -162,3 +165,6 @@ export const OrderSchema = SchemaFactory.createForClass(Order);
 OrderSchema.index({ user_id: 1, status: 1 });
 OrderSchema.index({ end_date: 1, status: 1 });
 OrderSchema.index({ status: 1, provider_order_id: 1 }); // polling PROCESSING orders
+// Sắp xếp danh sách đơn: nhóm đã gia hạn lên đầu, trong nhóm theo ngày tạo mới nhất
+OrderSchema.index({ user_id: 1, is_renewed: -1, createdAt: -1 });
+OrderSchema.index({ is_renewed: -1, createdAt: -1 });

@@ -414,7 +414,8 @@ export class OrdersService {
         .populate('partner_id', 'name domain')
         .skip(skip)
         .limit(limit)
-        .sort({ createdAt: -1 })
+        // Nhóm đơn đã gia hạn lên đầu, trong mỗi nhóm theo ngày tạo mới nhất
+        .sort({ is_renewed: -1, createdAt: -1 })
         .lean()
         .exec(),
       this.orderModel.countDocuments(filter).exec(),
@@ -456,7 +457,8 @@ export class OrdersService {
         .select('-admin_note -cost_per_unit -total_cost -profit -partner_id -provider_order_id -provider_metadata')
         .skip(skip)
         .limit(limit)
-        .sort({ createdAt: -1 })
+        // Nhóm đơn đã gia hạn lên đầu, trong mỗi nhóm theo ngày tạo mới nhất
+        .sort({ is_renewed: -1, createdAt: -1 })
         .lean()
         .exec(),
       this.orderModel.countDocuments(filter).exec(),
@@ -1217,6 +1219,7 @@ export class OrdersService {
     order.duration_days = (order.duration_days ?? 0) + duration_days;
     // Dấu vết gia hạn để user/admin nhìn thấy ngay trên danh sách đơn
     order.renew_count = (order.renew_count ?? 0) + 1;
+    order.is_renewed = true;
     order.last_renewed_at = new Date();
     order.last_renewed_by = isAuto ? 'auto-renew' : 'user';
     await order.save();
@@ -1337,6 +1340,7 @@ export class OrdersService {
     order.end_date = newEndDate;
     order.duration_days = (order.duration_days ?? 0) + duration_days;
     order.renew_count = (order.renew_count ?? 0) + 1;
+    order.is_renewed = true;
     order.last_renewed_at = new Date();
     order.last_renewed_by = 'admin';
     await order.save();
