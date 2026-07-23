@@ -940,6 +940,7 @@ export class WebhookService {
       revenueChart,
       recentDeposits,
       recentOrders,
+      recentRenewals,
       recentUsers,
       topUsers,
       ordersByStatus,
@@ -1011,6 +1012,16 @@ export class WebhookService {
         .select('order_code total_price status createdAt')
         .sort({ createdAt: -1 })
         .limit(5)
+        .exec(),
+
+      // ── Gia hạn gần đây (8) ──
+      this.orderModel
+        .find({ renew_count: { $gt: 0 }, last_renewed_at: { $ne: null } })
+        .populate('user_id', 'email name')
+        .populate('service_id', 'name')
+        .select('order_code status end_date renew_count last_renewed_at last_renewed_by price_per_unit quantity')
+        .sort({ last_renewed_at: -1 })
+        .limit(8)
         .exec(),
 
       // ── Recent users (5) ──
@@ -1262,6 +1273,17 @@ export class WebhookService {
       })),
       recent_deposits: recentDeposits,
       recent_orders: formattedOrders,
+      recent_renewals: (recentRenewals as any[]).map((o) => ({
+        _id: o._id,
+        order_code: o.order_code,
+        user_id: o.user_id,
+        service_name: o.service_id?.name ?? '',
+        status: o.status,
+        end_date: o.end_date,
+        renew_count: o.renew_count,
+        last_renewed_at: o.last_renewed_at,
+        last_renewed_by: o.last_renewed_by ?? 'user',
+      })),
       recent_users: recentUsers,
       top_users: topUsers,
     };

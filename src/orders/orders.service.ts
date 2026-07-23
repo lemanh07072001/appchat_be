@@ -1215,6 +1215,10 @@ export class OrdersService {
       : new Date(oldEndDate.getTime() + duration_days * 86400000);
     order.end_date = newEndDate;
     order.duration_days = (order.duration_days ?? 0) + duration_days;
+    // Dấu vết gia hạn để user/admin nhìn thấy ngay trên danh sách đơn
+    order.renew_count = (order.renew_count ?? 0) + 1;
+    order.last_renewed_at = new Date();
+    order.last_renewed_by = isAuto ? 'auto-renew' : 'user';
     await order.save();
 
     // 5. Log wallet transaction
@@ -1332,6 +1336,9 @@ export class OrdersService {
       : new Date(oldEndDate.getTime() + duration_days * 86400000);
     order.end_date = newEndDate;
     order.duration_days = (order.duration_days ?? 0) + duration_days;
+    order.renew_count = (order.renew_count ?? 0) + 1;
+    order.last_renewed_at = new Date();
+    order.last_renewed_by = 'admin';
     await order.save();
 
     this.logger.log(`Order ${orderId}: admin gia hạn NCC ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`);

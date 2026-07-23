@@ -132,6 +132,16 @@ export class Order {
   @Prop({ type: Types.ObjectId, ref: 'Order', default: null })
   renewed_to: Types.ObjectId;     // order mới sau khi gia hạn
 
+  // ─── Dấu vết gia hạn (hiện badge cho user & admin) ───────
+  @Prop({ type: Number, default: 0 })
+  renew_count: number;                // số lần đơn này đã được gia hạn
+
+  @Prop({ type: Date, default: null })
+  last_renewed_at: Date | null;       // lần gia hạn gần nhất
+
+  @Prop({ type: String, default: null })
+  last_renewed_by: string | null;     // 'user' | 'auto-renew' | 'admin'
+
   // ─── Số lượng thực nhận & hoàn tiền ──────────────────────
   @Prop({ type: Number, default: null })
   actual_quantity: number;            // số proxy thực nhận từ provider (null = đủ)
