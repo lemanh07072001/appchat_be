@@ -29,6 +29,11 @@ export class RenewService {
     return this.ordersService.getRenewableOrders(userId);
   }
 
+  /** Tra cứu proxy theo danh sách ip:port:user:pass user dán vào */
+  lookupProxies(userId: string, lines: string[]) {
+    return this.ordersService.lookupProxiesByLines(userId, lines);
+  }
+
   /**
    * Gia hạn hàng loạt + tự lưu lại lựa chọn (bản "lần trước")
    * nếu có ít nhất một đơn gia hạn thành công.

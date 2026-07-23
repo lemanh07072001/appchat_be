@@ -15,6 +15,7 @@ import { RenewService } from './renew.service';
 import { BulkRenewDto } from './dto/bulk-renew.dto';
 import { CreateSelectionDto } from './dto/create-selection.dto';
 import { UpdateSelectionDto } from './dto/update-selection.dto';
+import { LookupProxiesDto } from './dto/lookup-proxies.dto';
 
 /**
  * Gia hạn proxy hàng loạt (user tự thao tác) — trang /renew bên FE.
@@ -24,6 +25,13 @@ import { UpdateSelectionDto } from './dto/update-selection.dto';
 @UseGuards(AuthGuard)
 export class RenewController {
   constructor(private readonly renewService: RenewService) {}
+
+  /** Tra cứu proxy theo danh sách ip:port:user:pass user dán/upload */
+  @Post('lookup')
+  lookupProxies(@Req() req: Request, @Body() dto: LookupProxiesDto) {
+    const userId = (req as any).user.sub as string;
+    return this.renewService.lookupProxies(userId, dto.lines);
+  }
 
   /** Danh sách đơn ACTIVE + proxy, kèm cờ eligible/lý do */
   @Get('orders')

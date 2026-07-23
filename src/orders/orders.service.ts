@@ -1748,6 +1748,139 @@ export class OrdersService {
     return { message: 'Order deleted successfully' };
   }
 
+  // ─── Tra cứu proxy theo danh sách user dán vào ────────────────────────────
+
+  /**
+   * Tìm proxy theo danh sách dòng `ip:port:user:pass` user dán/upload.
+   *
+   * Hiệu năng: gom IP rồi CHỈ 1 query `$in` (dùng index {ip_address, port}),
+   * phần khớp đủ 4 phần làm bằng Set trong bộ nhớ — nhanh hơn nhiều so với
+   * lặp từng dòng hay `$or` hàng chục điều kiện.
+   * Bảo mật: chỉ trả proxy thuộc đơn của chính user.
+   */
+  async lookupProxiesByLines(userId: string, lines: string[]) {
+    const parsed = lines
+      .map((raw, index) => {
+        const line = (raw ?? '').trim();
+        if (!line) return null;
+        // Chấp nhận phân tách bằng : hoặc | hoặc khoảng trắng/tab
+        const parts = line.split(/[:|\s]+/).filter(Boolean);
+        if (parts.length < 4) {
+          return { index, line, invalid: true as const };
+        }
+        const [ip, port, user, pass] = parts;
+        if (!/^\d+$/.test(port)) {
+          return { index, line, invalid: true as const };
+        }
+        return {
+          index,
+          line,
+          invalid: false as const,
+          ip,
+          port: Number(port),
+          user,
+          pass,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+
+    const valid = parsed.filter((p) => !p.invalid) as Extract<
+      (typeof parsed)[number],
+      { invalid: false }
+    >[];
+
+    if (valid.length === 0) {
+      return {
+        results: parsed.map((p) => ({
+          line: p.line,
+          matched: false,
+          reason: 'Sai định dạng (cần ip:port:user:pass)',
+        })),
+        summary: { total: parsed.length, matched: 0, not_found: 0, invalid: parsed.length },
+      };
+    }
+
+    // 1 query duy nhất theo IP — index {ip_address, port} lo phần lọc
+    const ips = [...new Set(valid.map((p) => p.ip))];
+    const candidates = await this.proxyModel
+      .find({ ip_address: { $in: ips } })
+      .select('ip_address port auth_username auth_password order_id')
+      .lean()
+      .exec();
+
+    // Chỉ giữ proxy thuộc đơn của user này
+    const orderIds = [
+      ...new Set(candidates.map((c) => c.order_id?.toString()).filter(Boolean)),
+    ] as string[];
+    const ownedOrders = orderIds.length
+      ? await this.orderModel
+          .find({
+            _id: { $in: orderIds.map((id) => new Types.ObjectId(id)) },
+            user_id: new Types.ObjectId(userId),
+          })
+          .select('order_code status end_date')
+          .lean()
+          .exec()
+      : [];
+    const orderMap = new Map(ownedOrders.map((o) => [o._id.toString(), o]));
+
+    // Khớp đủ 4 phần
+    const key = (ip: string, port: number | string, u?: string, p?: string) =>
+      `${ip}|${port}|${u ?? ''}|${p ?? ''}`;
+    const found = new Map<string, (typeof candidates)[number]>();
+    for (const c of candidates) {
+      if (!c.order_id || !orderMap.has(c.order_id.toString())) continue;
+      found.set(key(c.ip_address, c.port, c.auth_username, c.auth_password), c);
+    }
+
+    let matchedCount = 0;
+    let notFound = 0;
+    let invalidCount = 0;
+
+    const results = parsed.map((p) => {
+      if (p.invalid) {
+        invalidCount++;
+        return {
+          line: p.line,
+          matched: false,
+          reason: 'Sai định dạng (cần ip:port:user:pass)',
+        };
+      }
+
+      const hit = found.get(key(p.ip, p.port, p.user, p.pass));
+      if (!hit) {
+        notFound++;
+        return {
+          line: p.line,
+          matched: false,
+          reason: 'Không tìm thấy trong tài khoản của bạn',
+        };
+      }
+
+      const order = orderMap.get(hit.order_id!.toString())!;
+      matchedCount++;
+      return {
+        line: p.line,
+        matched: true,
+        proxy_id: hit._id.toString(),
+        order_id: order._id.toString(),
+        order_code: order.order_code,
+        order_status: order.status,
+        end_date: order.end_date,
+      };
+    });
+
+    return {
+      results,
+      summary: {
+        total: parsed.length,
+        matched: matchedCount,
+        not_found: notFound,
+        invalid: invalidCount,
+      },
+    };
+  }
+
   // ─── Gia hạn hàng loạt (chọn proxy xuyên đơn hàng) ────────────────────────
 
   /**
