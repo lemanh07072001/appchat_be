@@ -87,5 +87,7 @@ ProxySchema.index({ order_id: 1 });
 ProxySchema.index({ provider_proxy_id: 1 }, { sparse: true });
 ProxySchema.index({ cdk_key: 1 }, { unique: true, sparse: true });
 ProxySchema.index({ is_active: 1, is_available: 1 });
-// Tra cứu proxy theo danh sách ip:port user dán vào (tránh quét toàn bảng)
+// Tra cứu proxy theo danh sách host:port user dán vào (tránh quét toàn bảng).
+// Cần cả 2 vì host user dán có thể là IP hoặc domain.
 ProxySchema.index({ ip_address: 1, port: 1 });
+ProxySchema.index({ domain: 1, port: 1 }, { sparse: true });

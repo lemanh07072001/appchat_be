@@ -1800,11 +1800,12 @@ export class OrdersService {
       };
     }
 
-    // 1 query duy nhất theo IP — index {ip_address, port} lo phần lọc
-    const ips = [...new Set(valid.map((p) => p.ip))];
+    // 1 query duy nhất — host user dán có thể là IP HOẶC domain
+    // (nút copy xuất ra `ip_address || domain`, nên phải tra cả hai cột)
+    const hosts = [...new Set(valid.map((p) => p.ip))];
     const candidates = await this.proxyModel
-      .find({ ip_address: { $in: ips } })
-      .select('ip_address port auth_username auth_password order_id')
+      .find({ $or: [{ ip_address: { $in: hosts } }, { domain: { $in: hosts } }] })
+      .select('ip_address domain port auth_username auth_password order_id')
       .lean()
       .exec();
 
@@ -1830,7 +1831,11 @@ export class OrdersService {
     const found = new Map<string, (typeof candidates)[number]>();
     for (const c of candidates) {
       if (!c.order_id || !orderMap.has(c.order_id.toString())) continue;
-      found.set(key(c.ip_address, c.port, c.auth_username, c.auth_password), c);
+      // Đăng ký cả bằng IP lẫn domain để user dán kiểu nào cũng tìm ra
+      for (const host of [c.ip_address, c.domain]) {
+        if (!host) continue;
+        found.set(key(host, c.port, c.auth_username, c.auth_password), c);
+      }
     }
 
     let matchedCount = 0;
