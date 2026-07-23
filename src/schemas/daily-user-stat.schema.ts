@@ -13,7 +13,7 @@ export class DailyUserStat {
   @Prop({ required: true, index: true })
   stat_date: Date;
 
-  @Prop({ required: true, index: true })
+  @Prop({ required: true, index: true, ref: 'User' })
   user_id: Types.ObjectId;
 
   /** Số đơn hàng tạo trong ngày */
