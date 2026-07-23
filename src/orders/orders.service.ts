@@ -23,6 +23,28 @@ import { WalletTransactionService } from '../wallet/wallet-transaction.service';
 import { WalletTxType } from '../schemas/wallet-transaction.schema';
 import { NotificationGateway } from '../webhook/notification.gateway';
 
+/** Kết quả gia hạn của MỘT order (dùng cho cả gia hạn đơn lẻ và hàng loạt) */
+export interface PerOrderRenewResult {
+  order_id: string;
+  order_code: string;
+  status: 'renewed' | 'partial' | 'failed';
+  /** Số proxy được chọn gia hạn trong đơn này */
+  selected: number;
+  success: number;
+  fail: number;
+  price: number;
+  refunded: boolean;
+  new_end_date?: Date;
+  error?: string;
+  balance_after: number;
+}
+
+/** NCC không hỗ trợ gia hạn từng proxy → không cho chọn lẻ ở trang gia hạn hàng loạt */
+const BULK_UNSUPPORTED_PARTNERS: Record<string, string> = {
+  proxyv6: 'NCC chỉ hỗ trợ gia hạn toàn bộ đơn — vui lòng gia hạn ở trang chi tiết đơn hàng',
+  proxysieutoc: 'NCC chưa hỗ trợ gia hạn proxy',
+};
+
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -1011,20 +1033,8 @@ export class OrdersService {
       throw new BadRequestException('Bạn không có quyền gia hạn đơn hàng này');
     }
 
-    if (order.status !== OrderStatusEnum.ACTIVE) {
-      throw new BadRequestException('Chỉ có thể gia hạn đơn ở trạng thái ACTIVE');
-    }
-
-    const partner = order.partner_id as any;
-    if (!partner?.token_api || !partner?.code) {
-      throw new BadRequestException('Order không có thông tin NCC');
-    }
-
-    const service = order.service_id as any;
-
-    if (service?.allow_renew === false) {
-      throw new BadRequestException('Dịch vụ này không hỗ trợ gia hạn');
-    }
+    const guardError = this.checkOrderRenewable(order);
+    if (guardError) throw new BadRequestException(guardError);
 
     const proxies = await this.proxyModel
       .find({ order_id: order._id, provider_proxy_id: { $exists: true, $ne: '' } })
@@ -1036,10 +1046,76 @@ export class OrdersService {
       throw new BadRequestException('Không có proxy nào để gia hạn');
     }
 
+    // Đơn lẻ: gia hạn TOÀN BỘ proxy, tính tiền theo order.quantity (giữ nguyên hành vi cũ)
+    const result = await this.renewOrderProxies({
+      order,
+      proxies,
+      duration_days,
+      userId,
+      chargeQuantity: Number(order.quantity ?? 0),
+    });
+
+    if (result.status === 'failed') {
+      throw new BadRequestException(`Gia hạn thất bại: ${result.error ?? 'Unknown'}`);
+    }
+
+    return {
+      success: true,
+      message: `Gia hạn thành công ${result.success}/${proxies.length} proxy thêm ${duration_days} ngày`,
+      data: {
+        successCount:  result.success,
+        failCount:     result.fail,
+        totalPrice:    result.price,
+        new_end_date:  result.new_end_date,
+        balance_after: result.balance_after,
+      },
+    };
+  }
+
+  /**
+   * Kiểm tra điều kiện gia hạn của 1 order (dùng chung cho renew đơn lẻ + bulk).
+   * Trả về chuỗi lý do nếu KHÔNG gia hạn được, null nếu OK.
+   */
+  private checkOrderRenewable(order: OrderDocument): string | null {
+    if (order.status !== OrderStatusEnum.ACTIVE) {
+      return 'Chỉ có thể gia hạn đơn ở trạng thái ACTIVE';
+    }
+    const partner = order.partner_id as any;
+    if (!partner?.token_api || !partner?.code) {
+      return 'Order không có thông tin NCC';
+    }
+    const service = order.service_id as any;
+    if (service?.allow_renew === false) {
+      return 'Dịch vụ này không hỗ trợ gia hạn';
+    }
+    return null;
+  }
+
+  /**
+   * Gia hạn một tập proxy của MỘT order: trừ tiền → gọi NCC → cập nhật hạn → ghi log.
+   * Dùng chung cho gia hạn đơn lẻ (toàn bộ proxy) và gia hạn hàng loạt (một phần proxy).
+   *
+   * - `chargeQuantity`: số lượng dùng để tính tiền (đơn lẻ = order.quantity,
+   *   bulk = số proxy được chọn trong đơn đó).
+   * - Provider throw → hoàn lại đúng phần tiền của đơn này (không bao giờ giữ tiền của user).
+   * - Provider trả failCount > 0 (gia hạn thiếu) → KHÔNG hoàn, báo admin (giữ hành vi cũ).
+   */
+  private async renewOrderProxies(params: {
+    order: OrderDocument;
+    proxies: { provider_proxy_id: string }[];
+    duration_days: number;
+    userId: string;
+    chargeQuantity: number;
+    bulkRef?: string;
+  }): Promise<PerOrderRenewResult> {
+    const { order, proxies, duration_days, userId, chargeQuantity, bulkRef } = params;
+    const orderId = order._id.toString();
+    const partner = order.partner_id as any;
+    const service = order.service_id as any;
+
     // 1. Tính phí gia hạn
     const pricePerUnit = Number(order.price_per_unit ?? 0);
-    const quantity     = Number(order.quantity ?? 0);
-    const totalPrice   = pricePerUnit * quantity * duration_days;
+    const totalPrice   = pricePerUnit * chargeQuantity * duration_days;
     if (totalPrice <= 0) {
       throw new BadRequestException('Không thể xác định giá gia hạn');
     }
@@ -1070,13 +1146,15 @@ export class OrdersService {
       });
     } catch (err: any) {
       // Rollback tiền nếu provider fail
-      await this.userModel.findByIdAndUpdate(userId, { $inc: { money: totalPrice } }).exec();
+      const refunded = await this.userModel
+        .findByIdAndUpdate(userId, { $inc: { money: totalPrice } }, { new: true })
+        .exec();
       this.logger.error(`Order ${orderId}: user renew fail — rollback ${totalPrice} VND: ${err?.message}`);
       void this.orderLogService.error(
         orderId,
         OrderLogStep.USER_ORDER_RENEWED,
         `Gia hạn thất bại, đã hoàn tiền ${totalPrice.toLocaleString('vi-VN')} VND`,
-        { duration_days, totalPrice, error: err?.message },
+        { duration_days, totalPrice, error: err?.message, bulk_ref: bulkRef },
         userId,
       );
       void this.notification.sendRenewFailed(userId, {
@@ -1090,7 +1168,19 @@ export class OrdersService {
         error:         err?.message,
         refunded:      true,
       });
-      throw new BadRequestException(`Gia hạn thất bại: ${err?.message ?? 'Unknown'}`);
+
+      return {
+        order_id:      orderId,
+        order_code:    order.order_code,
+        status:        'failed',
+        selected:      proxies.length,
+        success:       0,
+        fail:          proxies.length,
+        price:         totalPrice,
+        refunded:      true,
+        error:         err?.message ?? 'Unknown',
+        balance_after: Number(refunded?.money ?? deducted.money ?? 0),
+      };
     }
 
     const raw = result.raw ?? {};
@@ -1130,7 +1220,7 @@ export class OrdersService {
       direction:      'out',
       balance_before: balanceBefore,
       balance_after:  balanceAfter,
-      description:    `Gia hạn proxy: ${service.name ?? ''} x${quantity} (${duration_days} ngày)`,
+      description:    `Gia hạn proxy: ${service?.name ?? ''} x${chargeQuantity} (${duration_days} ngày)`,
       ref_id:         orderId,
       ref_type:       'order',
       created_by:     userId,
@@ -1142,20 +1232,21 @@ export class OrdersService {
       orderId,
       OrderLogStep.USER_ORDER_RENEWED,
       `User gia hạn ${successCount} proxy thêm ${duration_days} ngày (đến ${newEndDate.toLocaleDateString('vi-VN')})${failCount > 0 ? `, ${failCount} proxy thất bại` : ''} — trừ ${totalPrice.toLocaleString('vi-VN')} VND`,
-      { duration_days, successCount, failCount, totalPrice, old_end_date: oldEndDate, new_end_date: newEndDate, balance_after: balanceAfter },
+      { duration_days, successCount, failCount, totalPrice, old_end_date: oldEndDate, new_end_date: newEndDate, balance_after: balanceAfter, bulk_ref: bulkRef },
       userId,
     );
 
     return {
-      success: true,
-      message: `Gia hạn thành công ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`,
-      data: {
-        successCount,
-        failCount,
-        totalPrice,
-        new_end_date:  newEndDate,
-        balance_after: balanceAfter,
-      },
+      order_id:      orderId,
+      order_code:    order.order_code,
+      status:        failCount > 0 ? 'partial' : 'renewed',
+      selected:      proxies.length,
+      success:       successCount,
+      fail:          failCount,
+      price:         totalPrice,
+      refunded:      false,
+      new_end_date:  newEndDate,
+      balance_after: balanceAfter,
     };
   }
 
@@ -1637,5 +1728,246 @@ export class OrdersService {
       actor,
     );
     return { message: 'Order deleted successfully' };
+  }
+
+  // ─── Gia hạn hàng loạt (chọn proxy xuyên đơn hàng) ────────────────────────
+
+  /**
+   * Danh sách đơn user có thể gia hạn + proxy của từng đơn, kèm cờ eligible.
+   * KHÔNG trả provider_proxy_id ra ngoài (chỉ dùng nội bộ để tính eligible).
+   */
+  async getRenewableOrders(userId: string) {
+    const orders = await this.orderModel
+      .find({ user_id: new Types.ObjectId(userId), status: OrderStatusEnum.ACTIVE })
+      .populate('service_id', 'name allow_renew')
+      .populate('partner_id', 'code token_api')
+      // status/user_id cần cho checkOrderRenewable — không bỏ khỏi select
+      .select('order_code end_date price_per_unit quantity duration_days proxy_type order_type status user_id')
+      .sort({ end_date: 1 })
+      .exec();
+
+    if (orders.length === 0) return { orders: [] };
+
+    const proxies = await this.proxyModel
+      .find({ order_id: { $in: orders.map((o) => o._id) } })
+      .select('order_id ip_address port domain is_active health_status provider_proxy_id')
+      .sort({ ip_address: 1 })
+      .lean()
+      .exec();
+
+    const proxyMap = new Map<string, typeof proxies>();
+    for (const p of proxies) {
+      const key = p.order_id?.toString() ?? '';
+      if (!proxyMap.has(key)) proxyMap.set(key, []);
+      proxyMap.get(key)!.push(p);
+    }
+
+    return {
+      orders: orders.map((order) => {
+        const service = order.service_id as any;
+        const partner = order.partner_id as any;
+        const list = proxyMap.get(order._id.toString()) ?? [];
+
+        // Lý do không gia hạn được (nếu có)
+        let reason =
+          this.checkOrderRenewable(order) ??
+          BULK_UNSUPPORTED_PARTNERS[partner?.code] ??
+          null;
+
+        const mappedProxies = list.map((p) => ({
+          _id: p._id.toString(),
+          ip_address: p.ip_address,
+          port: p.port,
+          domain: p.domain || undefined,
+          is_active: p.is_active !== false,
+          health_status: p.health_status,
+          eligible: !reason && !!p.provider_proxy_id,
+        }));
+
+        if (!reason && !mappedProxies.some((p) => p.eligible)) {
+          reason = 'Đơn này không có proxy nào gia hạn được (proxy nhập thủ công)';
+        }
+
+        return {
+          _id: order._id.toString(),
+          order_code: order.order_code,
+          service_name: service?.name ?? '',
+          proxy_type: order.proxy_type,
+          end_date: order.end_date,
+          price_per_unit: Number(order.price_per_unit ?? 0),
+          quantity: Number(order.quantity ?? 0),
+          eligible: !reason,
+          reason: reason ?? undefined,
+          proxies: mappedProxies,
+        };
+      }),
+    };
+  }
+
+  /**
+   * Gia hạn nhiều proxy trải trên NHIỀU đơn hàng trong một lần.
+   *
+   * Luồng: gom proxy theo đơn → validate từng đơn → tính tổng tiền →
+   * TRỪ TỔNG 1 LẦN (atomic) → xử lý tuần tự từng đơn.
+   * Đơn nào NCC lỗi thì hoàn lại đúng phần tiền của đơn đó (không mất tiền của user).
+   */
+  async bulkRenewByUser(userId: string, proxyIds: string[], duration_days: number) {
+    if (!duration_days || duration_days < 1) {
+      throw new BadRequestException('duration_days phải >= 1');
+    }
+    if (!proxyIds?.length) {
+      throw new BadRequestException('Chưa chọn proxy nào để gia hạn');
+    }
+
+    const bulkRef = crypto.randomBytes(6).toString('hex');
+
+    // 1. Load proxy được chọn (chỉ proxy có provider_proxy_id mới gia hạn được)
+    const proxies = await this.proxyModel
+      .find({ _id: { $in: proxyIds.map((id) => new Types.ObjectId(id)) } })
+      .select('order_id provider_proxy_id')
+      .lean()
+      .exec();
+
+    if (proxies.length === 0) {
+      throw new BadRequestException('Không tìm thấy proxy nào trong lựa chọn');
+    }
+
+    // 2. Gom theo đơn hàng
+    const byOrder = new Map<string, { provider_proxy_id: string }[]>();
+    for (const p of proxies) {
+      if (!p.provider_proxy_id || !p.order_id) continue;
+      const key = p.order_id.toString();
+      if (!byOrder.has(key)) byOrder.set(key, []);
+      byOrder.get(key)!.push({ provider_proxy_id: p.provider_proxy_id });
+    }
+
+    if (byOrder.size === 0) {
+      throw new BadRequestException('Các proxy đã chọn không hỗ trợ gia hạn');
+    }
+
+    // 3. Load đơn + validate
+    const orders = await this.orderModel
+      .find({ _id: { $in: [...byOrder.keys()].map((id) => new Types.ObjectId(id)) } })
+      .populate('service_id')
+      .populate('partner_id')
+      .exec();
+
+    const results: PerOrderRenewResult[] = [];
+    const eligible: { order: OrderDocument; list: { provider_proxy_id: string }[]; price: number }[] = [];
+
+    for (const order of orders) {
+      const list = byOrder.get(order._id.toString()) ?? [];
+      const partner = order.partner_id as any;
+
+      const reason =
+        order.user_id?.toString() !== userId
+          ? 'Bạn không có quyền gia hạn đơn hàng này'
+          : this.checkOrderRenewable(order) ?? BULK_UNSUPPORTED_PARTNERS[partner?.code] ?? null;
+
+      if (reason) {
+        results.push({
+          order_id: order._id.toString(),
+          order_code: order.order_code,
+          status: 'failed',
+          selected: list.length,
+          success: 0,
+          fail: list.length,
+          price: 0,
+          refunded: false,
+          error: reason,
+          balance_after: 0,
+        });
+        continue;
+      }
+
+      const price = Number(order.price_per_unit ?? 0) * list.length * duration_days;
+      if (price <= 0) {
+        results.push({
+          order_id: order._id.toString(),
+          order_code: order.order_code,
+          status: 'failed',
+          selected: list.length,
+          success: 0,
+          fail: list.length,
+          price: 0,
+          refunded: false,
+          error: 'Không thể xác định giá gia hạn',
+          balance_after: 0,
+        });
+        continue;
+      }
+
+      eligible.push({ order, list, price });
+    }
+
+    if (eligible.length === 0) {
+      throw new BadRequestException(
+        results[0]?.error ?? 'Không có proxy hợp lệ để gia hạn',
+      );
+    }
+
+    // 4. Kiểm tra số dư đủ cho TOÀN BỘ lựa chọn trước khi bắt đầu (fail fast,
+    //    tránh gia hạn được nửa chừng rồi hết tiền). Việc trừ tiền thật vẫn do
+    //    renewOrderProxies làm atomic theo từng đơn — nguồn đúng duy nhất.
+    const grandTotal = eligible.reduce((s, e) => s + e.price, 0);
+    const wallet = await this.userModel.findById(userId).select('money').lean().exec();
+    let balanceAfter = Number(wallet?.money ?? 0);
+
+    if (balanceAfter < grandTotal) {
+      throw new BadRequestException(
+        `Số dư không đủ để gia hạn (cần ${grandTotal.toLocaleString('vi-VN')} VND)`,
+      );
+    }
+
+    // 5. Xử lý tuần tự từng đơn
+    let totalCharged = 0;
+    let totalRefunded = 0;
+
+    for (const { order, list, price } of eligible) {
+      try {
+        const res = await this.renewOrderProxies({
+          order,
+          proxies: list,
+          duration_days,
+          userId,
+          chargeQuantity: list.length,
+          bulkRef,
+        });
+        results.push(res);
+        balanceAfter = res.balance_after;
+        totalCharged += res.refunded ? 0 : res.price;
+        totalRefunded += res.refunded ? res.price : 0;
+      } catch (err: any) {
+        // Lỗi trước khi trừ tiền (vd số dư không đủ cho đơn này) → ghi nhận, đi tiếp
+        this.logger.error(`Bulk renew ${bulkRef}: order ${order.order_code} lỗi — ${err?.message}`);
+        results.push({
+          order_id: order._id.toString(),
+          order_code: order.order_code,
+          status: 'failed',
+          selected: list.length,
+          success: 0,
+          fail: list.length,
+          price,
+          refunded: false,
+          error: err?.message ?? 'Unknown',
+          balance_after: balanceAfter,
+        });
+      }
+    }
+
+    const renewedCount = results.filter((r) => r.status !== 'failed').length;
+    this.logger.log(
+      `Bulk renew ${bulkRef}: user ${userId} gia hạn ${renewedCount}/${results.length} đơn, ` +
+      `trừ ${totalCharged} VND, hoàn ${totalRefunded} VND`,
+    );
+
+    return {
+      results,
+      total_price: totalCharged,
+      total_refunded: totalRefunded,
+      balance_after: balanceAfter,
+      bulk_ref: bulkRef,
+      renewed_orders: renewedCount,
+    };
   }
 }

@@ -20,6 +20,7 @@ import { UploadModule } from './upload/upload.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { BlogModule } from './blog/blog.module';
 import { StatsModule } from './stats/stats.module';
+import { RenewModule } from './renew/renew.module';
 
 @Module({
   imports: [
@@ -63,6 +64,7 @@ import { StatsModule } from './stats/stats.module';
 
     WebhookModule,
     StatsModule,
+    RenewModule,
 
     IpsModule,
 
