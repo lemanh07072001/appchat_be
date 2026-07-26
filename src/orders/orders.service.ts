@@ -1998,6 +1998,7 @@ export class OrdersService {
     opts?: { actor?: string },
   ) {
     const actor = opts?.actor ?? userId;
+    const isAuto = actor !== userId; // auto-renew (cron) KHÔNG xoá proxy — chỉ manual mới prune
     if (!duration_days || duration_days < 1) {
       throw new BadRequestException('duration_days phải >= 1');
     }
@@ -2124,6 +2125,11 @@ export class OrdersService {
         balanceAfter = res.balance_after;
         totalCharged += res.refunded ? 0 : res.price;
         totalRefunded += res.refunded ? res.price : 0;
+
+        // Gia hạn chọn lọc (chỉ manual): xoá MỀM proxy KHÔNG được chọn của đơn này
+        if (!isAuto && res.status !== 'failed') {
+          await this.pruneUnrenewedProxies(order, proxies, userId);
+        }
       } catch (err: any) {
         // Lỗi trước khi trừ tiền (vd số dư không đủ cho đơn này) → ghi nhận, đi tiếp
         this.logger.error(`Bulk renew ${bulkRef}: order ${order.order_code} lỗi — ${err?.message}`);
@@ -2156,5 +2162,56 @@ export class OrdersService {
       bulk_ref: bulkRef,
       renewed_orders: renewedCount,
     };
+  }
+
+  /**
+   * Gia hạn chọn lọc: sau khi user gia hạn một phần proxy của đơn, xoá MỀM các
+   * proxy KHÔNG được chọn (giữ record để audit/khôi phục). Chỉ gọi cho thao tác
+   * tay của user — KHÔNG áp cho auto-renew. Cập nhật SL đơn = số proxy còn giữ.
+   */
+  private async pruneUnrenewedProxies(
+    order: OrderDocument,
+    selectedProxies: Array<{ _id: Types.ObjectId; order_id?: Types.ObjectId }>,
+    userId: string,
+  ): Promise<void> {
+    const orderId = order._id;
+    const keepIds = selectedProxies
+      .filter((p) => p.order_id?.toString() === orderId.toString())
+      .map((p) => p._id);
+
+    // Lấy danh sách sẽ xoá TRƯỚC (để ghi log) — pre-hook tự loại con đã xoá mềm
+    const toDelete = await this.proxyModel
+      .find({ order_id: orderId, _id: { $nin: keepIds } })
+      .select('ip_address port')
+      .lean()
+      .exec();
+    if (toDelete.length === 0) return;
+
+    await this.proxyModel
+      .updateMany(
+        { order_id: orderId, _id: { $nin: keepIds }, deleted_at: null },
+        { $set: { deleted_at: new Date(), deleted_reason: 'not_renewed', is_active: false } },
+      )
+      .exec();
+
+    // SL đơn = số proxy còn giữ (active). pre-hook đã loại con đã xoá mềm.
+    const kept = await this.proxyModel.countDocuments({ order_id: orderId }).exec();
+    order.quantity = kept;
+    // Đơn giờ có ĐÚNG `kept` proxy → coi là đủ (null theo quy ước recovery),
+    // tránh bị hiểu nhầm là "thiếu số lượng" / cho phép refundMissing sai.
+    (order as any).actual_quantity = null;
+    await order.save();
+
+    void this.orderLogService.info(
+      orderId.toString(),
+      OrderLogStep.USER_ORDER_RENEWED,
+      `Xoá mềm ${toDelete.length} proxy không gia hạn · giữ lại ${kept}`,
+      { deleted: toDelete.map((p) => `${p.ip_address}:${p.port}`), kept },
+      userId,
+    );
+
+    this.logger.log(
+      `Order ${order.order_code}: xoá mềm ${toDelete.length} proxy không gia hạn, giữ ${kept}`,
+    );
   }
 }
