@@ -79,6 +79,13 @@ export class Proxy {
 
   @Prop({ type: Date, default: null })
   last_checked_at: Date;
+
+  // ─── Dấu vết gia hạn PER-PROXY (để admin biết con nào đã gia hạn, lần cuối khi nào) ───
+  @Prop({ type: Date, default: null })
+  last_renewed_at: Date | null;
+
+  @Prop({ type: Number, default: 0 })
+  renew_count: number;
 }
 
 export const ProxySchema = SchemaFactory.createForClass(Proxy);

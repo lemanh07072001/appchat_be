@@ -559,7 +559,7 @@ export class OrdersService {
     const [proxies, totalProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location')
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location last_renewed_at renew_count')
         .skip(skip)
         .limit(limit)
         .lean()
@@ -1224,6 +1224,15 @@ export class OrdersService {
     order.last_renewed_by = isAuto ? 'auto-renew' : 'user';
     await order.save();
 
+    // 4b. Đánh dấu PER-PROXY các con vừa gia hạn → admin biết proxy nào đã gia hạn
+    const renewedPpids = proxies.map((p) => p.provider_proxy_id).filter(Boolean);
+    if (renewedPpids.length) {
+      void this.proxyModel.updateMany(
+        { order_id: order._id, provider_proxy_id: { $in: renewedPpids } },
+        { $set: { last_renewed_at: new Date() }, $inc: { renew_count: 1 } },
+      ).exec();
+    }
+
     // 5. Log wallet transaction
     const balanceAfter  = Number(deducted.money ?? 0);
     const balanceBefore = balanceAfter + totalPrice;
@@ -1344,6 +1353,12 @@ export class OrdersService {
     order.last_renewed_at = new Date();
     order.last_renewed_by = 'admin';
     await order.save();
+
+    // Đánh dấu per-proxy: admin gia hạn NCC = gia hạn TOÀN BỘ proxy của đơn
+    void this.proxyModel.updateMany(
+      { order_id: order._id, provider_proxy_id: { $exists: true, $ne: '' } },
+      { $set: { last_renewed_at: new Date() }, $inc: { renew_count: 1 } },
+    ).exec();
 
     this.logger.log(`Order ${orderId}: admin gia hạn NCC ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`);
     void this.orderLogService.info(
