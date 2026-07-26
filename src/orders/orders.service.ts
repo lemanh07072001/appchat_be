@@ -414,8 +414,8 @@ export class OrdersService {
         .populate('partner_id', 'name domain')
         .skip(skip)
         .limit(limit)
-        // Nhóm đơn đã gia hạn lên đầu, trong mỗi nhóm theo ngày tạo mới nhất
-        .sort({ is_renewed: -1, createdAt: -1 })
+        // Sắp theo ngày còn hạn giảm dần: còn nhiều ngày lên đầu, đã hết hạn xuống cuối
+        .sort({ end_date: -1, createdAt: -1 })
         .lean()
         .exec(),
       this.orderModel.countDocuments(filter).exec(),
