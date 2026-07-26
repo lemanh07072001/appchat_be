@@ -1925,7 +1925,7 @@ export class OrdersService {
       // (provider_proxy_id chỉ dùng nội bộ tính eligible, không trả ra ngoài)
       .select(
         'order_id ip_address port domain is_active health_status provider_proxy_id ' +
-        'auth_username auth_password cdk_key',
+        'auth_username auth_password cdk_key last_renewed_at',
       )
       .sort({ ip_address: 1 })
       .lean()
@@ -1960,6 +1960,7 @@ export class OrdersService {
           cdk_key: p.cdk_key || undefined,
           is_active: p.is_active !== false,
           health_status: p.health_status,
+          last_renewed_at: p.last_renewed_at ?? null,
           eligible: !reason && !!p.provider_proxy_id,
         }));
 
