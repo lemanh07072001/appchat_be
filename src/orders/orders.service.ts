@@ -14,6 +14,7 @@ import { BuyOrderDto } from '../dto/buy-order.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { UserOrderQueryDto } from '../dto/user-order-query.dto';
 import { OrderStatusEnum, PaymentMethodEnum, PaymentStatusEnum } from '../enum/order.enum';
+import { sanitizeProviderName } from '../common/sanitize-provider.util';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { PENDING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
@@ -44,6 +45,16 @@ const BULK_UNSUPPORTED_PARTNERS: Record<string, string> = {
   proxyv6: 'NCC chỉ hỗ trợ gia hạn toàn bộ đơn — vui lòng gia hạn ở trang chi tiết đơn hàng',
   proxysieutoc: 'NCC chưa hỗ trợ gia hạn proxy',
 };
+
+// Đơn "đã xong" — đẩy xuống ĐÁY danh sách (đơn đang chạy/đang xử lý ưu tiên lên trên),
+// trong mỗi nhóm vẫn sắp theo ngày còn hạn giảm dần.
+const TERMINAL_ORDER_STATUSES = [
+  OrderStatusEnum.COMPLETED, // 4
+  OrderStatusEnum.EXPIRED,   // 5
+  OrderStatusEnum.CANCELLED, // 6
+  OrderStatusEnum.FAILED,    // 8
+  OrderStatusEnum.REFUNDED,  // 11
+];
 
 @Injectable()
 export class OrdersService {
@@ -405,20 +416,25 @@ export class OrdersService {
       }
     }
 
-    const [raw, total] = await Promise.all([
-      this.orderModel
-        .find(filter)
-        .populate('user_id', 'email full_name')
-        .populate('service_id', 'name proxy_type ip_version allow_renew')
-        .populate('country_id', 'name code')
-        .populate('partner_id', 'name domain')
-        .skip(skip)
-        .limit(limit)
-        // Sắp theo ngày còn hạn giảm dần: còn nhiều ngày lên đầu, đã hết hạn xuống cuối
-        .sort({ end_date: -1, createdAt: -1 })
-        .lean()
-        .exec(),
+    // Sắp xếp 2 tầng: đơn "đã xong" (terminal) xuống đáy, trong mỗi nhóm theo ngày còn hạn giảm dần.
+    // Dùng aggregate để tính cờ _dead rồi sort — sau đó populate như find() thường.
+    const [rawAgg, total] = await Promise.all([
+      this.orderModel.aggregate([
+        { $match: filter },
+        { $addFields: { _dead: { $cond: [{ $in: ['$status', TERMINAL_ORDER_STATUSES] }, 1, 0] } } },
+        { $sort: { _dead: 1, end_date: -1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        { $project: { _dead: 0 } },
+      ]).exec(),
       this.orderModel.countDocuments(filter).exec(),
+    ]);
+
+    const raw: any[] = await this.orderModel.populate(rawAgg, [
+      { path: 'user_id', select: 'email full_name' },
+      { path: 'service_id', select: 'name proxy_type ip_version allow_renew' },
+      { path: 'country_id', select: 'name code' },
+      { path: 'partner_id', select: 'name domain' },
     ]);
 
     const data = raw.map(({ user_id, ...rest }) => ({
@@ -449,19 +465,23 @@ export class OrdersService {
       filter.order_code = { $regex: search, $options: 'i' };
     }
 
-    const [orders, total] = await Promise.all([
-      this.orderModel
-        .find(filter)
-        .populate('service_id', 'name proxy_type ip_version allow_renew')
-        .populate('country_id', 'name code')
-        .select('-admin_note -cost_per_unit -total_cost -profit -partner_id -provider_order_id -provider_metadata')
-        .skip(skip)
-        .limit(limit)
-        // Sắp theo ngày còn hạn giảm dần: còn nhiều ngày lên đầu, đã hết hạn xuống cuối
-        .sort({ end_date: -1, createdAt: -1 })
-        .lean()
-        .exec(),
+    // Sắp xếp 2 tầng: đơn "đã xong" (terminal) xuống đáy, trong mỗi nhóm theo ngày còn hạn giảm dần.
+    const [ordersAgg, total] = await Promise.all([
+      this.orderModel.aggregate([
+        { $match: filter },
+        { $addFields: { _dead: { $cond: [{ $in: ['$status', TERMINAL_ORDER_STATUSES] }, 1, 0] } } },
+        { $sort: { _dead: 1, end_date: -1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        // Ẩn field nhạy cảm khỏi user (thay cho .select('-...')) — gồm cả error_message (có thể chứa tên NCC)
+        { $project: { admin_note: 0, cost_per_unit: 0, total_cost: 0, profit: 0, partner_id: 0, provider_order_id: 0, provider_metadata: 0, error_message: 0, _dead: 0 } },
+      ]).exec(),
       this.orderModel.countDocuments(filter).exec(),
+    ]);
+
+    const orders: any[] = await this.orderModel.populate(ordersAgg, [
+      { path: 'service_id', select: 'name proxy_type ip_version allow_renew' },
+      { path: 'country_id', select: 'name code' },
     ]);
 
     // Lookup proxies cho tất cả orders trong 1 query
@@ -556,15 +576,19 @@ export class OrdersService {
     const skip  = (page - 1) * limit;
 
     const proxyFilter = { order_id: order._id };
-    const [proxies, totalProxies] = await Promise.all([
+    // Admin xem CẢ proxy đã xoá mềm (withDeleted) để audit — user thì vẫn bị pre-hook ẩn
+    const [proxies, totalProxies, deletedProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location last_renewed_at renew_count')
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location last_renewed_at renew_count deleted_at deleted_reason')
+        .setOptions({ withDeleted: true })
+        .sort({ deleted_at: 1 }) // proxy còn sống lên trước, đã xoá xuống cuối
         .skip(skip)
         .limit(limit)
         .lean()
         .exec(),
-      this.proxyModel.countDocuments(proxyFilter).exec(),
+      this.proxyModel.countDocuments(proxyFilter).setOptions({ withDeleted: true }).exec(),
+      this.proxyModel.countDocuments({ ...proxyFilter, deleted_at: { $ne: null } }).setOptions({ withDeleted: true }).exec(),
     ]);
 
     const { user_id, ...rest } = order as any;
@@ -573,7 +597,8 @@ export class OrdersService {
       user: user_id,
       proxies: {
         data: proxies,
-        meta: { total: totalProxies, page, limit, totalPages: Math.ceil(totalProxies / limit) },
+        // total = tất cả (kể cả đã xoá) để phân trang đúng; deleted = số đã xoá để FE đếm active
+        meta: { total: totalProxies, deleted: deletedProxies, page, limit, totalPages: Math.ceil(totalProxies / limit) },
       },
     };
   }
@@ -1058,7 +1083,8 @@ export class OrdersService {
     });
 
     if (result.status === 'failed') {
-      throw new BadRequestException(`Gia hạn thất bại: ${result.error ?? 'Unknown'}`);
+      // Ẩn tên NCC khỏi thông báo lỗi cho user
+      throw new BadRequestException(sanitizeProviderName(`Gia hạn thất bại: ${result.error ?? 'Unknown'}`));
     }
 
     return {
@@ -2153,6 +2179,11 @@ export class OrdersService {
       `Bulk renew ${bulkRef}: user ${userId} gia hạn ${renewedCount}/${results.length} đơn, ` +
       `trừ ${totalCharged} VND, hoàn ${totalRefunded} VND`,
     );
+
+    // Ẩn tên NCC khỏi mọi message lỗi trả về user (result-dialog hiển thị r.error)
+    for (const r of results) {
+      if (r.error) r.error = sanitizeProviderName(r.error);
+    }
 
     return {
       results,
