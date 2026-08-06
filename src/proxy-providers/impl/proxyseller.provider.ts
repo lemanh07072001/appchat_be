@@ -1,4 +1,5 @@
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
+import { ProxyProvider } from '../proxy-provider.decorator';
 import {
   IProxyProvider,
   ProviderBuyParams,
@@ -59,8 +60,10 @@ interface ProxyListData {
   [key: string]: any;
 }
 
-@Injectable()
+@ProxyProvider('proxyseller')
 export class ProxysellerProvider implements IProxyProvider {
+  readonly capabilities = { buy: true, renew: true, rotate: false, cancel: false };
+
   private readonly logger = new Logger(ProxysellerProvider.name);
   private readonly BASE_URL = 'https://proxy-seller.com/personal/api/v1';
   private readonly TIMEOUT_MS = 60_000;

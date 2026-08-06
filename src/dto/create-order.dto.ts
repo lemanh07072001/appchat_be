@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   Min,
+  ValidateIf,
 } from 'class-validator';
 import { ProxyTypeEnum, PaymentMethodEnum } from '../enum/order.enum';
 
@@ -37,6 +38,8 @@ export class CreateOrderDto {
   @Min(1)
   quantity?: number;
 
+  /** Bắt buộc với đơn bán theo thời hạn; đơn bán theo GB có thể không giới hạn ngày. */
+  @ValidateIf((o: CreateOrderDto) => !o.bandwidth_gb)
   @IsNotEmpty()
   @IsNumber()
   @Min(1)
@@ -44,6 +47,7 @@ export class CreateOrderDto {
 
   @IsOptional()
   @IsNumber()
+  @Min(1)
   bandwidth_gb?: number;
 
   @IsNotEmpty()

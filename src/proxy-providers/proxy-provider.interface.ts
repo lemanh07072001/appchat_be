@@ -72,9 +72,49 @@ export interface RotateResult {
   raw?: any;
 }
 
+// ─── Năng lực của provider ───────────────────────────────────────────────────
+
+/**
+ * Những gì một provider thực sự làm được.
+ *
+ * `buy/renew/rotate/cancel` phải KHAI BÁO, không dò được: cả bốn đều bắt buộc
+ * theo interface nên method luôn tồn tại — nhiều provider chỉ ném lỗi
+ * "chưa hỗ trợ". `usage/topup` là method tuỳ chọn nên factory tự dò.
+ */
+export interface ProviderCapabilities {
+  buy: boolean;
+  renew: boolean;
+  rotate: boolean;
+  cancel: boolean;
+  /** Đọc được lưu lượng đã dùng → dùng được cho dịch vụ bán theo GB */
+  usage: boolean;
+  /** Nạp thêm dung lượng vào đơn đang chạy */
+  topup: boolean;
+  /** Kiểm tra được API key và số dư trước khi lưu */
+  check: boolean;
+}
+
+/** Kết quả kiểm tra kết nối tới nhà cung cấp. */
+export interface ProviderConnectionInfo {
+  /** Tài khoản nhận diện được ở phía nhà cung cấp (email / username) */
+  account?: string;
+  /** Số dư còn lại — ví cạn là mọi đơn mua mới fail hàng loạt */
+  balance?: number;
+  currency?: string;
+}
+
 // ─── Interface contract mà mọi provider phải implement ───────────────────────
 
 export interface IProxyProvider {
+  /**
+   * Provider tự khai bốn năng lực bắt buộc. Thiếu thì factory coi như đủ cả
+   * bốn — giữ nguyên hành vi cho provider viết trước khi có trường này.
+   */
+  readonly capabilities?: Pick<
+    ProviderCapabilities,
+    'buy' | 'renew' | 'rotate' | 'cancel'
+  >;
+
   buy(params: ProviderBuyParams): Promise<BuyResult>;
   renew(params: ProviderRenewParams): Promise<RenewResult>;
   rotate(params: ProviderRotateParams): Promise<RotateResult>;
@@ -89,6 +129,47 @@ export interface IProxyProvider {
     provider_order_id: string,
     context?: { metadata?: Record<string, any>; protocol?: string },
   ): Promise<ProxyCredential[]>;
+
+  /**
+   * Đọc lưu lượng đã tiêu thụ của một order (dùng cho dịch vụ bán theo GB).
+   *
+   * TÙY CHỌN: provider nào không bán theo dung lượng thì không cần implement,
+   * scheduler sẽ bỏ qua đơn của provider đó. Đây là điểm cắm duy nhất để
+   * `order.bandwidth_used_gb` được cập nhật.
+   */
+  fetchUsage?(
+    token_api: string,
+    provider_order_id: string,
+    context?: { metadata?: Record<string, any> },
+  ): Promise<{ used_gb: number }>;
+
+  /**
+   * Nạp thêm dung lượng vào một order đang chạy (dịch vụ bán theo GB).
+   *
+   * TÙY CHỌN, cùng lý do với `fetchUsage`. Provider nào không implement thì
+   * `OrdersService.topUpBandwidth()` từ chối ngay từ đầu — KHÔNG được cộng GB
+   * vào đơn nội bộ rồi mới phát hiện bên nhà cung cấp không có, vì như vậy là
+   * bán dung lượng mình chưa mua.
+   *
+   * KHÔNG đụng tới hạn ngày của đơn — đó là việc của `renew()`.
+   */
+  extendBandwidth?(
+    token_api: string,
+    provider_order_id: string,
+    gb: number,
+    context?: { metadata?: Record<string, any>; id_service?: string },
+  ): Promise<{ raw?: any }>;
+
+  /**
+   * Xác thực API key và đọc số dư — gọi trước khi admin lưu nhà cung cấp.
+   *
+   * TÙY CHỌN: provider nào không có endpoint tương ứng thì nút "Kiểm tra kết
+   * nối" tự tắt, thay vì hiện ra rồi báo lỗi khó hiểu.
+   *
+   * Ném lỗi khi key sai — đó chính là câu trả lời admin cần nghe ngay tại chỗ
+   * thay vì đợi đơn đầu tiên của khách fail.
+   */
+  checkConnection?(token_api: string): Promise<ProviderConnectionInfo>;
 
   /**
    * Lấy lại proxy theo danh sách provider_proxy_id (idproxy) — dùng để admin

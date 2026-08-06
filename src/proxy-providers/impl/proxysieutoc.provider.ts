@@ -1,4 +1,5 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
+import { ProxyProvider } from '../proxy-provider.decorator';
 import {
   IProxyProvider,
   ProviderBuyParams,
@@ -11,8 +12,11 @@ import {
   ProxyCredential,
 } from '../proxy-provider.interface';
 
-@Injectable()
+@ProxyProvider('proxysieutoc')
 export class ProxysieutocProvider implements IProxyProvider {
+  // renew/rotate/cancel đều ném "chưa hỗ trợ" — khai đúng để admin thấy trước.
+  readonly capabilities = { buy: true, renew: false, rotate: false, cancel: false };
+
   private readonly BASE_URL   = 'https://proxysieutoc.com/api/apiv1';
   private readonly TIMEOUT_MS = 30_000;
 

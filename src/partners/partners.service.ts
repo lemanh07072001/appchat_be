@@ -4,6 +4,8 @@ import { Partner, PartnerDocument } from '../schemas/partners.schema';
 import { Model, Types } from 'mongoose';
 import { CreatePartnerDto } from '../dto/create-partner.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
+import { CheckProviderConnectionDto } from '../dto/check-provider-connection.dto';
+import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 
 @Injectable()
 export class PartnersService {
@@ -11,6 +13,117 @@ export class PartnersService {
     @InjectModel(Partner.name)
     private partnerModel: Model<PartnerDocument>,
   ) {}
+
+  /**
+   * Kiểm tra API key của một nhà cung cấp bằng cách gọi thật sang API của họ.
+   *
+   * Không ném lỗi khi key sai — trả về `{ ok: false, message }` để form hiện
+   * kết quả tại chỗ thay vì bắn toast lỗi đỏ như một sự cố hệ thống. Key sai là
+   * kết quả kiểm tra hợp lệ, không phải lỗi của ta.
+   */
+  async checkProviderConnection(
+    factory: ProxyProviderFactory,
+    dto: CheckProviderConnectionDto,
+  ): Promise<{
+    ok: boolean;
+    message?: string;
+    latency_ms?: number;
+    account?: string;
+    balance?: number;
+    currency?: string;
+  }> {
+    if (!factory.hasProvider(dto.code)) {
+      return { ok: false, message: `Chưa có adapter cho code "${dto.code}"` };
+    }
+
+    const provider = factory.getProvider(dto.code);
+    if (typeof provider.checkConnection !== 'function') {
+      return {
+        ok: false,
+        message: `Adapter "${dto.code}" chưa hỗ trợ kiểm tra kết nối`,
+      };
+    }
+
+    // Sửa nhà cung cấp mà không đổi key thì form không gửi key lên (nó đang bị
+    // che) — lấy key đang lưu.
+    let token = dto.token_api?.trim() ?? '';
+    if (!token && dto.partner_id && Types.ObjectId.isValid(dto.partner_id)) {
+      const saved = await this.partnerModel
+        .findById(dto.partner_id)
+        .select('token_api')
+        .lean()
+        .exec();
+      token = saved?.token_api ?? '';
+    }
+    if (!token) {
+      return { ok: false, message: 'Chưa có API key để kiểm tra' };
+    }
+
+    const startedAt = Date.now();
+    try {
+      const info = await provider.checkConnection(token);
+      return {
+        ok: true,
+        latency_ms: Date.now() - startedAt,
+        account: info.account,
+        balance: info.balance,
+        currency: info.currency,
+      };
+    } catch (err: any) {
+      return {
+        ok: false,
+        latency_ms: Date.now() - startedAt,
+        message: err?.message ?? 'Không kết nối được tới nhà cung cấp',
+      };
+    }
+  }
+
+  /**
+   * Kiểm tra sức khoẻ của nhiều nhà cung cấp cùng lúc.
+   *
+   * CHỦ Ý chạy theo yêu cầu chứ không tự chạy khi mở trang: mỗi lần là một
+   * lượt gọi ra ngoài cho từng nhà cung cấp, không đáng đánh đổi để lấy một
+   * con số mà admin chỉ liếc thỉnh thoảng.
+   */
+  async checkAllConnections(
+    factory: ProxyProviderFactory,
+    ids?: string[],
+  ): Promise<
+    {
+      partner_id: string;
+      code: string;
+      ok: boolean;
+      message?: string;
+      latency_ms?: number;
+      account?: string;
+      balance?: number;
+      currency?: string;
+    }[]
+  > {
+    const filter: Record<string, unknown> = { status: true };
+    if (ids?.length) {
+      const objectIds = ids.filter((id) => Types.ObjectId.isValid(id)).map((id) => new Types.ObjectId(id));
+      if (objectIds.length === 0) return [];
+      filter._id = { $in: objectIds };
+    }
+
+    const partners = await this.partnerModel
+      .find(filter)
+      .select('_id code token_api')
+      .lean()
+      .exec();
+
+    // Song song: một nhà cung cấp chậm không được kéo cả bảng chờ theo.
+    return Promise.all(
+      partners.map(async (p) => {
+        const result = await this.checkProviderConnection(factory, {
+          code: p.code,
+          token_api: p.token_api,
+        } as CheckProviderConnectionDto);
+        return { partner_id: String(p._id), code: p.code, ...result };
+      }),
+    );
+  }
 
   async findAllPaginated(query: PaginationQueryDto) {
     const page = query.page ?? 1;
