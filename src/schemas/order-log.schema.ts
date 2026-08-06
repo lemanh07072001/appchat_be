@@ -53,6 +53,11 @@ export enum OrderLogStep {
   // ─── Expiration scheduler ────────────────────────────────────────────
   EXPIRED                = 'expired',
 
+  // ─── Bandwidth scheduler (đơn bán theo GB) ───────────────────────────
+  BANDWIDTH_SYNCED       = 'bandwidth.synced',
+  BANDWIDTH_DEPLETED     = 'bandwidth.depleted',
+  BANDWIDTH_TOPPED_UP    = 'bandwidth.topped_up',
+
   // ─── Admin actions ───────────────────────────────────────────────────
   ADMIN_STATUS_UPDATED   = 'admin.status_updated',
   ADMIN_PAYMENT_UPDATED  = 'admin.payment_updated',

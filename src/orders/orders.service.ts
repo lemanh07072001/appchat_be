@@ -14,6 +14,7 @@ import { BuyOrderDto } from '../dto/buy-order.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { UserOrderQueryDto } from '../dto/user-order-query.dto';
 import { OrderStatusEnum, PaymentMethodEnum, PaymentStatusEnum } from '../enum/order.enum';
+import { sanitizeProviderName } from '../common/sanitize-provider.util';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { PENDING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
@@ -44,6 +45,16 @@ const BULK_UNSUPPORTED_PARTNERS: Record<string, string> = {
   proxyv6: 'NCC chỉ hỗ trợ gia hạn toàn bộ đơn — vui lòng gia hạn ở trang chi tiết đơn hàng',
   proxysieutoc: 'NCC chưa hỗ trợ gia hạn proxy',
 };
+
+// Đơn "đã xong" — đẩy xuống ĐÁY danh sách (đơn đang chạy/đang xử lý ưu tiên lên trên),
+// trong mỗi nhóm vẫn sắp theo ngày còn hạn giảm dần.
+const TERMINAL_ORDER_STATUSES = [
+  OrderStatusEnum.COMPLETED, // 4
+  OrderStatusEnum.EXPIRED,   // 5
+  OrderStatusEnum.CANCELLED, // 6
+  OrderStatusEnum.FAILED,    // 8
+  OrderStatusEnum.REFUNDED,  // 11
+];
 
 @Injectable()
 export class OrdersService {
@@ -80,6 +91,263 @@ export class OrdersService {
     return `ORD-${datePart}-${rand}`;
   }
 
+  /**
+   * Chuẩn hoá + sắp xếp bảng bậc giá của service, rồi tìm bậc áp dụng cho `rawGb`.
+   *
+   * Trần của một bậc là `min_gb` của bậc kế tiếp, nên bảng không thể hở hay
+   * chồng lấn dù admin nhập kiểu gì.
+   */
+  private resolveBandwidthTier(
+    service: ServiceDocument,
+    rawGb: number,
+  ): {
+    gb: number;
+    minGb: number;
+    maxGb: number;
+    tier: { min_gb: number; price_per_gb: number; cost_per_gb: number | null; days: number };
+    tiers: { min_gb: number; price_per_gb: number; cost_per_gb: number | null; days: number }[];
+  } {
+    const tiers = ((service as any).bandwidth_tiers ?? [])
+      .map((t: any) => ({
+        min_gb: Number(t?.min_gb) || 0,
+        price_per_gb: Number(t?.price_per_gb) || 0,
+        cost_per_gb: t?.cost_per_gb != null ? Number(t.cost_per_gb) : null,
+        days: Number(t?.days) || 0,
+      }))
+      .filter((t) => t.min_gb > 0 && t.price_per_gb > 0)
+      .sort((a, b) => a.min_gb - b.min_gb);
+
+    if (tiers.length === 0) {
+      throw new BadRequestException('Dịch vụ chưa cấu hình bậc giá theo GB');
+    }
+
+    const gb = Math.floor(Number(rawGb));
+    if (!Number.isFinite(gb) || gb <= 0) {
+      throw new BadRequestException('Số GB không hợp lệ');
+    }
+
+    const minGb = tiers[0].min_gb;
+    const maxGb =
+      Number((service as any).bandwidth_max_gb) > 0
+        ? Number((service as any).bandwidth_max_gb)
+        : 1000;
+
+    if (gb < minGb || gb > maxGb) {
+      throw new BadRequestException(`Số GB phải nằm trong khoảng ${minGb} - ${maxGb}`);
+    }
+
+    // Bậc áp dụng = bậc cuối cùng có `min_gb` không vượt quá số GB khách nhập.
+    let tier = tiers[0];
+    for (const t of tiers) if (gb >= t.min_gb) tier = t;
+
+    return { gb, minGb, maxGb, tier, tiers };
+  }
+
+  /**
+   * Báo giá cho trang bán theo GB — không tạo đơn, không trừ tiền.
+   *
+   * Trả về cả thang bậc và gợi ý lên bậc kế tiếp để frontend chỉ việc hiển thị.
+   * Toàn bộ phép tính tiền nằm ở đây, client không nhân chia gì cả.
+   */
+  async quoteBandwidth(serviceId: string, rawGb: number, userId?: string) {
+    if (!Types.ObjectId.isValid(serviceId)) {
+      throw new BadRequestException('service_id không hợp lệ');
+    }
+
+    const service = await this.serviceModel.findById(serviceId).exec();
+    if (!service || !service.status) {
+      throw new BadRequestException('Service không tồn tại hoặc đã ngừng hoạt động');
+    }
+    if ((service as any).pricing_mode !== 'bandwidth') {
+      throw new BadRequestException('Dịch vụ này không bán theo dung lượng');
+    }
+
+    const { gb, minGb, maxGb, tier, tiers } = this.resolveBandwidthTier(service, rawGb);
+
+    const priced = this.resolvePricing(
+      service,
+      { service_id: serviceId, gb } as BuyOrderDto,
+      userId ?? '',
+    );
+
+    const idx = tiers.findIndex((t) => t.min_gb === tier.min_gb);
+    const next = tiers[idx + 1] ?? null;
+
+    return {
+      gb,
+      min_gb: minGb,
+      max_gb: maxGb,
+      price_per_gb: tier.price_per_gb,
+      days: priced.durationDays,
+      base_total: priced.basePrice,
+      discount_amount: priced.discountAmount,
+      total: priced.totalPrice,
+      tiers: tiers.map((t, i) => ({
+        min_gb: t.min_gb,
+        // Bậc cuối không có trần — để null, frontend hiển thị "trở lên".
+        max_gb: tiers[i + 1] ? tiers[i + 1].min_gb - 1 : null,
+        price_per_gb: t.price_per_gb,
+        days: t.days,
+        active: t.min_gb === tier.min_gb,
+      })),
+      next_tier:
+        next && next.min_gb <= maxGb
+          ? {
+              min_gb: next.min_gb,
+              price_per_gb: next.price_per_gb,
+              gb_needed: next.min_gb - gb,
+              total_at_min: next.min_gb * next.price_per_gb,
+              // Dương nghĩa là mua NHIỀU HƠN mà rẻ hơn — hệ quả của giá phẳng
+              // theo bậc. Frontend phải nói thẳng con số này ra.
+              cheaper_by: priced.basePrice - next.min_gb * next.price_per_gb,
+              saving_at_min: next.min_gb * (tier.price_per_gb - next.price_per_gb),
+            }
+          : null,
+    };
+  }
+
+  /**
+   * Tính toàn bộ phần tiền + số lượng + thời hạn của một đơn, tách hẳn khỏi
+   * `buy()` để hai chế độ bán không đan vào nhau trong một hàm dài.
+   *
+   * Giá LUÔN lấy từ `service.pricing` phía server — không tin số frontend gửi.
+   */
+  private resolvePricing(
+    service: ServiceDocument,
+    dto: BuyOrderDto,
+    userId: string,
+  ): {
+    pricingMode: 'duration' | 'bandwidth';
+    quantity: number;
+    durationDays: number;
+    bandwidthGb: number | null;
+    basePrice: number;
+    pricePerUnit: number;
+    costPerUnit: number | null;
+    discountPerUnit: number;
+    discountAmount: number;
+    totalPrice: number;
+    totalCost: number | null;
+    /** Khoá dùng để tra `user_discounts` và ghi log */
+    pricingKey: string;
+  } {
+    const pricingMode =
+      (service as any).pricing_mode === 'bandwidth' ? 'bandwidth' : 'duration';
+
+    // ── Bán theo dung lượng ────────────────────────────────────────────
+    if (pricingMode === 'bandwidth') {
+      // Khách tự nhập số GB → tính theo bậc giá. Ưu tiên hơn gói cố định vì
+      // chỉ frontend mới của trang bán mới gửi `gb`.
+      if (dto.gb != null) {
+        const { gb, tier } = this.resolveBandwidthTier(service, dto.gb);
+
+        const basePrice = gb * tier.price_per_gb;
+        // `user_discounts` của chế độ bậc giá tính theo GB, không theo tổng đơn,
+        // để một mức giảm dùng được cho mọi số GB khách nhập.
+        const rawDiscountPerGb =
+          (service as any).user_discounts?.[userId]?.['per_gb'] ?? 0;
+        const discountPerGb = Math.min(
+          tier.price_per_gb,
+          Number(rawDiscountPerGb) || 0,
+        );
+        const discountAmount = discountPerGb * gb;
+        const pricePerUnit = basePrice - discountAmount;
+        const costPerUnit =
+          tier.cost_per_gb != null ? Number(tier.cost_per_gb) * gb : null;
+
+        return {
+          pricingMode,
+          quantity: 1,
+          durationDays: Number(tier.days) || 0,
+          bandwidthGb: gb,
+          basePrice,
+          pricePerUnit,
+          costPerUnit,
+          discountPerUnit: discountAmount,
+          discountAmount,
+          totalPrice: pricePerUnit,
+          totalCost: costPerUnit,
+          pricingKey: `gb:${gb}`,
+        };
+      }
+
+      const key = dto.package_key;
+      if (!key) {
+        throw new BadRequestException('Vui lòng chọn gói dung lượng');
+      }
+
+      const plan = service.pricing?.[key];
+      if (!plan) {
+        throw new BadRequestException(`Dịch vụ không có gói dung lượng "${key}"`);
+      }
+
+      const bandwidthGb = Number(plan.gb) || 0;
+      if (bandwidthGb <= 0) {
+        throw new BadRequestException(`Gói "${key}" chưa được cấu hình số GB`);
+      }
+
+      // Gói GB bán trọn gói: 1 đơn = 1 gateway, không nhân số lượng.
+      const basePrice = Number(plan.price) || 0;
+      const rawDiscount = (service as any).user_discounts?.[userId]?.[key] ?? 0;
+      const discountPerUnit = Math.min(basePrice, Number(rawDiscount) || 0);
+      const pricePerUnit = basePrice - discountPerUnit;
+      const costPerUnit = plan.cost != null ? Number(plan.cost) : null;
+
+      return {
+        pricingMode,
+        quantity: 1,
+        // days thiếu hoặc 0 → gói không giới hạn thời gian
+        durationDays: Number(plan.days) || 0,
+        bandwidthGb,
+        basePrice,
+        pricePerUnit,
+        costPerUnit,
+        discountPerUnit,
+        discountAmount: discountPerUnit,
+        totalPrice: pricePerUnit,
+        totalCost: costPerUnit,
+        pricingKey: key,
+      };
+    }
+
+    // ── Bán theo thời hạn (mặc định) ───────────────────────────────────
+    const pricing = service.pricing?.[dto.duration_days];
+    if (!pricing) {
+      throw new BadRequestException(`Service không hỗ trợ gói ${dto.duration_days} ngày`);
+    }
+
+    const quantity = dto.quantity ?? 1;
+
+    // Validate quantity nằm trong giới hạn admin set cho service
+    const minQty = (service as any).min_quantity && (service as any).min_quantity > 0 ? (service as any).min_quantity : 1;
+    const maxQty = (service as any).max_quantity && (service as any).max_quantity > 0 ? (service as any).max_quantity : 100;
+    if (quantity < minQty || quantity > maxQty) {
+      throw new BadRequestException(`Số lượng phải nằm trong khoảng ${minQty} - ${maxQty}`);
+    }
+
+    // Áp discount user-specific (per duration). Floor pricePerUnit ở 0.
+    const basePrice = pricing.price as number;
+    const rawDiscount = (service as any).user_discounts?.[userId]?.[String(dto.duration_days)] ?? 0;
+    const discountPerUnit = Math.min(basePrice, Number(rawDiscount) || 0);
+    const pricePerUnit = basePrice - discountPerUnit;
+    const costPerUnit = (pricing.cost as number) ?? null;
+
+    return {
+      pricingMode,
+      quantity,
+      durationDays: dto.duration_days,
+      bandwidthGb: null,
+      basePrice,
+      pricePerUnit,
+      costPerUnit,
+      discountPerUnit,
+      discountAmount: discountPerUnit * quantity,
+      totalPrice: pricePerUnit * quantity,
+      totalCost: costPerUnit != null ? costPerUnit * quantity : null,
+      pricingKey: String(dto.duration_days),
+    };
+  }
+
   // Resolve country: nhận ObjectId hoặc tên quốc gia
   private async resolveCountryId(country?: string): Promise<Types.ObjectId | null> {
     if (!country) return null;
@@ -97,10 +365,14 @@ export class OrdersService {
       status: OrderStatusEnum;
       service_name: string;
       proxy_type: string;
+      pricing_mode: 'duration' | 'bandwidth';
       quantity: number;
       duration_days: number;
+      /** Hạn mức GB đã mua — null với đơn bán theo thời hạn */
+      bandwidth_gb: number | null;
       start_date: Date;
-      end_date: Date;
+      /** null khi gói dung lượng không giới hạn thời gian */
+      end_date: Date | null;
       price_per_unit: number;
       total_price: number;
       balance_before: number;
@@ -141,30 +413,20 @@ export class OrdersService {
       throw new BadRequestException('Dịch vụ này đang tạm dừng mua');
     }
 
-    // 2. Lấy giá theo duration_days — tính server-side, không tin frontend
-    const pricing = service.pricing?.[dto.duration_days];
-    if (!pricing) {
-      throw new BadRequestException(`Service không hỗ trợ gói ${dto.duration_days} ngày`);
-    }
-
-    const quantity      = dto.quantity ?? 1;
-
-    // Validate quantity nằm trong giới hạn admin set cho service
-    const minQty = (service as any).min_quantity && (service as any).min_quantity > 0 ? (service as any).min_quantity : 1;
-    const maxQty = (service as any).max_quantity && (service as any).max_quantity > 0 ? (service as any).max_quantity : 100;
-    if (quantity < minQty || quantity > maxQty) {
-      throw new BadRequestException(`Số lượng phải nằm trong khoảng ${minQty} - ${maxQty}`);
-    }
-
-    // Áp discount user-specific (per duration). Floor pricePerUnit ở 0.
-    const basePrice = pricing.price as number;
-    const rawDiscount = (service as any).user_discounts?.[userId]?.[String(dto.duration_days)] ?? 0;
-    const discountPerUnit = Math.min(basePrice, Number(rawDiscount) || 0);
-    const pricePerUnit  = basePrice - discountPerUnit;
-    const costPerUnit   = pricing.cost as number ?? null;
-    const totalPrice    = pricePerUnit * quantity;
-    const totalCost     = costPerUnit != null ? costPerUnit * quantity : null;
-    const discountAmount = discountPerUnit * quantity;
+    // 2. Tính giá server-side theo chế độ bán của service — không tin frontend
+    const {
+      pricingMode,
+      quantity,
+      durationDays,
+      bandwidthGb,
+      basePrice,
+      pricePerUnit,
+      costPerUnit,
+      discountPerUnit,
+      discountAmount,
+      totalPrice,
+      totalCost,
+    } = this.resolvePricing(service, dto, userId);
 
     // 3. Resolve country_id
     const countryId = await this.resolveCountryId(dto.country) ?? service.country ?? null;
@@ -181,9 +443,14 @@ export class OrdersService {
     }
 
     // 5. Tạo order
-    const now     = new Date();
-    const endDate = new Date(now);
-    endDate.setDate(endDate.getDate() + dto.duration_days);
+    const now = new Date();
+    // durationDays = 0 nghĩa là gói dung lượng không giới hạn thời gian →
+    // end_date null, scheduler hết hạn sẽ không đụng tới đơn này.
+    let endDate: Date | null = null;
+    if (durationDays > 0) {
+      endDate = new Date(now);
+      endDate.setDate(endDate.getDate() + durationDays);
+    }
 
     const dataOrder = {
       order_code:     this.generateOrderCode(),
@@ -193,8 +460,10 @@ export class OrdersService {
       country_id:     countryId,
       proxy_type:     dto.proxy_type ?? service.proxy_type,
       order_type:     service.type ?? '',
+      pricing_mode:   pricingMode,
       quantity,
-      duration_days:  dto.duration_days,
+      duration_days:  durationDays,
+      bandwidth_gb:   bandwidthGb,
       price_per_unit: pricePerUnit,
       base_price_per_unit: discountPerUnit > 0 ? basePrice : null,
       discount_per_unit:   discountPerUnit,
@@ -243,8 +512,10 @@ export class OrdersService {
         service_id:     dto.service_id,
         service_name:   service.name,
         partner_id:     service.partner?.toString() ?? null,
+        pricing_mode:   pricingMode,
         quantity,
-        duration_days:  dto.duration_days,
+        duration_days:  durationDays,
+        bandwidth_gb:   bandwidthGb,
         price_per_unit: pricePerUnit,
         base_price_per_unit: discountPerUnit > 0 ? basePrice : null,
         discount_per_unit:   discountPerUnit,
@@ -291,7 +562,9 @@ export class OrdersService {
       direction:      'out',
       balance_before: balanceBefore,
       balance_after:  balanceAfter,
-      description:    `Mua proxy: ${service.name} x${quantity} (${dto.duration_days} ngày)`,
+      description:    pricingMode === "bandwidth"
+        ? `Mua proxy: ${service.name} — gói ${bandwidthGb}GB`
+        : `Mua proxy: ${service.name} x${quantity} (${durationDays} ngày)`,
       ref_id:         orderId,
       ref_type:       'order',
       created_by:     'system',
@@ -306,8 +579,10 @@ export class OrdersService {
         status:         order.status,
         service_name:   service.name,
         proxy_type:     order.proxy_type,
+        pricing_mode:   pricingMode,
         quantity,
-        duration_days:  dto.duration_days,
+        duration_days:  durationDays,
+        bandwidth_gb:   bandwidthGb,
         start_date:     now,
         end_date:       endDate,
         price_per_unit: pricePerUnit,
@@ -405,20 +680,25 @@ export class OrdersService {
       }
     }
 
-    const [raw, total] = await Promise.all([
-      this.orderModel
-        .find(filter)
-        .populate('user_id', 'email full_name')
-        .populate('service_id', 'name proxy_type ip_version allow_renew')
-        .populate('country_id', 'name code')
-        .populate('partner_id', 'name domain')
-        .skip(skip)
-        .limit(limit)
-        // Nhóm đơn đã gia hạn lên đầu, trong mỗi nhóm theo ngày tạo mới nhất
-        .sort({ is_renewed: -1, createdAt: -1 })
-        .lean()
-        .exec(),
+    // Sắp xếp 2 tầng: đơn "đã xong" (terminal) xuống đáy, trong mỗi nhóm theo ngày còn hạn giảm dần.
+    // Dùng aggregate để tính cờ _dead rồi sort — sau đó populate như find() thường.
+    const [rawAgg, total] = await Promise.all([
+      this.orderModel.aggregate([
+        { $match: filter },
+        { $addFields: { _dead: { $cond: [{ $in: ['$status', TERMINAL_ORDER_STATUSES] }, 1, 0] } } },
+        { $sort: { _dead: 1, end_date: -1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        { $project: { _dead: 0 } },
+      ]).exec(),
       this.orderModel.countDocuments(filter).exec(),
+    ]);
+
+    const raw: any[] = await this.orderModel.populate(rawAgg, [
+      { path: 'user_id', select: 'email full_name' },
+      { path: 'service_id', select: 'name proxy_type ip_version allow_renew' },
+      { path: 'country_id', select: 'name code' },
+      { path: 'partner_id', select: 'name domain' },
     ]);
 
     const data = raw.map(({ user_id, ...rest }) => ({
@@ -449,19 +729,23 @@ export class OrdersService {
       filter.order_code = { $regex: search, $options: 'i' };
     }
 
-    const [orders, total] = await Promise.all([
-      this.orderModel
-        .find(filter)
-        .populate('service_id', 'name proxy_type ip_version allow_renew')
-        .populate('country_id', 'name code')
-        .select('-admin_note -cost_per_unit -total_cost -profit -partner_id -provider_order_id -provider_metadata')
-        .skip(skip)
-        .limit(limit)
-        // Nhóm đơn đã gia hạn lên đầu, trong mỗi nhóm theo ngày tạo mới nhất
-        .sort({ is_renewed: -1, createdAt: -1 })
-        .lean()
-        .exec(),
+    // Sắp xếp 2 tầng: đơn "đã xong" (terminal) xuống đáy, trong mỗi nhóm theo ngày còn hạn giảm dần.
+    const [ordersAgg, total] = await Promise.all([
+      this.orderModel.aggregate([
+        { $match: filter },
+        { $addFields: { _dead: { $cond: [{ $in: ['$status', TERMINAL_ORDER_STATUSES] }, 1, 0] } } },
+        { $sort: { _dead: 1, end_date: -1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        // Ẩn field nhạy cảm khỏi user (thay cho .select('-...')) — gồm cả error_message (có thể chứa tên NCC)
+        { $project: { admin_note: 0, cost_per_unit: 0, total_cost: 0, profit: 0, partner_id: 0, provider_order_id: 0, provider_metadata: 0, error_message: 0, _dead: 0 } },
+      ]).exec(),
       this.orderModel.countDocuments(filter).exec(),
+    ]);
+
+    const orders: any[] = await this.orderModel.populate(ordersAgg, [
+      { path: 'service_id', select: 'name proxy_type ip_version allow_renew' },
+      { path: 'country_id', select: 'name code' },
     ]);
 
     // Lookup proxies cho tất cả orders trong 1 query
@@ -556,15 +840,19 @@ export class OrdersService {
     const skip  = (page - 1) * limit;
 
     const proxyFilter = { order_id: order._id };
-    const [proxies, totalProxies] = await Promise.all([
+    // Admin xem CẢ proxy đã xoá mềm (withDeleted) để audit — user thì vẫn bị pre-hook ẩn
+    const [proxies, totalProxies, deletedProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location')
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location last_renewed_at renew_count deleted_at deleted_reason')
+        .setOptions({ withDeleted: true })
+        .sort({ deleted_at: 1 }) // proxy còn sống lên trước, đã xoá xuống cuối
         .skip(skip)
         .limit(limit)
         .lean()
         .exec(),
-      this.proxyModel.countDocuments(proxyFilter).exec(),
+      this.proxyModel.countDocuments(proxyFilter).setOptions({ withDeleted: true }).exec(),
+      this.proxyModel.countDocuments({ ...proxyFilter, deleted_at: { $ne: null } }).setOptions({ withDeleted: true }).exec(),
     ]);
 
     const { user_id, ...rest } = order as any;
@@ -573,7 +861,8 @@ export class OrdersService {
       user: user_id,
       proxies: {
         data: proxies,
-        meta: { total: totalProxies, page, limit, totalPages: Math.ceil(totalProxies / limit) },
+        // total = tất cả (kể cả đã xoá) để phân trang đúng; deleted = số đã xoá để FE đếm active
+        meta: { total: totalProxies, deleted: deletedProxies, page, limit, totalPages: Math.ceil(totalProxies / limit) },
       },
     };
   }
@@ -732,7 +1021,10 @@ export class OrdersService {
           message:    'Giao dịch thành công!',
           order_code: buyResult.data.order_code,
           proxiesip,
-          timestamp:  Math.floor(new Date(buyResult.data.end_date).getTime() / 1000),
+          // 0 = không có hạn thời gian (gói dung lượng bán không kèm số ngày)
+          timestamp:  buyResult.data.end_date
+            ? Math.floor(new Date(buyResult.data.end_date).getTime() / 1000)
+            : 0,
         };
       }
 
@@ -1058,7 +1350,8 @@ export class OrdersService {
     });
 
     if (result.status === 'failed') {
-      throw new BadRequestException(`Gia hạn thất bại: ${result.error ?? 'Unknown'}`);
+      // Ẩn tên NCC khỏi thông báo lỗi cho user
+      throw new BadRequestException(sanitizeProviderName(`Gia hạn thất bại: ${result.error ?? 'Unknown'}`));
     }
 
     return {
@@ -1072,6 +1365,176 @@ export class OrdersService {
         balance_after: result.balance_after,
       },
     };
+  }
+
+  /**
+   * Nạp thêm dung lượng vào một đơn bán theo GB.
+   *
+   * Cố ý KHÔNG dùng lại `renewByUser`: gia hạn đẩy `end_date`, nạp GB thì
+   * không. Gộp hai việc vào một nút là nguồn khiếu nại chắc chắn.
+   *
+   * Bậc giá tính trên riêng lượng nạp thêm, không cộng dồn với GB đã mua trước
+   * đó — đơn giản, và không tạo kỳ vọng hoàn tiền hồi tố.
+   */
+  async topUpBandwidth(
+    userId: string,
+    orderId: string,
+    gb: number,
+    idempotencyKey?: string,
+  ) {
+    if (!Types.ObjectId.isValid(orderId)) {
+      throw new BadRequestException('Order id không hợp lệ');
+    }
+
+    const idemKey = idempotencyKey ? `idem:topup:${userId}:${idempotencyKey}` : null;
+    if (idemKey) {
+      const cached = await this.redis.get(idemKey);
+      if (cached) return JSON.parse(cached);
+      const lockOk = await this.redis.set(`${idemKey}:lock`, '1', 'EX', 60, 'NX');
+      if (!lockOk) {
+        throw new BadRequestException('Yêu cầu đang được xử lý, vui lòng chờ');
+      }
+    }
+
+    const order = await this.orderModel
+      .findById(orderId)
+      .populate('service_id')
+      .populate('partner_id')
+      .exec();
+
+    if (!order) throw new BadRequestException('Order không tồn tại');
+    if (order.user_id?.toString() !== userId) {
+      throw new BadRequestException('Bạn không có quyền nạp thêm cho đơn này');
+    }
+    if ((order as any).pricing_mode !== 'bandwidth') {
+      throw new BadRequestException('Đơn này không bán theo dung lượng');
+    }
+
+    // Cạn GB vẫn nạp được — đó chính là lúc khách cần nạp nhất. Hết hạn NGÀY
+    // thì không, vì cộng GB vào một đơn sắp bị scheduler đóng là vứt tiền.
+    const ALLOWED = [OrderStatusEnum.ACTIVE, OrderStatusEnum.DEPLETED];
+    if (!ALLOWED.includes(order.status)) {
+      throw new BadRequestException('Chỉ nạp thêm được cho đơn đang chạy hoặc đã cạn dung lượng');
+    }
+    if (order.end_date && new Date(order.end_date).getTime() <= Date.now()) {
+      throw new BadRequestException('Đơn đã hết hạn sử dụng, vui lòng mua đơn mới');
+    }
+
+    const partner = order.partner_id as any;
+    if (!partner?.token_api || !partner?.code) {
+      throw new BadRequestException('Đơn không có thông tin nhà cung cấp');
+    }
+
+    const service = order.service_id as any;
+    if (!service) throw new BadRequestException('Không tìm thấy dịch vụ của đơn');
+
+    // Giá tính lại theo bảng bậc hiện hành của dịch vụ — không dùng
+    // `order.price_per_unit` cũ, vì bậc giá có thể đã đổi từ lúc mua.
+    const { totalPrice, bandwidthGb, costPerUnit } = this.resolvePricing(
+      service,
+      { service_id: service._id?.toString() ?? '', gb } as BuyOrderDto,
+      userId,
+    );
+    if (totalPrice <= 0) {
+      throw new BadRequestException('Không xác định được giá nạp thêm');
+    }
+
+    // Chặn TRƯỚC khi trừ tiền: provider không nạp được thì đừng chạm vào ví.
+    const provider = this.providerFactory.getProvider(partner.code);
+    if (typeof provider.extendBandwidth !== 'function') {
+      throw new BadRequestException(
+        `Nhà cung cấp ${partner.name ?? partner.code} chưa hỗ trợ nạp thêm dung lượng`,
+      );
+    }
+
+    const deducted = await this.userModel.findOneAndUpdate(
+      { _id: new Types.ObjectId(userId), money: { $gte: totalPrice } },
+      { $inc: { money: -totalPrice } },
+      { new: true },
+    ).exec();
+    if (!deducted) {
+      throw new BadRequestException('Số dư không đủ để nạp thêm dung lượng');
+    }
+
+    try {
+      await provider.extendBandwidth(
+        partner.token_api,
+        order.provider_order_id ?? '',
+        bandwidthGb!,
+        { metadata: order.provider_metadata, id_service: service.id_service },
+      );
+    } catch (err: any) {
+      await this.userModel
+        .findByIdAndUpdate(userId, { $inc: { money: totalPrice } })
+        .exec();
+      this.logger.error(
+        `Order ${orderId}: nạp ${gb}GB thất bại — hoàn ${totalPrice} VND: ${err?.message}`,
+      );
+      void this.orderLogService.error(
+        orderId,
+        OrderLogStep.BANDWIDTH_TOPPED_UP,
+        `Nạp thêm ${gb} GB thất bại, đã hoàn ${totalPrice.toLocaleString('vi-VN')} VND`,
+        { gb, totalPrice, error: err?.message },
+        userId,
+      );
+      throw new BadRequestException(
+        `Nạp thêm dung lượng thất bại: ${err?.message ?? 'lỗi nhà cung cấp'}`,
+      );
+    }
+
+    const before = Number(order.bandwidth_gb ?? 0);
+    order.bandwidth_gb = before + bandwidthGb!;
+    // Đơn đã cạn thì sống lại; hạn ngày giữ nguyên, đúng như đã hứa trên giao diện.
+    if (order.status === OrderStatusEnum.DEPLETED) {
+      order.status = OrderStatusEnum.ACTIVE;
+    }
+    if (costPerUnit != null) {
+      order.total_cost = Number(order.total_cost ?? 0) + costPerUnit;
+    }
+    order.total_price = Number(order.total_price ?? 0) + totalPrice;
+    // Chỉ tính lại lãi khi biết giá vốn; không biết thì để nguyên giá trị cũ
+    // còn hơn ghi đè bằng một con số sai.
+    if (order.total_cost != null) {
+      order.profit = Number(order.total_price) - Number(order.total_cost);
+    }
+    await order.save();
+
+    const balanceAfter = Number(deducted.money ?? 0);
+    void this.walletTxService.log({
+      user_id:        userId,
+      type:           WalletTxType.PURCHASE,
+      amount:         totalPrice,
+      direction:      'out',
+      balance_before: balanceAfter + totalPrice,
+      balance_after:  balanceAfter,
+      description:    `Nạp thêm ${bandwidthGb} GB: ${service?.name ?? ''}`,
+      ref_id:         orderId,
+      ref_type:       'order',
+      created_by:     userId,
+    });
+
+    void this.orderLogService.info(
+      orderId,
+      OrderLogStep.BANDWIDTH_TOPPED_UP,
+      `User nạp thêm ${bandwidthGb} GB (${before} → ${order.bandwidth_gb} GB) — trừ ${totalPrice.toLocaleString('vi-VN')} VND`,
+      { gb: bandwidthGb, totalPrice, before_gb: before, after_gb: order.bandwidth_gb, balance_after: balanceAfter },
+      userId,
+    );
+
+    const result = {
+      success: true,
+      message: `Đã nạp thêm ${bandwidthGb} GB`,
+      data: {
+        gb_added:      bandwidthGb,
+        bandwidth_gb:  order.bandwidth_gb,
+        total_price:   totalPrice,
+        balance_after: balanceAfter,
+        end_date:      order.end_date,
+      },
+    };
+
+    if (idemKey) await this.redis.set(idemKey, JSON.stringify(result), 'EX', 86400);
+    return result;
   }
 
   /**
@@ -1224,6 +1687,15 @@ export class OrdersService {
     order.last_renewed_by = isAuto ? 'auto-renew' : 'user';
     await order.save();
 
+    // 4b. Đánh dấu PER-PROXY các con vừa gia hạn → admin biết proxy nào đã gia hạn
+    const renewedPpids = proxies.map((p) => p.provider_proxy_id).filter(Boolean);
+    if (renewedPpids.length) {
+      void this.proxyModel.updateMany(
+        { order_id: order._id, provider_proxy_id: { $in: renewedPpids } },
+        { $set: { last_renewed_at: new Date() }, $inc: { renew_count: 1 } },
+      ).exec();
+    }
+
     // 5. Log wallet transaction
     const balanceAfter  = Number(deducted.money ?? 0);
     const balanceBefore = balanceAfter + totalPrice;
@@ -1344,6 +1816,12 @@ export class OrdersService {
     order.last_renewed_at = new Date();
     order.last_renewed_by = 'admin';
     await order.save();
+
+    // Đánh dấu per-proxy: admin gia hạn NCC = gia hạn TOÀN BỘ proxy của đơn
+    void this.proxyModel.updateMany(
+      { order_id: order._id, provider_proxy_id: { $exists: true, $ne: '' } },
+      { $set: { last_renewed_at: new Date() }, $inc: { renew_count: 1 } },
+    ).exec();
 
     this.logger.log(`Order ${orderId}: admin gia hạn NCC ${successCount}/${proxies.length} proxy thêm ${duration_days} ngày`);
     void this.orderLogService.info(
@@ -1910,7 +2388,7 @@ export class OrdersService {
       // (provider_proxy_id chỉ dùng nội bộ tính eligible, không trả ra ngoài)
       .select(
         'order_id ip_address port domain is_active health_status provider_proxy_id ' +
-        'auth_username auth_password cdk_key',
+        'auth_username auth_password cdk_key last_renewed_at',
       )
       .sort({ ip_address: 1 })
       .lean()
@@ -1945,6 +2423,7 @@ export class OrdersService {
           cdk_key: p.cdk_key || undefined,
           is_active: p.is_active !== false,
           health_status: p.health_status,
+          last_renewed_at: p.last_renewed_at ?? null,
           eligible: !reason && !!p.provider_proxy_id,
         }));
 
@@ -1982,6 +2461,7 @@ export class OrdersService {
     opts?: { actor?: string },
   ) {
     const actor = opts?.actor ?? userId;
+    const isAuto = actor !== userId; // auto-renew (cron) KHÔNG xoá proxy — chỉ manual mới prune
     if (!duration_days || duration_days < 1) {
       throw new BadRequestException('duration_days phải >= 1');
     }
@@ -2108,6 +2588,11 @@ export class OrdersService {
         balanceAfter = res.balance_after;
         totalCharged += res.refunded ? 0 : res.price;
         totalRefunded += res.refunded ? res.price : 0;
+
+        // Gia hạn chọn lọc (chỉ manual): xoá MỀM proxy KHÔNG được chọn của đơn này
+        if (!isAuto && res.status !== 'failed') {
+          await this.pruneUnrenewedProxies(order, proxies, userId);
+        }
       } catch (err: any) {
         // Lỗi trước khi trừ tiền (vd số dư không đủ cho đơn này) → ghi nhận, đi tiếp
         this.logger.error(`Bulk renew ${bulkRef}: order ${order.order_code} lỗi — ${err?.message}`);
@@ -2132,6 +2617,11 @@ export class OrdersService {
       `trừ ${totalCharged} VND, hoàn ${totalRefunded} VND`,
     );
 
+    // Ẩn tên NCC khỏi mọi message lỗi trả về user (result-dialog hiển thị r.error)
+    for (const r of results) {
+      if (r.error) r.error = sanitizeProviderName(r.error);
+    }
+
     return {
       results,
       total_price: totalCharged,
@@ -2140,5 +2630,56 @@ export class OrdersService {
       bulk_ref: bulkRef,
       renewed_orders: renewedCount,
     };
+  }
+
+  /**
+   * Gia hạn chọn lọc: sau khi user gia hạn một phần proxy của đơn, xoá MỀM các
+   * proxy KHÔNG được chọn (giữ record để audit/khôi phục). Chỉ gọi cho thao tác
+   * tay của user — KHÔNG áp cho auto-renew. Cập nhật SL đơn = số proxy còn giữ.
+   */
+  private async pruneUnrenewedProxies(
+    order: OrderDocument,
+    selectedProxies: Array<{ _id: Types.ObjectId; order_id?: Types.ObjectId }>,
+    userId: string,
+  ): Promise<void> {
+    const orderId = order._id;
+    const keepIds = selectedProxies
+      .filter((p) => p.order_id?.toString() === orderId.toString())
+      .map((p) => p._id);
+
+    // Lấy danh sách sẽ xoá TRƯỚC (để ghi log) — pre-hook tự loại con đã xoá mềm
+    const toDelete = await this.proxyModel
+      .find({ order_id: orderId, _id: { $nin: keepIds } })
+      .select('ip_address port')
+      .lean()
+      .exec();
+    if (toDelete.length === 0) return;
+
+    await this.proxyModel
+      .updateMany(
+        { order_id: orderId, _id: { $nin: keepIds }, deleted_at: null },
+        { $set: { deleted_at: new Date(), deleted_reason: 'not_renewed', is_active: false } },
+      )
+      .exec();
+
+    // SL đơn = số proxy còn giữ (active). pre-hook đã loại con đã xoá mềm.
+    const kept = await this.proxyModel.countDocuments({ order_id: orderId }).exec();
+    order.quantity = kept;
+    // Đơn giờ có ĐÚNG `kept` proxy → coi là đủ (null theo quy ước recovery),
+    // tránh bị hiểu nhầm là "thiếu số lượng" / cho phép refundMissing sai.
+    (order as any).actual_quantity = null;
+    await order.save();
+
+    void this.orderLogService.info(
+      orderId.toString(),
+      OrderLogStep.USER_ORDER_RENEWED,
+      `Xoá mềm ${toDelete.length} proxy không gia hạn · giữ lại ${kept}`,
+      { deleted: toDelete.map((p) => `${p.ip_address}:${p.port}`), kept },
+      userId,
+    );
+
+    this.logger.log(
+      `Order ${order.order_code}: xoá mềm ${toDelete.length} proxy không gia hạn, giữ ${kept}`,
+    );
   }
 }

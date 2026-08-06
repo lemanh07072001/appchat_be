@@ -79,11 +79,35 @@ export class Proxy {
 
   @Prop({ type: Date, default: null })
   last_checked_at: Date;
+
+  // ─── Dấu vết gia hạn PER-PROXY (để admin biết con nào đã gia hạn, lần cuối khi nào) ───
+  @Prop({ type: Date, default: null })
+  last_renewed_at: Date | null;
+
+  @Prop({ type: Number, default: 0 })
+  renew_count: number;
+
+  // ─── Soft-delete: xoá mềm khi user gia hạn chọn lọc (giữ record để audit/khôi phục) ───
+  @Prop({ type: Date, default: null })
+  deleted_at: Date | null;
+
+  @Prop({ type: String, default: '' })
+  deleted_reason: string;
 }
 
 export const ProxySchema = SchemaFactory.createForClass(Proxy);
 
-ProxySchema.index({ order_id: 1 });
+// Tự động ẩn proxy đã xoá mềm khỏi MỌI truy vấn đọc (find*, countDocuments) — không
+// phải sửa từng call-site. Khi cần lấy cả proxy đã xoá: .setOptions({ withDeleted: true }).
+function excludeSoftDeleted(this: any) {
+  if (!this.getOptions?.().withDeleted) {
+    this.where({ deleted_at: null });
+  }
+}
+ProxySchema.pre(/^find/, excludeSoftDeleted);
+ProxySchema.pre('countDocuments', excludeSoftDeleted);
+
+ProxySchema.index({ order_id: 1, deleted_at: 1 });
 ProxySchema.index({ provider_proxy_id: 1 }, { sparse: true });
 ProxySchema.index({ cdk_key: 1 }, { unique: true, sparse: true });
 ProxySchema.index({ is_active: 1, is_available: 1 });

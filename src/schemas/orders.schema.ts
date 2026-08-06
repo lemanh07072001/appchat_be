@@ -36,19 +36,36 @@ export class Order {
   @Prop({ type: String, default: '' })
   order_type: string;
 
+  /**
+   * Cách tính tiền của đơn, copy từ service lúc tạo đơn.
+   * Lưu lại để đọc/hiển thị đơn không phải join sang Service, và để đơn cũ
+   * không đổi nghĩa khi admin sửa service về sau.
+   */
+  @Prop({ type: String, default: 'duration', enum: ['duration', 'bandwidth'] })
+  pricing_mode: string;
+
   // ─── Số lượng & thời hạn ──────────────────────────────────
   @Prop({ default: 1 })
   quantity: number;                  // số IP (proxy tĩnh), 1 nếu proxy xoay
 
-  @Prop({ required: true })
+  /**
+   * Số ngày sử dụng. KHÔNG còn required: đơn bán theo GB có thể không giới hạn
+   * thời gian (0 = vô hạn, khi đó `end_date` = null).
+   */
+  @Prop({ type: Number, default: 0 })
   duration_days: number;
 
-  // ─── Bandwidth (chỉ dùng cho proxy xoay) ─────────────────
+  // ─── Dung lượng ───────────────────────────────────────────
+  // mode 'bandwidth': hạn mức đã mua. mode 'duration': null (không áp dụng).
   @Prop({ type: Number, default: null })
   bandwidth_gb: number;
 
   @Prop({ type: Number, default: 0 })
   bandwidth_used_gb: number;
+
+  /** Lần cuối đồng bộ `bandwidth_used_gb` từ nhà cung cấp. */
+  @Prop({ type: Date, default: null })
+  bandwidth_synced_at: Date | null;
 
   // ─── Giá ──────────────────────────────────────────────────
   @Prop({ type: Number, required: true })
@@ -165,6 +182,8 @@ export const OrderSchema = SchemaFactory.createForClass(Order);
 OrderSchema.index({ user_id: 1, status: 1 });
 OrderSchema.index({ end_date: 1, status: 1 });
 OrderSchema.index({ status: 1, provider_order_id: 1 }); // polling PROCESSING orders
+// Scheduler đồng bộ dung lượng chỉ quét đơn bán theo GB đang chạy
+OrderSchema.index({ pricing_mode: 1, status: 1 });
 // Sắp xếp danh sách đơn: nhóm đã gia hạn lên đầu, trong nhóm theo ngày tạo mới nhất
 OrderSchema.index({ user_id: 1, is_renewed: -1, createdAt: -1 });
 OrderSchema.index({ is_renewed: -1, createdAt: -1 });

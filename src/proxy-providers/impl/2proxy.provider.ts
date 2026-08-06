@@ -1,4 +1,5 @@
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
+import { ProxyProvider } from '../proxy-provider.decorator';
 import {
   IProxyProvider,
   ProviderBuyParams,
@@ -26,8 +27,10 @@ interface ListProxyResponseItem {
   type: string;
 }
 
-@Injectable()
+@ProxyProvider('twoproxy')
 export class TwoProxyProvider implements IProxyProvider {
+  readonly capabilities = { buy: true, renew: true, rotate: false, cancel: false };
+
   private readonly logger     = new Logger(TwoProxyProvider.name);
   private readonly BASE_URL   = 'https://app.2proxy.vn/api/proxy.php';
   private readonly TIMEOUT_MS = 60_000;

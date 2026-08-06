@@ -6,6 +6,8 @@ import { OrderLogService } from './order-log.service';
 import { ProxyRotateService } from './proxy-rotate.service';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { BuyOrderDto } from '../dto/buy-order.dto';
+import { QuoteBandwidthDto } from '../dto/quote-bandwidth.dto';
+import { TopUpBandwidthDto } from '../dto/topup-bandwidth.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { UserOrderQueryDto } from '../dto/user-order-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
@@ -39,6 +41,16 @@ export class OrdersController {
   ) {
     const userId = (req as any).user.sub as string;
     return this.ordersService.buy(userId, dto, idempotencyKey);
+  }
+
+  // ─── Báo giá theo GB (xem được khi chưa đăng nhập) ───────
+  // Public để khách vãng lai vẫn thấy giá trước khi tạo tài khoản; có JWT thì
+  // `user.sub` được dùng để áp giá ưu đãi riêng.
+  @Post('api/orders/quote-bandwidth')
+  @Public()
+  quoteBandwidth(@Req() req: Request, @Body() dto: QuoteBandwidthDto) {
+    const userId = (req as any).user?.sub as string | undefined;
+    return this.ordersService.quoteBandwidth(dto.service_id, dto.gb, userId);
   }
 
   // ─── User: mua dịch vụ (qua API token) ───────────────────
@@ -95,6 +107,19 @@ export class OrdersController {
   ) {
     const userId = (req as any).user.sub as string;
     return this.ordersService.renewByUser(userId, id, duration_days);
+  }
+
+  // ─── User: nạp thêm dung lượng cho đơn bán theo GB ───────
+  // Tách hẳn khỏi renew: nạp GB KHÔNG đẩy end_date.
+  @Post('api/orders/my/:id/topup-bandwidth')
+  topUpBandwidth(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() dto: TopUpBandwidthDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    const userId = (req as any).user.sub as string;
+    return this.ordersService.topUpBandwidth(userId, id, dto.gb, idempotencyKey);
   }
 
   // ─── Admin ────────────────────────────────────────────────

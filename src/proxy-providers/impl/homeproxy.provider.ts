@@ -1,4 +1,5 @@
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
+import { ProxyProvider } from '../proxy-provider.decorator';
 import { randomBytes } from 'crypto';
 import {
   IProxyProvider,
@@ -11,8 +12,10 @@ import {
   RotateResult,
 } from '../proxy-provider.interface';
 
-@Injectable()
+@ProxyProvider('homeproxy')
 export class HomeproxyProvider implements IProxyProvider {
+  readonly capabilities = { buy: true, renew: true, rotate: true, cancel: true };
+
   private readonly logger      = new Logger(HomeproxyProvider.name);
   private readonly BASE_URL    = 'https://api.homeproxy.vn/api';
   private readonly TIMEOUT_MS  = 30_000;

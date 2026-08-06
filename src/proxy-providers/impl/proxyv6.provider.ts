@@ -1,4 +1,5 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
+import { ProxyProvider } from '../proxy-provider.decorator';
 import {
   IProxyProvider,
   ProviderBuyParams,
@@ -16,8 +17,10 @@ import {
  *
  * Khi thêm provider mới, copy file này → đổi tên → implement lại các phương thức.
  */
-@Injectable()
+@ProxyProvider('proxyv6')
 export class Proxyv6Provider implements IProxyProvider {
+  readonly capabilities = { buy: true, renew: true, rotate: true, cancel: true };
+
   private readonly BASE_URL = 'https://api.proxyv6.com/v1'; // ← thay bằng URL thực
 
   // ─── Helper gọi API ─────────────────────────────────────────────────────────

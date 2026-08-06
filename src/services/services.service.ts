@@ -48,7 +48,7 @@ export class ServicesService {
     const services = await this.serviceModel
       .find({ status: true, api_enabled: true })
       .populate('country', 'name code image_url')
-      .select('_id name type proxy_type ip_version protocol isp pricing usage_type user_discounts')
+      .select('_id name type proxy_type ip_version protocol isp pricing pricing_mode bandwidth_tiers bandwidth_max_gb usage_type user_discounts')
       .sort({ order: 1, createdAt: -1 })
       .lean()
       .exec();
@@ -214,6 +214,7 @@ export class ServicesService {
       is_show: service.is_show,
       api_enabled: service.api_enabled,
       show_user_pass: service.show_user_pass,
+      pricing_mode: service.pricing_mode,
       pricing: service.pricing,
       badge: service.badge,
       duration_ids: service.duration_ids,
