@@ -844,7 +844,7 @@ export class OrdersService {
     const [proxies, totalProxies, deletedProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location last_renewed_at renew_count deleted_at deleted_reason')
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain provider provider_proxy_id location last_renewed_at renew_count deleted_at deleted_reason provider_metadata.port_http provider_metadata.port_socks')
         .setOptions({ withDeleted: true })
         .sort({ deleted_at: 1 }) // proxy còn sống lên trước, đã xoá xuống cuối
         .skip(skip)

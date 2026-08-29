@@ -48,15 +48,48 @@ function tiers(dayPrice: number, margin = 0.32): Record<string, { price: number;
   return out;
 }
 
-/** Gói proxy xoay tính theo dung lượng GB thay vì theo ngày. */
-function gbTiers(gbPrice: number, margin = 0.3): Record<string, { price: number; cost: number }> {
-  const out: Record<string, { price: number; cost: number }> = {};
+/** Hệ số giảm giá theo dung lượng — dùng chung cho gói cố định và bậc giá. */
+const gbFactor = (gb: number): number => (gb >= 50 ? 0.78 : gb >= 25 ? 0.85 : gb >= 10 ? 0.92 : 1);
+
+/**
+ * Gói dung lượng cố định cho `pricing_mode: 'bandwidth'`.
+ * Value phải có `gb` và `days` — `resolvePricing()` đọc hai field này khi khách
+ * chọn gói sẵn (`package_key`), thiếu là đơn bị từ chối.
+ */
+function gbTiers(
+  gbPrice: number,
+  margin = 0.3,
+): Record<string, { gb: number; days: number; price: number; cost: number }> {
+  const out: Record<string, { gb: number; days: number; price: number; cost: number }> = {};
   for (const gb of [2, 5, 10, 25, 50, 100]) {
-    const discount = gb >= 50 ? 0.78 : gb >= 25 ? 0.85 : gb >= 10 ? 0.92 : 1;
-    const price = Math.round((gbPrice * gb * discount) / 1000) * 1000;
-    out[String(gb)] = { price, cost: Math.round((price * (1 - margin)) / 1000) * 1000 };
+    const price = Math.round((gbPrice * gb * gbFactor(gb)) / 1000) * 1000;
+    out[String(gb)] = {
+      gb,
+      days: 30,
+      price,
+      cost: Math.round((price * (1 - margin)) / 1000) * 1000,
+    };
   }
   return out;
+}
+
+/**
+ * Bậc giá cho khách tự nhập số GB (`bandwidth_tiers`). Giá phẳng theo bậc đang
+ * đứng — cùng thang giảm với gói cố định ở trên để hai lối mua không lệch giá.
+ */
+function gbBands(
+  gbPrice: number,
+  margin = 0.3,
+): { min_gb: number; price_per_gb: number; cost_per_gb: number; days: number }[] {
+  return [1, 10, 25, 50].map((minGb) => {
+    const pricePerGb = Math.round((gbPrice * gbFactor(minGb)) / 100) * 100;
+    return {
+      min_gb: minGb,
+      price_per_gb: pricePerGb,
+      cost_per_gb: Math.round((pricePerGb * (1 - margin)) / 100) * 100,
+      days: 30,
+    };
+  });
 }
 
 interface Seed {
@@ -69,7 +102,14 @@ interface Seed {
   countryCode?: string;
   isp: { name: string; code: string }[];
   protocol: string[];
-  pricing: Record<string, { price: number; cost: number }>;
+  /** Bán theo thời hạn — bảng giá khoá theo số ngày. */
+  pricing?: Record<string, { price: number; cost: number }>;
+  /**
+   * Bán theo dung lượng — giá gốc mỗi GB. Khai field này thay cho `pricing`:
+   * gói cố định (`pricing`) và bậc giá tự nhập (`bandwidth_tiers`) đều sinh ra
+   * từ cùng một con số nên hai lối mua không bao giờ lệch giá.
+   */
+  bandwidthPrice?: number;
   min_quantity: number;
   max_quantity: number;
   badge?: string;
@@ -168,21 +208,21 @@ const SERVICES: Seed[] = [
   {
     name: 'Proxy IPv4 Xoay Dân Cư', type: 'rotating', usage_type: 'xoay', ip_version: 'v4',
     proxy_type: 'residential', partnerCode: 'homeproxy', countryCode: 'VN',
-    isp: ISP_VN.slice(0, 3), protocol: ['http', 'socks5'], pricing: gbTiers(22000),
+    isp: ISP_VN.slice(0, 3), protocol: ['http', 'socks5'], bandwidthPrice: 22000,
     min_quantity: 1, max_quantity: 1, badge: 'HOT', order: 30, api_enabled: true,
     note: { vi: 'Kho IP dân cư xoay theo mỗi request. Tính tiền theo GB, hợp thu thập dữ liệu quy mô lớn.' },
   },
   {
     name: 'Proxy IPv4 Xoay Datacenter', type: 'rotating', usage_type: 'xoay', ip_version: 'v4',
     proxy_type: 'datacenter', partnerCode: 'proxyvn', countryCode: 'VN',
-    isp: ISP_VN.slice(0, 2), protocol: ['http'], pricing: gbTiers(9000),
+    isp: ISP_VN.slice(0, 2), protocol: ['http'], bandwidthPrice: 9000,
     min_quantity: 1, max_quantity: 1, order: 31,
     note: { vi: 'Xoay IP mỗi 5–10 phút, băng thông cao, giá rẻ hơn gói dân cư nhiều lần.' },
   },
   {
     name: 'Proxy IPv4 Xoay Toàn Cầu', type: 'rotating', usage_type: 'xoay', ip_version: 'v4',
     proxy_type: 'residential', partnerCode: 'homeproxy', countryCode: 'US',
-    isp: ISP_US, protocol: ['http', 'socks5'], pricing: gbTiers(28000),
+    isp: ISP_US, protocol: ['http', 'socks5'], bandwidthPrice: 28000,
     min_quantity: 1, max_quantity: 1, badge: 'PREMIUM', order: 32,
     note: { vi: 'Chọn quốc gia đầu ra trong hơn 40 nước, xoay theo request.' },
   },
@@ -242,7 +282,7 @@ const SERVICES: Seed[] = [
   {
     name: 'Proxy IPv6 Xoay Băng Thông', type: 'rotating', usage_type: 'xoay', ip_version: 'v6',
     proxy_type: 'rotating_ipv6', partnerCode: 'proxyv6', countryCode: 'VN',
-    isp: ISP_VN.slice(0, 2), protocol: ['http', 'socks5'], pricing: gbTiers(6000),
+    isp: ISP_VN.slice(0, 2), protocol: ['http', 'socks5'], bandwidthPrice: 6000,
     min_quantity: 1, max_quantity: 1, order: 54,
     note: { vi: 'Kho IPv6 xoay theo request, tính theo GB — lựa chọn rẻ nhất cho thu thập dữ liệu.' },
   },
@@ -328,6 +368,8 @@ export async function seedServices(): Promise<SeedResult> {
       continue;
     }
 
+    const byBandwidth = s.bandwidthPrice != null;
+
     await Service.create({
       name: s.name,
       type: s.type,
@@ -346,7 +388,10 @@ export async function seedServices(): Promise<SeedResult> {
       api_enabled: s.api_enabled ?? false,
       show_user_pass: s.show_user_pass ?? true,
       allow_renew: true,
-      pricing: s.pricing,
+      pricing_mode: byBandwidth ? 'bandwidth' : 'duration',
+      pricing: byBandwidth ? gbTiers(s.bandwidthPrice!) : (s.pricing ?? {}),
+      bandwidth_tiers: byBandwidth ? gbBands(s.bandwidthPrice!) : [],
+      bandwidth_max_gb: byBandwidth ? 500 : 1000,
       user_discounts: {},
       min_quantity: s.min_quantity,
       max_quantity: s.max_quantity,

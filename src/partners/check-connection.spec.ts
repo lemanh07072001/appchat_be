@@ -34,7 +34,7 @@ describe('PartnersService.checkProviderConnection', () => {
     }) as any;
 
   const dto = (over: Partial<CheckProviderConnectionDto> = {}): CheckProviderConnectionDto =>
-    ({ code: 'omocaptcha', token_api: 'omo_px_ok', ...over }) as CheckProviderConnectionDto;
+    ({ code: 'omoproxy', token_api: 'omo_px_ok', ...over }) as CheckProviderConnectionDto;
 
   it('trả về số dư và độ trễ khi key đúng', async () => {
     const svc = makeService();
@@ -55,7 +55,7 @@ describe('PartnersService.checkProviderConnection', () => {
     const svc = makeService();
     const factory = makeFactory({
       check: async () => {
-        throw new Error('OMOCaptcha API error: Unauthorized');
+        throw new Error('OmoProxy API error: Unauthorized');
       },
     });
 
@@ -136,7 +136,7 @@ describe('PartnersService.checkAllConnections', () => {
 
   it('trả kết quả cho từng nhà cung cấp, kèm partner_id để ghép vào bảng', async () => {
     const svc = makeService([
-      { _id: 'a1', code: 'omocaptcha', token_api: 'k1' },
+      { _id: 'a1', code: 'omoproxy', token_api: 'k1' },
       { _id: 'b2', code: 'homeproxy', token_api: 'k2' },
     ]);
 
@@ -149,7 +149,7 @@ describe('PartnersService.checkAllConnections', () => {
 
   it('một nhà cung cấp hỏng không kéo cả bảng đổ theo', async () => {
     const svc = makeService([
-      { _id: 'a1', code: 'omocaptcha', token_api: 'k1' },
+      { _id: 'a1', code: 'omoproxy', token_api: 'k1' },
       { _id: 'b2', code: 'homeproxy', token_api: 'k2' },
     ]);
 
@@ -161,7 +161,7 @@ describe('PartnersService.checkAllConnections', () => {
   });
 
   it('id toàn rác thì trả mảng rỗng, không quét cả bảng', async () => {
-    const svc = makeService([{ _id: 'a1', code: 'omocaptcha', token_api: 'k1' }]);
+    const svc = makeService([{ _id: 'a1', code: 'omoproxy', token_api: 'k1' }]);
     const res = await svc.checkAllConnections(factoryFor({}), ['khong-phai-objectid']);
     expect(res).toEqual([]);
   });

@@ -7,7 +7,7 @@ import { ProxyvnProvider } from './impl/proxyvn.provider';
 import { ProxysieutocProvider } from './impl/proxysieutoc.provider';
 import { TwoProxyProvider } from './impl/2proxy.provider';
 import { ProxysellerProvider } from './impl/proxyseller.provider';
-import { OmocaptchaProvider } from './impl/omocaptcha.provider';
+import { OmoproxyProvider } from './impl/omoproxy.provider';
 
 /**
  * Thêm nhà cung cấp mới: tạo adapter với `@ProxyProvider('<code>')` rồi thêm
@@ -19,7 +19,7 @@ import { OmocaptchaProvider } from './impl/omocaptcha.provider';
   imports: [DiscoveryModule],
   providers: [
     ProxyProviderFactory,
-    OmocaptchaProvider,
+    OmoproxyProvider,
     Proxyv6Provider,
     HomeproxyProvider,
     ProxyvnProvider,

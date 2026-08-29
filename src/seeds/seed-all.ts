@@ -8,7 +8,9 @@ import { seedAffiliate } from './modules/affiliate.seed';
 import { seedWallet } from './modules/wallet.seed';
 import { seedDeposits } from './modules/deposits.seed';
 import { seedWebhookLogs } from './modules/webhook.seed';
-import { seedUserDemo } from './modules/user-demo.seed';
+import { seedUserDemo, DEMO_TARGET } from './modules/user-demo.seed';
+import { seedUsersBulk } from './modules/users-bulk.seed';
+import { seedDownline } from './modules/downline.seed';
 import { seedServices } from './modules/services.seed';
 
 interface Step {
@@ -18,13 +20,32 @@ interface Step {
 
 /**
  * Thứ tự phụ thuộc:
- *   user demo (đơn hàng + downline) → affiliate (commission tính từ đơn của downline)
+ *   user demo (tài khoản referrer)  → downline → affiliate (commission tính từ đơn downline)
  *   deposits (transactions)         → webhook logs (steps trỏ transaction_id có thật)
  *   mọi thứ tạo đơn/giao dịch       → wallet (backfill ví từ đơn + giao dịch)
  */
 const steps: Step[] = [
   { name: 'proxy services',      run: seedServices },
   { name: 'demo user account',   run: seedUserDemo },
+  // Chinh tai khoan admin cung can du lieu: dang nhap vao ma trang don hang,
+  // giao dich, nap tien deu rong thi khong kiem tra duoc gi.
+  {
+    name: 'admin account',
+    run: () =>
+      seedUserDemo({
+        ...DEMO_TARGET,
+        email: 'admin@fastproxyvn.com',
+        orderPrefix: 'ORD-ADM-',
+        txIdBase: 970001,
+        topupCode: 'NAPAD100001',
+        apiToken: 'fpx_live_ad11c7e5a2d80463b9c3e1f7a5d208b6',
+        providerIdBase: 300000,
+        // Downline da gan cho tai khoan demo; admin khong cuop lai.
+        referralCount: 0,
+      }),
+  },
+  { name: 'user hàng loạt',      run: seedUsersBulk },
+  { name: 'downline + đơn',      run: seedDownline },
   { name: 'blog posts',          run: seedBlog },
   { name: 'announcements',       run: seedAnnouncements },
   { name: 'chat messages',       run: seedChat },

@@ -39,15 +39,44 @@ const ChatMessage =
 
 export const DEMO_EMAIL = 'user@fastproxyvn.com';
 
-/** Số referral gán cho tài khoản demo để trang affiliate có downline */
-const REFERRAL_COUNT = 5;
 
-const ORDER_PREFIX = 'ORD-DEMO-';
-const TX_ID_BASE = 960001;
+/**
+ * Tai khoan duoc seed. Mac dinh la tai khoan demo; truyen tham so khac de dung
+ * lai toan bo kich ban nay cho mot tai khoan khac (vi du admin) ma khong phai
+ * viet seed thu hai. Ma don / ma giao dich / ma nap phai khac nhau giua cac
+ * tai khoan, neu khong lan seed sau se dung khoa duy nhat.
+ */
+export interface DemoSeedTarget {
+  email: string;
+  orderPrefix: string;
+  txIdBase: number;
+  topupCode: string;
+  apiToken: string;
+  /** Gan downline de trang affiliate co du lieu. 0 = bo qua. */
+  referralCount: number;
+  /** Dai id proxy ben nha cung cap; provider_proxy_id co index duy nhat nen
+   *  moi tai khoan phai mot dai rieng. */
+  providerIdBase: number;
+}
+
+export const DEMO_TARGET: DemoSeedTarget = {
+  email: DEMO_EMAIL,
+  orderPrefix: 'ORD-DEMO-',
+  txIdBase: 960001,
+  topupCode: 'NAPDE100001',
+  apiToken: 'fpx_live_9f3b1c7e5a2d8046b9c3e1f7a5d208b6',
+  referralCount: 5,
+  providerIdBase: 700000,
+};
 
 interface OrderPlan {
   suffix: string;
-  serviceName: string;
+  /**
+   * Tên dịch vụ theo thứ tự ưu tiên: tên trong `services.seed.ts` trước, tên cũ
+   * sau. DB nào cũng khớp được ít nhất một tên — không khớp là đơn bị bỏ im
+   * lặng và trang đơn hàng của user trống trơn.
+   */
+  serviceNames: string[];
   quantity: number;
   duration: number;
   status: OrderStatusEnum;
@@ -60,20 +89,26 @@ interface OrderPlan {
   autoRenew?: boolean;
 }
 
+const IPV4_PRIVATE = ['Proxy IPv4 Private Viettel', 'Proxy IPV4 Private'];
+const IPV4_US = ['Proxy IPv4 Mỹ (US)', 'Proxy Ngoại (US)'];
+const IPV6_PRIVATE = ['Proxy IPv6 Private Viettel', 'Proxy IPV6 Private'];
+const IPV4_XOAY = ['Proxy IPv4 Xoay Dân Cư', 'Proxy IPV4 Xoay'];
+const IPV6_XOAY = ['Proxy IPv6 Xoay Băng Thông', 'Proxy IPV6 Xoay Key'];
+
 const ORDERS: OrderPlan[] = [
-  { suffix: 'A1', serviceName: 'Proxy IPV4 Private', quantity: 5, duration: 30, status: OrderStatusEnum.ACTIVE, daysOld: 12, autoRenew: true },
-  { suffix: 'A2', serviceName: 'Proxy Ngoại (US)', quantity: 2, duration: 30, status: OrderStatusEnum.ACTIVE, daysOld: 6 },
-  { suffix: 'A3', serviceName: 'Proxy IPV6 Private', quantity: 10, duration: 7, status: OrderStatusEnum.ACTIVE, daysOld: 3 },
-  { suffix: 'R1', serviceName: 'Proxy IPV4 Xoay', quantity: 1, duration: 30, status: OrderStatusEnum.ACTIVE, daysOld: 9, bandwidthGb: 50 },
-  { suffix: 'R2', serviceName: 'Proxy IPV6 Xoay Key', quantity: 1, duration: 7, status: OrderStatusEnum.EXPIRED, daysOld: 40, bandwidthGb: 20 },
-  { suffix: 'E1', serviceName: 'Proxy IPV4 Private', quantity: 3, duration: 30, status: OrderStatusEnum.EXPIRED, daysOld: 75 },
-  { suffix: 'C1', serviceName: 'Proxy IPV4 Private', quantity: 4, duration: 7, status: OrderStatusEnum.COMPLETED, daysOld: 55 },
-  { suffix: 'P1', serviceName: 'Proxy IPV6 Private', quantity: 8, duration: 30, status: OrderStatusEnum.PROCESSING, daysOld: 0.05 },
-  { suffix: 'W1', serviceName: 'Proxy Ngoại (US)', quantity: 1, duration: 1, status: OrderStatusEnum.PENDING, daysOld: 0.02 },
-  { suffix: 'X1', serviceName: 'Proxy IPV4 Xoay', quantity: 1, duration: 7, status: OrderStatusEnum.CANCELLED, daysOld: 30, bandwidthGb: 10 },
-  { suffix: 'F1', serviceName: 'Proxy IPV6 Private', quantity: 6, duration: 30, status: OrderStatusEnum.FAILED, daysOld: 21, errorMessage: 'Provider trả về lỗi: out of stock cho dải IPv6 yêu cầu' },
-  { suffix: 'M1', serviceName: 'Proxy IPV4 Private', quantity: 10, duration: 30, status: OrderStatusEnum.PARTIAL, daysOld: 18, actualQuantity: 7 },
-  { suffix: 'H1', serviceName: 'Proxy Ngoại (US)', quantity: 3, duration: 30, status: OrderStatusEnum.PARTIAL_REFUNDED, daysOld: 47, actualQuantity: 2, refunded: 56000 },
+  { suffix: 'A1', serviceNames: IPV4_PRIVATE, quantity: 5, duration: 30, status: OrderStatusEnum.ACTIVE, daysOld: 12, autoRenew: true },
+  { suffix: 'A2', serviceNames: IPV4_US, quantity: 2, duration: 30, status: OrderStatusEnum.ACTIVE, daysOld: 6 },
+  { suffix: 'A3', serviceNames: IPV6_PRIVATE, quantity: 10, duration: 7, status: OrderStatusEnum.ACTIVE, daysOld: 3 },
+  { suffix: 'R1', serviceNames: IPV4_XOAY, quantity: 1, duration: 30, status: OrderStatusEnum.ACTIVE, daysOld: 9, bandwidthGb: 50 },
+  { suffix: 'R2', serviceNames: IPV6_XOAY, quantity: 1, duration: 7, status: OrderStatusEnum.EXPIRED, daysOld: 40, bandwidthGb: 25 },
+  { suffix: 'E1', serviceNames: IPV4_PRIVATE, quantity: 3, duration: 30, status: OrderStatusEnum.EXPIRED, daysOld: 75 },
+  { suffix: 'C1', serviceNames: IPV4_PRIVATE, quantity: 4, duration: 7, status: OrderStatusEnum.COMPLETED, daysOld: 55 },
+  { suffix: 'P1', serviceNames: IPV6_PRIVATE, quantity: 8, duration: 30, status: OrderStatusEnum.PROCESSING, daysOld: 0.05 },
+  { suffix: 'W1', serviceNames: IPV4_US, quantity: 1, duration: 1, status: OrderStatusEnum.PENDING, daysOld: 0.02 },
+  { suffix: 'X1', serviceNames: IPV4_XOAY, quantity: 1, duration: 7, status: OrderStatusEnum.CANCELLED, daysOld: 30, bandwidthGb: 10 },
+  { suffix: 'F1', serviceNames: IPV6_PRIVATE, quantity: 6, duration: 30, status: OrderStatusEnum.FAILED, daysOld: 21, errorMessage: 'Provider trả về lỗi: out of stock cho dải IPv6 yêu cầu' },
+  { suffix: 'M1', serviceNames: IPV4_PRIVATE, quantity: 10, duration: 30, status: OrderStatusEnum.PARTIAL, daysOld: 18, actualQuantity: 7 },
+  { suffix: 'H1', serviceNames: IPV4_US, quantity: 3, duration: 30, status: OrderStatusEnum.PARTIAL_REFUNDED, daysOld: 47, actualQuantity: 2, refunded: 56000 },
 ];
 
 interface DepositPlan {
@@ -90,7 +125,9 @@ interface DepositPlan {
 }
 
 const DEPOSITS: DepositPlan[] = [
-  { offset: 0, gateway: 'VCB', amount: 2000000, status: TransactionStatus.PROCESSED, source: 'auto', note: 'Nạp 2.000.000đ', daysOld: 58 },
+  // Phải có trước đơn cũ nhất (E1, 75 ngày). Ví dựng ngược từ users.money nên
+  // nếu chi tiêu đứng trước mọi lần nạp, chuỗi bị kẹp về 0 và lệch số dư.
+  { offset: 0, gateway: 'VCB', amount: 2000000, status: TransactionStatus.PROCESSED, source: 'auto', note: 'Nạp 2.000.000đ', daysOld: 80 },
   { offset: 1, gateway: 'MB', amount: 1000000, status: TransactionStatus.PROCESSED, source: 'auto', note: 'Nạp 1.000.000đ', daysOld: 34 },
   { offset: 2, gateway: 'TCB', amount: 1500000, status: TransactionStatus.PROCESSED, source: 'auto', note: 'Nạp 1.500.000đ', daysOld: 19 },
   { offset: 3, gateway: 'MANUAL', amount: 500000, status: TransactionStatus.PROCESSED, source: 'manual', note: 'Admin nạp tay bù khuyến mãi', daysOld: 11 },
@@ -127,22 +164,23 @@ function hex(rand: () => number, len: number): string {
   ).join('');
 }
 
-export async function seedUserDemo(): Promise<SeedResult> {
+export async function seedUserDemo(target: DemoSeedTarget = DEMO_TARGET): Promise<SeedResult> {
+  const { orderPrefix: ORDER_PREFIX, txIdBase: TX_ID_BASE, referralCount: REFERRAL_COUNT } = target;
   const result = emptyResult();
   const rand = rng(20260805);
 
-  const demo: any = await User.findOne({ email: DEMO_EMAIL }).lean().exec();
+  const demo: any = await User.findOne({ email: target.email }).lean().exec();
   if (!demo) {
     throw new Error(
-      `Không tìm thấy tài khoản demo ${DEMO_EMAIL}. Chạy "npx ts-node src/seeds/seed-user.ts" trước.`,
+      `Không tìm thấy tài khoản ${target.email}. Chạy "npx ts-node src/seeds/seed-user.ts" trước.`,
     );
   }
   const uid = demo._id as mongoose.Types.ObjectId;
 
   // ─── 1. Hồ sơ: các field trang profile / deposits / docs-api cần ────────
   const profilePatch: Record<string, any> = {};
-  if (!demo.topup_code) profilePatch.topup_code = 'NAPDE100001';
-  if (!demo.api_token) profilePatch.api_token = 'fpx_live_9f3b1c7e5a2d8046b9c3e1f7a5d208b6';
+  if (!demo.topup_code) profilePatch.topup_code = target.topupCode;
+  if (!demo.api_token) profilePatch.api_token = target.apiToken;
   if (!demo.country) profilePatch.country = 'VN';
   if (!demo.bank_account) {
     profilePatch.bank_name = 'Vietcombank';
@@ -204,23 +242,34 @@ export async function seedUserDemo(): Promise<SeedResult> {
       continue;
     }
 
-    const svc: any = serviceByName.get(plan.serviceName);
+    let svc: any = null;
+    for (const n of plan.serviceNames) {
+      svc = serviceByName.get(n);
+      if (svc) break;
+    }
     if (!svc) continue;
 
-    const pricePerUnit: number =
-      svc.pricing?.[String(plan.duration)] != null
-        ? svc.pricing[String(plan.duration)] / plan.duration
-        : 1000;
-    const totalPrice = Math.round(pricePerUnit * plan.quantity * plan.duration);
-    const costPerUnit = Math.round(pricePerUnit * 0.68);
-    const totalCost = Math.round(costPerUnit * plan.quantity * plan.duration);
+    // Cùng quy ước với `resolvePricing()` trong orders.service.ts:
+    //   duration  → price_per_unit = giá trọn gói của 1 proxy, total = × quantity
+    //   bandwidth → 1 đơn = 1 gateway, price_per_unit = giá trọn gói dung lượng
+    const byBandwidth = svc.pricing_mode === 'bandwidth' && plan.bandwidthGb != null;
+    const tier = byBandwidth
+      ? svc.pricing?.[String(plan.bandwidthGb)]
+      : svc.pricing?.[String(plan.duration)];
+
+    // Gói không có bậc tương ứng thì suy ra giá thay vì để NaN lọt vào DB.
+    const pricePerUnit: number = Number(tier?.price) || (byBandwidth ? plan.bandwidthGb! * 20000 : plan.duration * 1200);
+    const costPerUnit: number = Number(tier?.cost) || Math.round(pricePerUnit * 0.68);
+    const units = byBandwidth ? 1 : plan.quantity;
+    const totalPrice = Math.round(pricePerUnit * units);
+    const totalCost = Math.round(costPerUnit * units);
 
     const createdAt = daysAgo(plan.daysOld);
     const isPaid =
       plan.status !== OrderStatusEnum.PENDING && plan.status !== OrderStatusEnum.CANCELLED;
     const isLive = plan.status === OrderStatusEnum.ACTIVE;
     const actualQty = plan.actualQuantity ?? plan.quantity;
-    const isForeign = plan.serviceName.includes('Ngoại');
+    const isForeign = plan.serviceNames === IPV4_US;
 
     const order = await Order.create({
       order_code: orderCode,
@@ -230,7 +279,8 @@ export async function seedUserDemo(): Promise<SeedResult> {
       country_id: (isForeign ? usCountry?._id : vnCountry?._id) ?? null,
       proxy_type: svc.proxy_type,
       order_type: svc.type,
-      quantity: plan.quantity,
+      pricing_mode: byBandwidth ? 'bandwidth' : 'duration',
+      quantity: byBandwidth ? 1 : plan.quantity,
       duration_days: plan.duration,
       bandwidth_gb: plan.bandwidthGb ?? null,
       bandwidth_used_gb: plan.bandwidthGb ? Math.round(plan.bandwidthGb * 0.4) : 0,
@@ -282,7 +332,7 @@ export async function seedUserDemo(): Promise<SeedResult> {
           location: isForeign ? 'United States' : 'Việt Nam',
           isp: isForeign ? 'AT&T' : 'Viettel',
           provider: 'twoproxy',
-          provider_proxy_id: String(700000 + Math.floor(rand() * 99999)),
+          provider_proxy_id: String(target.providerIdBase + Math.floor(rand() * 99999)),
           is_active: isLive,
           is_available: isLive,
           health_status: isLive ? HealthStatusEnum.HEALTHY : HealthStatusEnum.DEAD,
@@ -294,8 +344,22 @@ export async function seedUserDemo(): Promise<SeedResult> {
 
     // ─── Nhật ký xử lý đơn (trang chi tiết đơn của user) ─────────────────
     const logs: { step: OrderLogStep; level: OrderLogLevel; message: string; offsetMs: number }[] = [
-      { step: OrderLogStep.BUY_INITIATED, level: OrderLogLevel.INFO, message: `User đặt ${plan.quantity} proxy × ${plan.duration} ngày`, offsetMs: 0 },
-      { step: OrderLogStep.BUY_PRICING_RESOLVED, level: OrderLogLevel.INFO, message: `Đơn giá ${pricePerUnit}đ/proxy/ngày — tổng ${totalPrice.toLocaleString('vi-VN')}đ`, offsetMs: 400 },
+      {
+        step: OrderLogStep.BUY_INITIATED,
+        level: OrderLogLevel.INFO,
+        message: byBandwidth
+          ? `User đặt gói ${plan.bandwidthGb} GB`
+          : `User đặt ${plan.quantity} proxy × ${plan.duration} ngày`,
+        offsetMs: 0,
+      },
+      {
+        step: OrderLogStep.BUY_PRICING_RESOLVED,
+        level: OrderLogLevel.INFO,
+        message: byBandwidth
+          ? `Bậc giá ${Math.round(pricePerUnit / plan.bandwidthGb!).toLocaleString('vi-VN')}đ/GB — tổng ${totalPrice.toLocaleString('vi-VN')}đ`
+          : `Đơn giá ${pricePerUnit.toLocaleString('vi-VN')}đ/proxy cho gói ${plan.duration} ngày — tổng ${totalPrice.toLocaleString('vi-VN')}đ`,
+        offsetMs: 400,
+      },
     ];
 
     if (plan.status === OrderStatusEnum.PENDING) {
@@ -349,7 +413,7 @@ export async function seedUserDemo(): Promise<SeedResult> {
   }
 
   // ─── 4. Lịch sử nạp tiền ────────────────────────────────────────────────
-  const topupCode = profilePatch.topup_code ?? demo.topup_code ?? 'NAPDE100001';
+  const topupCode = profilePatch.topup_code ?? demo.topup_code ?? target.topupCode;
   let runningBalance = 0;
 
   for (const d of DEPOSITS) {
@@ -414,6 +478,38 @@ export async function seedUserDemo(): Promise<SeedResult> {
     });
     await forceTimestamps(ChatMessage, { _id: created._id }, new Date(chatStart.getTime() + i * 4 * 60 * 1000));
     result.created++;
+  }
+
+  // ─── 6. Số dư ví suy từ chính lịch sử ở trên ───────────────────────────
+  // Tính lại từ DB thay vì cộng hằng số: chạy lại sau khi thêm đơn/giao dịch
+  // vẫn ra đúng, và `wallet.seed` (chạy sau) dựng chuỗi balance ngược từ đây.
+  const deposits: any[] = await Transaction.find({
+    user_id: uid,
+    status: TransactionStatus.PROCESSED,
+  })
+    .select('transfer_amount')
+    .lean()
+    .exec();
+  const paidOrders: any[] = await Order.find({
+    user_id: uid,
+    payment_status: PaymentStatusEnum.PAID,
+  })
+    .select('total_price refunded_amount')
+    .lean()
+    .exec();
+
+  const toppedUp = deposits.reduce((s, t) => s + (Number(t.transfer_amount) || 0), 0);
+  const spent = paidOrders.reduce(
+    (s, o) => s + (Number(o.total_price) || 0) - (Number(o.refunded_amount) || 0),
+    0,
+  );
+  const balance = Math.max(0, toppedUp - spent);
+
+  if ((demo.money ?? 0) !== balance) {
+    await User.updateOne({ _id: uid }, { money: balance }).exec();
+    result.updated++;
+  } else {
+    result.skipped++;
   }
 
   return result;

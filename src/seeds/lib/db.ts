@@ -11,8 +11,13 @@ export interface SeedResult {
 
 export const emptyResult = (): SeedResult => ({ created: 0, updated: 0, skipped: 0 });
 
-/** DB bắt buộc — chặn seed nhầm sang proxydb (default cũ của seed-transactions.ts) */
-const EXPECTED_DB = 'fastproxy';
+/**
+ * DB bắt buộc — chặn seed nhầm sang proxydb (default cũ của seed-transactions.ts).
+ * Máy dev dùng tên DB khác thì khai báo rõ ràng qua `SEED_DB`, ví dụ:
+ *   SEED_DB=proxydb npm run seed
+ * Guard vẫn còn tác dụng: phải cố ý gõ đúng tên DB mới ghi được.
+ */
+const EXPECTED_DB = process.env.SEED_DB || 'fastproxy';
 
 export async function connect(): Promise<typeof mongoose> {
   const uri = process.env.MONGO_URI;
@@ -24,7 +29,7 @@ export async function connect(): Promise<typeof mongoose> {
   if (dbName !== EXPECTED_DB) {
     throw new Error(
       `MONGO_URI trỏ tới DB "${dbName}" nhưng seed chỉ chạy trên "${EXPECTED_DB}". ` +
-        'Sửa .env rồi chạy lại.',
+        `Sửa .env, hoặc chạy lại với SEED_DB=${dbName} nếu đúng là DB bạn muốn seed.`,
     );
   }
 
