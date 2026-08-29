@@ -30,7 +30,7 @@ describe('ProxyProviderFactory', () => {
         'proxysieutoc',
         'twoproxy',
         'proxyseller',
-        'omocaptcha',
+        'omoproxy',
       ]),
     );
   });
@@ -55,33 +55,35 @@ describe('ProxyProviderFactory', () => {
     expect(byCode['homeproxy'].rotate).toBe(true);
   });
 
-  it('chỉ OMOCaptcha đọc được lưu lượng — đó là provider duy nhất bán theo GB', () => {
+  it('chỉ OmoProxy đọc được lưu lượng — đó là provider duy nhất bán theo GB', () => {
     const usage = factory
       .listProviders()
       .filter((p) => p.capabilities.usage)
       .map((p) => p.code);
-    expect(usage).toEqual(['omocaptcha']);
+    expect(usage).toEqual(['omoproxy']);
   });
 
-  it('chưa provider nào nạp thêm GB được', () => {
-    // Test này CỐ Ý đỏ khi ai đó implement `extendBandwidth`. Lúc đó sửa kỳ
-    // vọng, và nhớ rằng nút "Nạp thêm GB" vừa mới thật sự bật.
+  it('chỉ OmoProxy nạp thêm GB được — cùng lý do: provider duy nhất bán theo GB', () => {
     const topup = factory
       .listProviders()
       .filter((p) => p.capabilities.topup)
       .map((p) => p.code);
-    expect(topup).toEqual([]);
+    expect(topup).toEqual(['omoproxy']);
   });
 
-  it('OMOCaptcha chưa xác minh được renew nên khai là không gia hạn được', () => {
-    const omo = factory.listProviders().find((p) => p.code === 'omocaptcha')!;
-    expect(omo.capabilities.buy).toBe(true);
-    expect(omo.capabilities.renew).toBe(false);
+  it('OmoProxy mua/gia hạn được, nhưng không xoay IP và không huỷ đơn', () => {
+    const omo = factory.listProviders().find((p) => p.code === 'omoproxy')!;
+    expect(omo.capabilities).toMatchObject({
+      buy: true,
+      renew: true,
+      rotate: false,
+      cancel: false,
+    });
   });
 
   it('hasProvider phân biệt được code có và không có adapter', () => {
     expect(factory.hasProvider('homeproxy')).toBe(true);
-    expect(factory.hasProvider('omocaptcha')).toBe(true);
+    expect(factory.hasProvider('omoproxy')).toBe(true);
     expect(factory.hasProvider('ncc-chua-co')).toBe(false);
   });
 
