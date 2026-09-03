@@ -15,8 +15,6 @@ import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
 import { OrderLogStep, OrderLogLevel } from '../schemas/order-log.schema';
 
-/** Partner code có flow async polling (provider.buy() trả proxies: []) */
-const ASYNC_POLLING_PARTNERS = ['homeproxy', 'twoproxy', 'proxyseller'];
 /** Window phục hồi: chỉ thử lại order tạo trong khoảng này (phút) */
 const RECOVERY_WINDOW_MINUTES = 30;
 /** Số order xử lý mỗi tick scheduler */
@@ -28,11 +26,17 @@ const LOCK_KEY         = 'lock:orders_recovery';
 const LOCK_TTL_SECONDS = 120;
 
 /**
- * Backup phục hồi cho các order PENDING_REFUND của provider async polling
- * (HomeProxy, 2Proxy, ProxySeller). Triệu chứng: provider cấp proxy chậm vượt
- * cửa sổ poll của OrdersProcessingWorkerService → order bị đẩy về PENDING_REFUND
- * mặc dù provider đã có proxy. Scheduler này quét lại fetchOrderProxies, nếu
- * provider đã trả proxy thì insert và đưa order về ACTIVE / PARTIAL.
+ * Backup phục hồi cho các order PENDING_REFUND của provider async polling.
+ * Triệu chứng: provider cấp proxy chậm vượt cửa sổ poll của
+ * OrdersProcessingWorkerService → order bị đẩy về PENDING_REFUND mặc dù
+ * provider đã có proxy. Scheduler này quét lại fetchOrderProxies, nếu provider
+ * đã trả proxy thì insert và đưa order về ACTIVE / PARTIAL.
+ *
+ * Điều kiện tham gia là `provider.fetchOrderProxies` có tồn tại hay không —
+ * đúng bằng định nghĩa của "provider cấp proxy async". Trước đây còn một danh
+ * sách partner code chép tay ở đầu file, và nó đã bỏ sót OmoProxy: đơn khách
+ * đã trả tiền kẹt vĩnh viễn ở PENDING_REFUND dù fetchOrderProxies chạy tốt.
+ * Dò bằng năng lực thật thì thêm provider mới không phải nhớ sửa chỗ nào nữa.
  */
 @Injectable()
 export class OrdersRecoveryScheduler {
@@ -91,7 +95,6 @@ export class OrdersRecoveryScheduler {
       .exec();
 
     if (!partner?.code || !partner?.token_api) return;
-    if (!ASYNC_POLLING_PARTNERS.includes(partner.code)) return;
 
     // Idempotent: nếu proxy đã có (admin import tay hoặc race), chỉ heal status
     const existing = await this.proxyModel.countDocuments({ order_id: order._id }).exec();
