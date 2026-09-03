@@ -29,7 +29,12 @@ export class OmoproxyProvider implements IProxyProvider {
   readonly capabilities = { buy: true, renew: true, rotate: false, cancel: false };
 
   private readonly logger = new Logger(OmoproxyProvider.name);
-  private readonly BASE_URL = 'https://be.omocaptcha.com/apiv2/proxy-api/v1';
+  // Host cũ `be.omocaptcha.com/apiv2/proxy-api/v1` vẫn đang chạy và vẫn trả
+  // đúng envelope `{success:false,error:{code:"UNAUTHENTICATED"}}`, nên gọi
+  // nhầm vào đó trông y hệt lỗi sai API key — mất hẳn một buổi mới lần ra.
+  // Đừng đổi lại trừ khi nhà cung cấp thông báo, và đổi thì sửa cả test ghim
+  // URL ở dưới.
+  private readonly BASE_URL = 'https://api.omoproxy.com/v1';
   private readonly TIMEOUT_MS = 30_000;
 
   // ─── Helper HTTP ─────────────────────────────────────────────────────────────

@@ -67,6 +67,19 @@ describe('OmoproxyProvider', () => {
     });
   });
 
+  describe('base URL', () => {
+    it('gọi đúng api.omoproxy.com/v1', async () => {
+      // Host cũ be.omocaptcha.com vẫn sống và vẫn trả UNAUTHENTICATED, nên gọi
+      // nhầm vào đó không lộ ra là sai host — chỉ giống hệt lỗi sai API key.
+      // Ghim URL ở đây để lần sau host lệch thì test đỏ ngay, không phải đi mò.
+      mockJson({ success: true, data: { usage: 1, unit: 'GB' } });
+      await provider.fetchUsage('tok', '481');
+
+      const [url] = (global.fetch as jest.Mock).mock.calls[0];
+      expect(url).toBe('https://api.omoproxy.com/v1/orders/481/usage');
+    });
+  });
+
   describe('fetchOrderProxies', () => {
     const payload = {
       success: true,
