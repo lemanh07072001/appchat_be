@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
+import { jwtConstants } from '../guards/constants';
 
 @Injectable()
 export class AuthService {
@@ -19,13 +20,13 @@ export class AuthService {
     // 1️⃣ Access token (365 ngày)
     const access_token = this.jwtService.sign(payload, {
       expiresIn: '365d',
-      secret: process.env.JWT_SECRET,
+      secret: jwtConstants.secret,
     });
 
     // 2️⃣ Refresh token (365 ngày — giữ nguyên, không dùng tạm thời)
     const refresh_token = this.jwtService.sign(payload, {
       expiresIn: '365d',
-      secret: process.env.JWT_REFRESH_SECRET,
+      secret: jwtConstants.refreshSecret,
     });
 
     // 3️⃣ Trả về cho client
@@ -51,14 +52,14 @@ export class AuthService {
     try {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       const payload = await this.jwtService.verifyAsync(refresh_token, {
-        secret: process.env.JWT_REFRESH_SECRET,
+        secret: jwtConstants.refreshSecret,
       });
 
       // 🔄 Tạo access token mới
       const newAccessToken = this.jwtService.sign(
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         { email: payload.email, sub: payload.sub, role: payload.role },
-        { secret: process.env.JWT_SECRET, expiresIn: '365d' },
+        { secret: jwtConstants.secret, expiresIn: '365d' },
       );
 
       return { access_token: newAccessToken };
