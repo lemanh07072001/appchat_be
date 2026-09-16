@@ -139,10 +139,19 @@ export class OrdersWorkerService implements OnModuleInit {
       const isp = (order.config?.isp as string) ?? '';
 
       if (partner.code === 'homeproxy') {
+        // CẢNH BÁO: các UUID dưới đây là id sản phẩm của MỘT tài khoản merchant
+        // HomeProxy cụ thể. Đổi API key sang tài khoản khác là toàn bộ mã này
+        // hết hiệu lực, và triệu chứng là đơn fail với
+        // `{"errors":{"products":{"0":{"id":"notExist"}}}}` — 422, không phải
+        // 401, nên rất dễ tưởng là lỗi key.
+        //
+        // Đây là cấu hình bị chôn trong code. Lấy mã mới bằng
+        // `GET https://api.homeproxy.vn/api/merchant/products`.
         const isRotating = order.order_type === 'rotating';
 
         if (isRotating) {
           // Proxy xoay — chọn theo duration_days
+          // CHƯA đối chiếu với tài khoản mới — cùng rủi ro `notExist` như trên.
           switch (order.duration_days) {
             case 1:  idService = '7d57163a-9e09-4ee1-b52f-8c99dff60aa9'; break;
             case 7:  idService = '6bde5588-8ad8-4d3a-adc7-fefc790745e1'; break;
@@ -152,8 +161,12 @@ export class OrdersWorkerService implements OnModuleInit {
         } else {
           // Proxy tĩnh — chọn theo ISP
           switch (isp.toLowerCase()) {
+            // CHƯA đối chiếu với tài khoản mới — nhiều khả năng vẫn là mã cũ và
+            // sẽ fail `notExist` y hệt Viettel ngay khi có khách đặt.
             case 'vnpt':    idService = '528d39a9-f826-4c65-989c-4591d9f0dce3'; break;
-            case 'viettel': idService = 'f3ea6303-8b3e-4f8f-a0f7-43765929d3dd'; break;
+            // Đã cập nhật theo tài khoản merchant hiện tại.
+            case 'viettel': idService = 'c94584fb-60ac-4f26-82f8-d3dc1e425169'; break;
+            // CHƯA đối chiếu — xem ghi chú ở VNPT.
             case 'fpt':     idService = 'f0be21c6-2deb-499c-9d5d-7bba3f765a26'; break;
             default: throw new Error(`Service không hỗ trợ ISP "${isp}"`);
           }
