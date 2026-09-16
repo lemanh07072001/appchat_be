@@ -151,23 +151,21 @@ export class OrdersWorkerService implements OnModuleInit {
 
         if (isRotating) {
           // Proxy xoay — chọn theo duration_days
-          // CHƯA đối chiếu với tài khoản mới — cùng rủi ro `notExist` như trên.
           switch (order.duration_days) {
-            case 1:  idService = '7d57163a-9e09-4ee1-b52f-8c99dff60aa9'; break;
-            case 7:  idService = '6bde5588-8ad8-4d3a-adc7-fefc790745e1'; break;
-            case 30: idService = 'f792c198-380a-4851-89f7-408b432e46fa'; break;
+            case 1:  idService = '27508e13-4341-4feb-b10c-b92f08d94798'; break;
+            case 7:  idService = '32b77236-78ae-4e9a-91c6-eac1352d9945'; break;
+            case 30: idService = '608e026f-46a5-42cd-9839-e62419999da0'; break;
             default: throw new Error(`Service không hỗ trợ gói ${order.duration_days} ngày`);
           }
         } else {
           // Proxy tĩnh — chọn theo ISP
+          // Ba ISP PHẢI là ba mã khác nhau. Trùng mã thì không có lỗi nào nổi
+          // lên: khách mua FPT nhận proxy VNPT, đơn vẫn ACTIVE, chỉ khách mới
+          // phát hiện ra. Đổi ở đây thì kiểm lại cả ba, đừng chỉ nhìn dòng vừa sửa.
           switch (isp.toLowerCase()) {
-            // CHƯA đối chiếu với tài khoản mới — nhiều khả năng vẫn là mã cũ và
-            // sẽ fail `notExist` y hệt Viettel ngay khi có khách đặt.
-            case 'vnpt':    idService = '528d39a9-f826-4c65-989c-4591d9f0dce3'; break;
-            // Đã cập nhật theo tài khoản merchant hiện tại.
-            case 'viettel': idService = 'c94584fb-60ac-4f26-82f8-d3dc1e425169'; break;
-            // CHƯA đối chiếu — xem ghi chú ở VNPT.
-            case 'fpt':     idService = 'f0be21c6-2deb-499c-9d5d-7bba3f765a26'; break;
+            case 'vnpt':    idService = 'ab734ade-8bc6-4a70-b783-d9b31d7df36c'; break;
+            case 'viettel': idService = '6422b0e2-1d86-443e-bf7f-5031e6b74f66'; break;
+            case 'fpt':     idService = 'c94584fb-60ac-4f26-82f8-d3dc1e425169'; break;
             default: throw new Error(`Service không hỗ trợ ISP "${isp}"`);
           }
         }
