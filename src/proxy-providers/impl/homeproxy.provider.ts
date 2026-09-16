@@ -10,6 +10,7 @@ import {
   BuyResult,
   RenewResult,
   RotateResult,
+  ProviderConnectionInfo,
 } from '../proxy-provider.interface';
 
 @ProxyProvider('homeproxy')
@@ -20,6 +21,28 @@ export class HomeproxyProvider implements IProxyProvider {
   private readonly BASE_URL    = 'https://api.homeproxy.vn/api';
   private readonly TIMEOUT_MS  = 30_000;
   private readonly MAX_PAGES   = 50;
+
+  // ─── Kiểm tra kết nối ────────────────────────────────────────────────────────
+
+  /**
+   * HomeProxy không có endpoint tài khoản hay số dư (đã dò: /merchant/me,
+   * /merchant/profile, /merchant/balance, /merchant/account đều 404).
+   * `GET /merchant/orders` là endpoint chỉ-đọc duy nhất có xác thực — token sai
+   * trả 401 "Token invalid".
+   *
+   * Nên nó trả lời được đúng một câu, nhưng là câu admin cần nhất: key này còn
+   * dùng được không. Trước đây không có method này thì nút "Kiểm tra kết nối"
+   * không hiện, key sai được lưu im lặng và chỉ lộ ra khi khách đặt đơn thật.
+   *
+   * Không bịa `account` hay `balance`: giao diện hiển thị "key OK · —" khi
+   * thiếu, trung thực hơn là hiện một con số không có thật.
+   */
+  async checkConnection(token_api: string): Promise<ProviderConnectionInfo> {
+    // request() đã ném BadRequestException kèm message của nhà cung cấp khi
+    // không ok; PartnersService bắt và biến thành kết quả "key lỗi".
+    await this.request<unknown>('GET', '/merchant/orders', token_api);
+    return {};
+  }
 
   // ─── Helper HTTP ─────────────────────────────────────────────────────────────
 
