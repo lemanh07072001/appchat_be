@@ -78,6 +78,21 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
     );
   }
 
+  /** Nạp tiền đang tắt: giao dịch được ghi nhận nhưng chưa cộng ví — báo admin vào duyệt. */
+  async sendTopupPending(userId: string, data: { amount: number; source: string }) {
+    this.logger.warn(`Topup pending (nạp tiền đang tắt) → userId: ${userId} | amount: ${data.amount} | ${data.source}`);
+
+    const user = await this.userModel.findById(userId).select('email name').lean();
+    const userLabel = user ? `${user.name || user.email} (${user.email})` : userId;
+    this.sendTelegram(
+      `⏳ <b>Giao dịch nạp chờ duyệt</b> (nạp tiền đang tắt)\n\n` +
+      `👤 ${userLabel}\n` +
+      `💵 Số tiền: <b>${data.amount.toLocaleString('vi-VN')}đ</b>\n` +
+      `🏦 Nguồn: ${data.source}\n` +
+      `📝 Chưa cộng ví — vào trang quản lý nạp tiền để duyệt hoặc huỷ.`,
+    );
+  }
+
   async sendTopupRejected(userId: string, data: { amount: number; min: number; reason: string }) {
     this.logger.warn(`Emit topup_rejected → userId: ${userId} | amount: ${data.amount} | min: ${data.min}`);
     this.server.to(userId).emit('topup_rejected', data);

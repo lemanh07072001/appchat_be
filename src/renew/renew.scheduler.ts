@@ -13,6 +13,7 @@ import { Order, OrderDocument } from '../schemas/orders.schema';
 import { OrderStatusEnum } from '../enum/order.enum';
 import { OrdersService } from '../orders/orders.service';
 import { NotificationGateway } from '../webhook/notification.gateway';
+import { featureFlags } from '../common/feature-flags';
 
 const SCAN_LOCK_KEY = 'lock:auto_renew_scan';
 const SCAN_LOCK_TTL = 600; // 10 phút — đủ cho một lượt quét
@@ -79,6 +80,13 @@ export class RenewScheduler implements OnModuleInit {
   /** 8h sáng giờ VN mỗi ngày — quét các bộ đã bật lịch tự gia hạn */
   @Cron('0 8 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async scanAndRenew(): Promise<void> {
+    // Tắt mua/gia hạn thì bỏ cả lượt quét: không trừ ví, và cũng không để
+    // runSelection tự tắt lịch của user vì một lần gia hạn không được phép chạy.
+    if (!featureFlags.purchaseEnabled) {
+      this.logger.log('[auto-renew] Skipped: PURCHASE_ENABLED đang tắt');
+      return;
+    }
+
     const acquired = await this.redis.set(
       SCAN_LOCK_KEY, '1', 'EX', SCAN_LOCK_TTL, 'NX',
     );
