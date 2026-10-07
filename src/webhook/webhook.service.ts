@@ -11,6 +11,7 @@ import { WalletTransaction, WalletTransactionDocument, WalletTxType } from '../s
 import { WebhookLog, WebhookLogDocument, WebhookStep, WebhookStepStatus } from '../schemas/webhook-log.schema';
 import { OrderStatusEnum, PaymentStatusEnum } from '../enum/order.enum';
 import { NotificationGateway } from './notification.gateway';
+import { featureFlags } from '../common/feature-flags';
 
 // Số tiền tối thiểu cho 1 lần nạp (VND). Nhỏ hơn sẽ bị từ chối, không cộng vào ví.
 const MIN_DEPOSIT_AMOUNT = 10_000;
@@ -254,6 +255,10 @@ export class WebhookService {
           continue;
         }
 
+        // Nạp tiền đang tắt (DEPOSIT_ENABLED=false): vẫn ghi nhận giao dịch để
+        // đối soát nhưng ở trạng thái PENDING, KHÔNG cộng ví — admin duyệt tay.
+        const holdForReview = !featureFlags.depositEnabled;
+
         // 4. Atomic: kiểm tra trùng + tạo transaction
         const existing = await this.txModel.findOneAndUpdate(
           { transaction_id: txId },
@@ -269,9 +274,11 @@ export class WebhookService {
               transfer_type:      tx.transferType,
               transfer_amount:    amount,
               checksum:           tx.checksum,
-              status:             TransactionStatus.PROCESSED,
+              status:             holdForReview ? TransactionStatus.PENDING : TransactionStatus.PROCESSED,
               user_id:            user._id,
-              note:               `Nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+              note:               holdForReview
+                ? `Nạp tiền đang tắt — chờ admin duyệt ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`
+                : `Nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`,
               raw_payload:        normalizedTx,
               raw_headers:        headers ?? null,
             },
@@ -283,6 +290,21 @@ export class WebhookService {
           steps.push({ step: 4, title: 'Lệnh nạp tiền', detail: `Trùng giao dịch #${txId} — bỏ qua`, status: warn });
           allSteps.push(...steps);
           results.push(`#${txId}: duplicate → skipped`);
+          continue;
+        }
+
+        if (holdForReview) {
+          steps.push({
+            step:   4,
+            title:  'Chờ admin duyệt',
+            detail: `Nạp tiền đang tắt — ghi nhận #${txId}: ${amount.toLocaleString('vi-VN')}đ, chưa cộng ví`,
+            status: warn,
+            data:   { transaction_id: txId, amount, user_id: user._id, email: user.email },
+          });
+          this.logger.warn(`Webhook #${txId}: nạp tiền đang tắt — giữ ${amount}đ của ${user.email} chờ duyệt`);
+          this.notification.sendTopupPending(user._id.toString(), { amount, source });
+          allSteps.push(...steps);
+          results.push(`#${txId}: pending (deposit_disabled)`);
           continue;
         }
 
@@ -465,6 +487,9 @@ export class WebhookService {
           steps.push({ step: 3, title: 'Từ chối nạp', detail: reason, status: err });
           results = `rejected (below_min)`;
         } else {
+          // Nạp tiền đang tắt: ghi nhận PENDING, không cộng ví (xem handlePays2)
+          const holdForReview = !featureFlags.depositEnabled;
+
           // Atomic check duplicate + tạo transaction
           const existing = await this.txModel.findOneAndUpdate(
             { tx_hash: transactionId, payment_method: PaymentMethod.BINANCE_PAY },
@@ -480,10 +505,12 @@ export class WebhookService {
                 crypto_amount:    usdtAmount,
                 tx_hash:          transactionId,
                 payment_method:   PaymentMethod.BINANCE_PAY,
-                status:           TransactionStatus.PROCESSED,
+                status:           holdForReview ? TransactionStatus.PENDING : TransactionStatus.PROCESSED,
                 user_id:          user._id,
                 source:           'auto',
-                note:             `Binance Pay — ${usdtAmount} USDT → ${vndAmount.toLocaleString('vi-VN')}đ cho ${user.email}`,
+                note:             holdForReview
+                  ? `Nạp tiền đang tắt — chờ admin duyệt Binance Pay ${usdtAmount} USDT (~${vndAmount.toLocaleString('vi-VN')}đ) cho ${user.email}`
+                  : `Binance Pay — ${usdtAmount} USDT → ${vndAmount.toLocaleString('vi-VN')}đ cho ${user.email}`,
                 raw_payload:      body,
                 raw_headers:      headers ?? null,
               },
@@ -494,6 +521,17 @@ export class WebhookService {
           if (existing) {
             steps.push({ step: 3, title: 'Cộng tiền', detail: `Trùng tx=${transactionId} — bỏ qua`, status: warn });
             results = `duplicate (${transactionId})`;
+          } else if (holdForReview) {
+            steps.push({
+              step:   3,
+              title:  'Chờ admin duyệt',
+              detail: `Nạp tiền đang tắt — ghi nhận tx=${transactionId}: ${vndAmount.toLocaleString('vi-VN')}đ, chưa cộng ví`,
+              status: warn,
+              data:   { transactionId, vndAmount, user_id: user._id, email: user.email },
+            });
+            this.logger.warn(`Binance Pay: nạp tiền đang tắt — giữ ${usdtAmount} USDT (~${vndAmount}đ) của ${user.email} chờ duyệt`);
+            this.notification.sendTopupPending(user._id.toString(), { amount: vndAmount, source: 'binance_pay' });
+            results = `pending (deposit_disabled)`;
           } else {
             const updatedUser = await this.userModel.findByIdAndUpdate(
               user._id,

@@ -14,6 +14,7 @@ import { AuthGuard } from '../guards/auth.guard';
 import { AdminGuard } from '../guards/admin.guard';
 import { ApiTokenGuard } from '../guards/api-token.guard';
 import { Public } from '../guards/public.decorator';
+import { PurchaseEnabledGuard } from '../guards/feature.guard';
 import { OrderStatusEnum, PaymentStatusEnum } from '../enum/order.enum';
 
 @Controller()
@@ -34,6 +35,7 @@ export class OrdersController {
 
   // ─── User: mua dịch vụ (qua JWT) ─────────────────────────
   @Post('api/orders/buy')
+  @UseGuards(PurchaseEnabledGuard)
   buy(
     @Req() req: Request,
     @Body() dto: BuyOrderDto,
@@ -56,7 +58,7 @@ export class OrdersController {
   // ─── User: mua dịch vụ (qua API token) ───────────────────
   @Post('api/orders/buy-external')
   @Public()
-  @UseGuards(ApiTokenGuard)
+  @UseGuards(ApiTokenGuard, PurchaseEnabledGuard)
   buyExternal(
     @Req() req: Request,
     @Body() dto: BuyOrderDto,
@@ -69,7 +71,7 @@ export class OrdersController {
   // ─── User: mua dịch vụ đồng bộ — trả về proxy ngay khi sẵn sàng ──
   @Post('api/orders/buy-sync')
   @Public()
-  @UseGuards(ApiTokenGuard)
+  @UseGuards(ApiTokenGuard, PurchaseEnabledGuard)
   buySyncExternal(
     @Req() req: Request,
     @Body() dto: BuyOrderDto,
@@ -100,6 +102,7 @@ export class OrdersController {
 
   // ─── User: gia hạn order của chính mình ──────────────────
   @Post('api/orders/my/:id/renew')
+  @UseGuards(PurchaseEnabledGuard)
   renewMyOrder(
     @Req() req: Request,
     @Param('id') id: string,
@@ -112,6 +115,7 @@ export class OrdersController {
   // ─── User: nạp thêm dung lượng cho đơn bán theo GB ───────
   // Tách hẳn khỏi renew: nạp GB KHÔNG đẩy end_date.
   @Post('api/orders/my/:id/topup-bandwidth')
+  @UseGuards(PurchaseEnabledGuard)
   topUpBandwidth(
     @Req() req: Request,
     @Param('id') id: string,
@@ -136,7 +140,7 @@ export class OrdersController {
   }
 
   @Post('api/admin/orders')
-  @UseGuards(AdminGuard)
+  @UseGuards(AdminGuard, PurchaseEnabledGuard)
   create(@Body() dto: CreateOrderDto) {
     return this.ordersService.create(dto);
   }
@@ -220,7 +224,7 @@ export class OrdersController {
   }
 
   @Post('api/admin/orders/:id/renew-provider')
-  @UseGuards(AdminGuard)
+  @UseGuards(AdminGuard, PurchaseEnabledGuard)
   renewProvider(
     @Param('id') id: string,
     @Body('duration_days') duration_days: number,

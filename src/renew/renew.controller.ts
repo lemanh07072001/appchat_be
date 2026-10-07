@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { AuthGuard } from '../guards/auth.guard';
+import { PurchaseEnabledGuard } from '../guards/feature.guard';
 import { RenewService } from './renew.service';
 import { BulkRenewDto } from './dto/bulk-renew.dto';
 import { CreateSelectionDto } from './dto/create-selection.dto';
@@ -42,6 +43,7 @@ export class RenewController {
 
   /** Gia hạn các proxy đã chọn (có thể trải trên nhiều đơn) */
   @Post('bulk')
+  @UseGuards(PurchaseEnabledGuard)
   bulkRenew(@Req() req: Request, @Body() dto: BulkRenewDto) {
     const userId = (req as any).user.sub as string;
     return this.renewService.bulkRenew(userId, dto.proxy_ids, dto.duration_days);

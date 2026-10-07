@@ -8,6 +8,7 @@ import { ProxysieutocProvider } from './impl/proxysieutoc.provider';
 import { TwoProxyProvider } from './impl/2proxy.provider';
 import { ProxysellerProvider } from './impl/proxyseller.provider';
 import { OmoproxyProvider } from './impl/omoproxy.provider';
+import { GpnipProvider } from './impl/gpnip.provider';
 
 /**
  * Thêm nhà cung cấp mới: tạo adapter với `@ProxyProvider('<code>')` rồi thêm
@@ -26,6 +27,7 @@ import { OmoproxyProvider } from './impl/omoproxy.provider';
     ProxysieutocProvider,
     TwoProxyProvider,
     ProxysellerProvider,
+    GpnipProvider,
   ],
   exports: [ProxyProviderFactory],
 })

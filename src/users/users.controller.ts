@@ -3,6 +3,7 @@ import { UsersService } from './users.service';
 import { CreateUserDto } from '../dto/create-user.dto';
 import { AuthGuard } from '../guards/auth.guard';
 import { AdminGuard } from '../guards/admin.guard';
+import { DepositEnabledGuard } from '../guards/feature.guard';
 
 @Controller('api/admin/users')
 @UseGuards(AuthGuard, AdminGuard)
@@ -53,6 +54,7 @@ export class UsersController {
 
   // ─── Admin: nạp tiền cho user ─────────────────────────────────────────
   @Post(':id/deposit')
+  @UseGuards(DepositEnabledGuard)
   deposit(
     @Param('id') id: string,
     @Body('amount') amount: number,
