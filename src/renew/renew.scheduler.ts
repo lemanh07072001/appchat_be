@@ -1,3 +1,4 @@
+import { COMMERCE_DISABLED } from '../common/commerce-policy';
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
@@ -79,6 +80,7 @@ export class RenewScheduler implements OnModuleInit {
   /** 8h sáng giờ VN mỗi ngày — quét các bộ đã bật lịch tự gia hạn */
   @Cron('0 8 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async scanAndRenew(): Promise<void> {
+    if (COMMERCE_DISABLED) return;
     const acquired = await this.redis.set(
       SCAN_LOCK_KEY, '1', 'EX', SCAN_LOCK_TTL, 'NX',
     );

@@ -1,3 +1,4 @@
+import { assertCommerceEnabled } from '../common/commerce-policy';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -122,6 +123,7 @@ export class WebhookService {
     ip?: string,
     source: 'pays2' | 'sepay' = 'pays2',
   ): Promise<{ success: boolean; message: string }> {
+    assertCommerceEnabled();
     const results: string[] = [];
     const allSteps: WebhookStep[] = [];
 
@@ -380,6 +382,7 @@ export class WebhookService {
     headers?: Record<string, any>,
     ip?: string,
   ): Promise<{ success: boolean; message: string }> {
+    assertCommerceEnabled();
     const steps: WebhookStep[] = [];
     const ok   = WebhookStepStatus.OK;
     const warn = WebhookStepStatus.WARN;
@@ -771,6 +774,7 @@ export class WebhookService {
 
   // ─── Admin: duyệt giao dịch — cộng tiền ────────────────────────────────
   async approveTransaction(txId: string, email?: string, adminUserId?: string) {
+    assertCommerceEnabled();
     const tx = await this.txModel.findById(txId).exec();
     if (!tx) throw new BadRequestException('Không tìm thấy giao dịch');
     if (tx.status === TransactionStatus.PROCESSED) {

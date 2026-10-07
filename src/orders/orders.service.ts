@@ -1,3 +1,4 @@
+import { assertCommerceEnabled } from '../common/commerce-policy';
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -380,6 +381,7 @@ export class OrdersService {
       config: Record<string, any>;
     };
   }> {
+    assertCommerceEnabled();
     const t0 = Date.now();
     let orderId: string | null = null;
 
@@ -868,6 +870,7 @@ export class OrdersService {
   }
 
   async create(data: CreateOrderDto): Promise<OrderDocument> {
+    assertCommerceEnabled();
     const order = new this.orderModel({
       ...data,
       order_code:  this.generateOrderCode(),
@@ -980,6 +983,7 @@ export class OrdersService {
     proxiesip?: string[];
     timestamp?: number;
   }> {
+    assertCommerceEnabled();
     const POLL_INTERVAL_MS = 500;
     const MAX_WAIT_MS      = 60_000;
 
@@ -1307,6 +1311,7 @@ export class OrdersService {
    * - Nếu thành công → update end_date, log wallet tx
    */
   async renewByUser(userId: string, orderId: string, duration_days: number) {
+    assertCommerceEnabled();
     if (!duration_days || duration_days < 1) {
       throw new BadRequestException('duration_days phải >= 1');
     }
@@ -1382,6 +1387,7 @@ export class OrdersService {
     gb: number,
     idempotencyKey?: string,
   ) {
+    assertCommerceEnabled();
     if (!Types.ObjectId.isValid(orderId)) {
       throw new BadRequestException('Order id không hợp lệ');
     }
@@ -1743,6 +1749,7 @@ export class OrdersService {
    * - Update end_date + duration_days
    */
   async renewByAdmin(orderId: string, duration_days: number, actor = 'admin') {
+    assertCommerceEnabled();
     if (!duration_days || duration_days < 1) {
       throw new BadRequestException('duration_days phải >= 1');
     }
@@ -2460,6 +2467,7 @@ export class OrdersService {
     duration_days: number,
     opts?: { actor?: string },
   ) {
+    assertCommerceEnabled();
     const actor = opts?.actor ?? userId;
     const isAuto = actor !== userId; // auto-renew (cron) KHÔNG xoá proxy — chỉ manual mới prune
     if (!duration_days || duration_days < 1) {

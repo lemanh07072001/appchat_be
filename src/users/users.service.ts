@@ -1,3 +1,4 @@
+import { assertCommerceEnabled } from '../common/commerce-policy';
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { InjectModel, InjectConnection } from '@nestjs/mongoose';
 import { User, UserDocument } from '../schemas/users.schema';
@@ -169,6 +170,7 @@ export class UsersService {
 
   // ─── Admin: nạp tiền cho user ─────────────────────────────────────────
   async deposit(userId: string, amount: number, note?: string) {
+    assertCommerceEnabled();
     if (!amount || amount <= 0) {
       throw new BadRequestException('Số tiền phải lớn hơn 0');
     }
