@@ -7,10 +7,11 @@ export const REDIS_CLIENT          = 'REDIS_CLIENT';
 export const REDIS_BLOCKING_CLIENT = 'REDIS_BLOCKING_CLIENT';
 
 function createRedisClient(config: ConfigService): Redis {
+  const password = config.get<string>('REDIS_PASSWORD', '') || undefined;
   return new Redis({
     host:     config.get<string>('REDIS_HOST', 'localhost'),
     port:     config.get<number>('REDIS_PORT', 6379),
-    password: config.get<string>('REDIS_PASSWORD', ''),
+    password,
     db:       Number(config.get('REDIS_DB') || 0),
   });
 }
