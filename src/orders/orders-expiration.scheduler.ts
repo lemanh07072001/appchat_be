@@ -32,12 +32,17 @@ export class OrdersExpirationScheduler {
 
     try {
       const now = new Date();
+      const voucherEligibility = { $or: [
+        { voucher_snapshot: null },
+        { voucher_resolution: 'fulfilled', actual_quantity: { $gt: 0 }, voucher_affiliate_pending: { $ne: true } },
+      ] };
 
       // Tìm orders ACTIVE hoặc PROCESSING có end_date <= now
       const expiredOrders = await this.orderModel
         .find({
           status: { $in: [OrderStatusEnum.ACTIVE, OrderStatusEnum.PROCESSING] },
           end_date: { $ne: null, $lte: now },
+          ...voucherEligibility,
         })
         .select('_id order_code')
         .lean()
@@ -57,7 +62,7 @@ export class OrdersExpirationScheduler {
 
         // Cập nhật status order → EXPIRED
         await this.orderModel.updateMany(
-          { _id: { $in: orderIds } },
+          { _id: { $in: orderIds }, status: { $in: [OrderStatusEnum.ACTIVE, OrderStatusEnum.PROCESSING] }, end_date: { $ne: null, $lte: now }, ...voucherEligibility },
           { status: OrderStatusEnum.EXPIRED },
         ).exec();
 

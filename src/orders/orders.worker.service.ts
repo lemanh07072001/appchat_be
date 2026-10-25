@@ -15,6 +15,7 @@ import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
 import { OrderLogStep, OrderLogLevel } from '../schemas/order-log.schema';
 import { NotificationGateway } from '../webhook/notification.gateway';
+import { VouchersService } from '../vouchers/vouchers.service';
 
 
 /** Timeout BRPOP — block tối đa 5 giây chờ order mới */
@@ -51,6 +52,7 @@ export class OrdersWorkerService implements OnModuleInit {
     private readonly affiliateService: AffiliateService,
     private readonly orderLogService: OrderLogService,
     private readonly notification: NotificationGateway,
+    private readonly vouchers: VouchersService,
   ) {}
 
   onModuleInit() {
@@ -102,6 +104,7 @@ export class OrdersWorkerService implements OnModuleInit {
 
     // Khai báo ở scope ngoài để dùng được trong catch (gửi Telegram lỗi)
     let lastProviderData: any = undefined;
+    let ownsVoucherDispatch = false;
 
     try {
       // Re-fetch từ DB để xác nhận vẫn còn PENDING (tránh race condition)
@@ -113,6 +116,15 @@ export class OrdersWorkerService implements OnModuleInit {
       if (!order) {
         void this.orderLogService.warn(orderId, OrderLogStep.WORKER_ORDER_VERIFIED, 'Order không còn ở trạng thái PENDING, bỏ qua');
         return;
+      }
+
+      // A permanent Mongo fence, independent of Redis lock expiry or duplicate delivery.
+      // Unknown outcomes must NEVER automatically cause a second provider purchase.
+      if (order.voucher_snapshot) {
+        const claim = await this.orderModel.updateOne({ _id: order._id, status: OrderStatusEnum.PENDING, voucher_resolution: 'open', voucher_dispatch_claimed: false },
+          { $set: { voucher_dispatch_claimed: true, voucher_dispatch_source: 'worker' } });
+        if (!claim.modifiedCount) return;
+        ownsVoucherDispatch = true;
       }
 
       // Tính queue wait time: từ khi order được tạo → worker bắt đầu xử lý
@@ -184,7 +196,8 @@ export class OrdersWorkerService implements OnModuleInit {
       let result: any = null;
       const tProviderStart = Date.now();
 
-      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      const maxAttempts = order.voucher_snapshot ? 1 : MAX_RETRIES;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const tAttempt = Date.now();
         try {
           this.logger.log(`Order ${orderId}: [STEP 2] Calling provider.buy() (attempt ${attempt}/${MAX_RETRIES})`);
@@ -223,6 +236,12 @@ export class OrdersWorkerService implements OnModuleInit {
             user_id:          order.user_id?.toString(),
           });
 
+          // Persist the complete response before materializing proxies/status. A crash
+          // afterward retains evidence for reconciliation, without re-dispatching buy.
+          if (order.voucher_snapshot) await this.orderModel.updateOne({ _id: order._id }, {
+            $set: { voucher_provider_result: result, voucher_provider_result_partner: partner.code, provider_order_id: result.provider_order_id ?? '', provider_metadata: result.provider_metadata ?? {} },
+          });
+
           const providerCallMs = Date.now() - tAttempt;
           this.logger.log(`Order ${orderId}: [STEP 2] provider.buy() OK in ${providerCallMs}ms (attempt ${attempt})`);
           void this.orderLogService.info(
@@ -258,11 +277,11 @@ export class OrdersWorkerService implements OnModuleInit {
             },
           );
 
-          if (attempt < MAX_RETRIES) await this.sleep(RETRY_DELAY_MS);
+          if (attempt < maxAttempts) await this.sleep(RETRY_DELAY_MS);
         }
       }
 
-      if (retryErrors.length === MAX_RETRIES || !result) {
+      if (retryErrors.length === maxAttempts || !result) {
         const errorSummary = retryErrors.length
           ? retryErrors.join(' | ')
           : 'buy() returned null';
@@ -318,6 +337,11 @@ export class OrdersWorkerService implements OnModuleInit {
       order!.provider_order_id = result.provider_order_id;
       if (result.provider_metadata && Object.keys(result.provider_metadata).length > 0) {
         order!.provider_metadata = result.provider_metadata;
+      }
+
+      if (order.voucher_snapshot && result.proxies?.length) {
+        await this.vouchers.materialize(order._id, result, partner.code);
+        return;
       }
 
       // Nếu provider trả proxy ngay (ProxyVN) → lưu luôn
@@ -409,7 +433,11 @@ export class OrdersWorkerService implements OnModuleInit {
         // Provider trả proxy async (HomeProxy) → push vào processing queue
         order!.status = OrderStatusEnum.PROCESSING;
         const tSave = Date.now();
-        await order!.save();
+        if (order.voucher_snapshot) {
+          await this.orderModel.updateOne({ _id: order._id, status: OrderStatusEnum.PENDING, voucher_resolution: 'open' }, {
+            $set: { status: OrderStatusEnum.PROCESSING, provider_order_id: result.provider_order_id ?? '', provider_metadata: result.provider_metadata ?? {} },
+          });
+        } else await order!.save();
         this.logger.log(`Order ${orderId}: [STEP 3a] order.save() took ${Date.now() - tSave}ms`);
         const tPush = Date.now();
         await this.redis.lpush(PROCESSING_ORDERS_KEY, orderId);
@@ -424,7 +452,7 @@ export class OrdersWorkerService implements OnModuleInit {
       }
     } catch (err) {
       this.logger.error(`Order ${orderId} thất bại: ${err?.message}`);
-      await this.orderModel.findByIdAndUpdate(orderId, {
+      await this.orderModel.findOneAndUpdate({ _id: orderId, status: { $in: [OrderStatusEnum.PENDING, OrderStatusEnum.PROCESSING] } }, {
         status:        OrderStatusEnum.PENDING_REFUND,
         error_message: err?.message ?? 'Worker error',
       }).exec();
@@ -456,6 +484,11 @@ export class OrdersWorkerService implements OnModuleInit {
         this.logger.warn(`Failed to send order_failed telegram: ${notifErr?.message}`);
       }
     } finally {
+      // Only the worker that won the permanent claim may signal completion. Redis
+      // lock expiry/duplicate queue consumers must not mark another call as finished.
+      if (ownsVoucherDispatch) await this.orderModel.updateOne({ _id: orderId, voucher_dispatch_source: 'worker' }, {
+        $set: { voucher_buy_finished: true },
+      });
       await this.redis.del(lockKey);
     }
   }

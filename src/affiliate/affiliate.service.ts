@@ -31,7 +31,7 @@ export class AffiliateService {
   ) {}
 
   // ─── Gọi khi order → ACTIVE: ghi nhận commission PENDING, chưa cộng tiền ──
-  async handleOrderActive(order: OrderDocument): Promise<void> {
+  async handleOrderActive(order: OrderDocument, recoverable = false): Promise<void> {
     try {
       const config = await this.getConfig();
       if (!config.is_active) return;
@@ -77,11 +77,12 @@ export class AffiliateService {
     } catch (err: any) {
       if (err?.code === 11000) return; // idempotent
       this.logger.error(`handleOrderActive error: ${err?.message}`);
+      if (recoverable) throw err;
     }
   }
 
   // ─── Gọi khi orders → EXPIRED: chuyển PENDING → CONFIRMED (đủ điều kiện rút) ─
-  async handleOrderExpired(orderIds: Types.ObjectId[]): Promise<void> {
+  async handleOrderExpired(orderIds: Types.ObjectId[], recoverable = false): Promise<void> {
     if (orderIds.length === 0) return;
     try {
       const result = await this.commissionModel.updateMany(
@@ -94,6 +95,7 @@ export class AffiliateService {
       }
     } catch (err: any) {
       this.logger.error(`handleOrderExpired error: ${err?.message}`);
+      if (recoverable) throw err;
     }
   }
 

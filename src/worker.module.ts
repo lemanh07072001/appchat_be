@@ -13,6 +13,7 @@ import { WebhookModule } from './webhook/webhook.module';
 import { OrdersWorkerService } from './orders/orders.worker.service';
 import { OrdersProcessingWorkerService } from './orders/orders-processing.worker.service';
 import { OrderLogService } from './orders/order-log.service';
+import { VouchersModule } from './vouchers/vouchers.module';
 
 /**
  * Module tối giản cho worker process — không có HTTP server.
@@ -46,6 +47,7 @@ import { OrderLogService } from './orders/order-log.service';
     ProxyProvidersModule,
     AffiliateModule,
     WebhookModule,
+    VouchersModule,
   ],
   providers: [OrdersWorkerService, OrdersProcessingWorkerService, OrderLogService],
 })

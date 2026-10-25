@@ -13,6 +13,45 @@ export type OrderDocument = Order & Document & {
 
 @Schema({ timestamps: true })
 export class Order {
+  @Prop({ type: Number, default: null })
+  subtotal: number | null;
+
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  voucher_snapshot: Record<string, any> | null;
+
+  @Prop({ type: Boolean, default: false })
+  voucher_dispatch_claimed: boolean;
+
+  @Prop({ type: String, default: null, enum: ['worker', 'reconciliation', null] })
+  voucher_dispatch_source: string | null;
+
+  @Prop({ type: Boolean, default: false })
+  voucher_buy_finished: boolean;
+
+  @Prop({ type: Boolean, default: false })
+  voucher_affiliate_pending: boolean;
+
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  voucher_failure_confirmation: { actor: string; evidence: string; at: Date } | null;
+
+  @Prop({ type: Boolean, default: false })
+  voucher_provider_confirmed_failed: boolean;
+
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  voucher_refund_plan: Record<string, any> | null;
+
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null, select: false })
+  voucher_provider_result: Record<string, any> | null;
+
+  @Prop({ type: String, default: 'open', enum: ['open', 'fulfilled', 'failed'] })
+  voucher_resolution: string;
+
+  @Prop({ type: String, default: null, select: false })
+  voucher_provider_result_partner: string | null;
+
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null, select: false })
+  voucher_fulfilment: Record<string, any> | null;
+
   @Prop({ required: true, unique: true })
   order_code: string;
 

@@ -61,7 +61,13 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
     this.logger.log(`Socket disconnected — id: ${client.id}`);
   }
 
-  async sendTopupSuccess(userId: string, data: { amount: number; balance: number }) {
+  async sendTopupSuccess(userId: string, data: {
+    amount: number;
+    balance: number;
+    bonusAmount?: number;
+    totalAmount?: number;
+    promotionName?: string | null;
+  }) {
     const room = this.server.sockets.adapter.rooms.get(userId);
     const clientCount = room?.size ?? 0;
     this.logger.log(`Emit topup_success → userId: ${userId} | clients: ${clientCount} | amount: ${data.amount} | balance: ${data.balance}`);

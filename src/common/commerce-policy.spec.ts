@@ -3,6 +3,8 @@ import { assertCommerceEnabled, COMMERCE_DISABLED } from './commerce-policy';
 import { OrdersService } from '../orders/orders.service';
 import { UsersService } from '../users/users.service';
 import { WebhookService } from '../webhook/webhook.service';
+import { DepositPromotionsService } from '../deposit-promotions/deposit-promotions.service';
+import { DepositCreditService } from '../deposit-promotions/deposit-credit.service';
 
 describe('Commerce shutdown', () => {
   it('is enabled and returns HTTP 403', () => {
@@ -23,6 +25,8 @@ describe('Commerce shutdown', () => {
     [WebhookService, 'handlePays2'],
     [WebhookService, 'handleBinancePay'],
     [WebhookService, 'approveTransaction'],
+    [DepositPromotionsService, 'createIntent'],
+    [DepositCreditService, 'credit'],
   ])('blocks %p.%s before any side effects', async (service, method) => {
     const instance = Object.create(service.prototype);
     await expect(instance[method]()).rejects.toBeInstanceOf(ForbiddenException);

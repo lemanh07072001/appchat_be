@@ -2,6 +2,10 @@ import { IsEnum, IsMongoId, IsNotEmpty, IsNumber, IsOptional, IsString, Min, Max
 import { ProxyProtocolEnum } from '../enum/order.enum';
 
 export class BuyOrderDto {
+  @IsOptional()
+  @IsString()
+  voucher_code?: string;
+
   @IsNotEmpty()
   @IsMongoId()
   service_id: string;

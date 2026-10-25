@@ -22,6 +22,7 @@ import { ProxyProvidersModule } from '../proxy-providers/proxy-providers.module'
 import { AffiliateModule } from '../affiliate/affiliate.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { WebhookModule } from '../webhook/webhook.module';
+import { VouchersModule } from '../vouchers/vouchers.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { WebhookModule } from '../webhook/webhook.module';
     AffiliateModule,
     WalletModule,
     WebhookModule,
+    VouchersModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler, OrdersBandwidthScheduler, /* OrdersRecoveryScheduler, */ OrderLogService, ProxyRotateService, ApiTokenGuard],

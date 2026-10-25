@@ -24,6 +24,8 @@ import { OrderLogStep } from '../schemas/order-log.schema';
 import { WalletTransactionService } from '../wallet/wallet-transaction.service';
 import { WalletTxType } from '../schemas/wallet-transaction.schema';
 import { NotificationGateway } from '../webhook/notification.gateway';
+import { VouchersService } from '../vouchers/vouchers.service';
+import { integer, normalizeCode } from '../vouchers/voucher.rules';
 
 /** Kết quả gia hạn của MỘT order (dùng cho cả gia hạn đơn lẻ và hàng loạt) */
 export interface PerOrderRenewResult {
@@ -80,6 +82,7 @@ export class OrdersService {
     private readonly walletTxService: WalletTransactionService,
     private readonly notification: NotificationGateway,
     private readonly providerFactory: ProxyProviderFactory,
+    private readonly vouchers: VouchersService,
   ) {}
 
   private toObjectId(id?: string): Types.ObjectId | null {
@@ -357,6 +360,42 @@ export class OrdersService {
     return found ? (found._id as Types.ObjectId) : null;
   }
 
+  async quote(userId: string, dto: BuyOrderDto) {
+    await this.vouchers.rateLimit(userId);
+    const service = await this.serviceModel.findById(dto.service_id).exec();
+    if (!service?.status || !service.api_enabled) throw new BadRequestException('Service unavailable');
+    const p = this.resolvePricing(service, dto, userId);
+    integer(p.quantity, 'quantity');
+    return { ...await this.vouchers.quote(dto.voucher_code, dto.service_id, p.totalPrice), quantity: p.quantity, price_per_unit: p.pricePerUnit };
+  }
+
+  private async buyVoucher(userId: string, dto: BuyOrderDto, key?: string): Promise<any> {
+    if (!key || key.length > 128 || !/^[\x21-\x7e]+$/.test(key)) throw new BadRequestException('Idempotency-Key required for voucher purchase');
+    const prior = await this.vouchers.existing(userId, key, dto);
+    if (prior) return prior;
+    const service = await this.serviceModel.findById(dto.service_id).exec();
+    if (!service?.status || !service.api_enabled || !service.partner) throw new BadRequestException('Service unavailable');
+    const p = this.resolvePricing(service, dto, userId);
+    integer(p.quantity, 'quantity'); integer(p.totalPrice, 'subtotal', 0); integer(p.pricePerUnit, 'price_per_unit', 0);
+    const now = new Date();
+    const end = p.durationDays > 0 ? new Date(+now + p.durationDays * 86400000) : null;
+    let body: any = {}; try { body = JSON.parse(service.body_api ?? '{}'); } catch {}
+    return this.vouchers.purchase(userId, key, dto, {
+      order_code: this.generateOrderCode(), user_id: new Types.ObjectId(userId), service_id: new Types.ObjectId(dto.service_id),
+      partner_id: service.partner, country_id: await this.resolveCountryId(dto.country) ?? service.country ?? null,
+      proxy_type: dto.proxy_type ?? service.proxy_type, order_type: service.type ?? '', pricing_mode: p.pricingMode,
+      quantity: p.quantity, duration_days: p.durationDays, bandwidth_gb: p.bandwidthGb, price_per_unit: p.pricePerUnit,
+      base_price_per_unit: p.discountPerUnit > 0 ? p.basePrice : null, discount_per_unit: p.discountPerUnit, discount_amount: p.discountAmount,
+      cost_per_unit: p.costPerUnit, total_cost: p.totalCost, total_price: p.totalPrice,
+      payment_status: PaymentStatusEnum.PAID, payment_method: PaymentMethodEnum.BALANCE, status: OrderStatusEnum.PENDING,
+      start_date: now, end_date: end, config: {
+        protocol: dto.protocol ?? null, isp: (service.isp ?? []).find((i: any) => i.code === dto.isp || i.name === dto.isp)?.code ?? dto.isp ?? null,
+        rotate_interval: dto.rotate_interval ?? body.rotate_interval ?? null, is_cdk: body.isCdk === true,
+        ...(dto.username ? { username: dto.username } : {}), ...(dto.password ? { password: dto.password } : {}),
+      },
+    }, service.name);
+  }
+
   async buy(userId: string, dto: BuyOrderDto, idempotencyKey?: string): Promise<{
     success: boolean;
     message: string;
@@ -382,6 +421,15 @@ export class OrdersService {
     };
   }> {
     assertCommerceEnabled();
+    if (dto.voucher_code !== undefined) {
+      if (!normalizeCode(dto.voucher_code)) throw new BadRequestException('Invalid voucher code');
+      return this.buyVoucher(userId, dto, idempotencyKey);
+    }
+    // A voucher intent owns its key even if a retry accidentally drops voucher_code.
+    if (idempotencyKey) {
+      const prior = await this.vouchers.existing(userId, idempotencyKey, dto);
+      if (prior) return prior;
+    }
     const t0 = Date.now();
     let orderId: string | null = null;
 
@@ -740,7 +788,7 @@ export class OrdersService {
         { $skip: skip },
         { $limit: limit },
         // Ẩn field nhạy cảm khỏi user (thay cho .select('-...')) — gồm cả error_message (có thể chứa tên NCC)
-        { $project: { admin_note: 0, cost_per_unit: 0, total_cost: 0, profit: 0, partner_id: 0, provider_order_id: 0, provider_metadata: 0, error_message: 0, _dead: 0 } },
+        { $project: { admin_note: 0, cost_per_unit: 0, total_cost: 0, profit: 0, partner_id: 0, provider_order_id: 0, provider_metadata: 0, error_message: 0, voucher_provider_result: 0, voucher_provider_result_partner: 0, voucher_fulfilment: 0, _dead: 0 } },
       ]).exec(),
       this.orderModel.countDocuments(filter).exec(),
     ]);
@@ -886,6 +934,7 @@ export class OrdersService {
   async updateStatus(id: string, status: OrderStatusEnum, actor = 'admin'): Promise<OrderDocument> {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+    if (order.voucher_snapshot) throw new BadRequestException('Use provider reconciliation or confirmed-failure voucher refund');
     const prevStatus = order.status;
     order.status = status;
     const saved = await order.save();
@@ -902,6 +951,7 @@ export class OrdersService {
   async updatePaymentStatus(id: string, status: PaymentStatusEnum, actor = 'admin'): Promise<OrderDocument> {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+    if (order.voucher_snapshot) throw new BadRequestException('Voucher payment status follows durable wallet receipts');
     const prevStatus = order.payment_status;
     order.payment_status = status;
     const saved = await order.save();
@@ -918,6 +968,8 @@ export class OrdersService {
   async approveRefund(id: string, actor = 'admin'): Promise<OrderDocument> {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+
+    if (order.voucher_snapshot) return (await this.vouchers.refund(order, undefined, actor)).order as any;
 
     if (order.status !== OrderStatusEnum.PENDING_REFUND) {
       throw new BadRequestException('Order không ở trạng thái PENDING_REFUND');
@@ -1068,6 +1120,8 @@ export class OrdersService {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
 
+    if (order.voucher_snapshot) return this.vouchers.refund(order, amount, actor);
+
     const BLOCKED_STATUSES = [OrderStatusEnum.ACTIVE, OrderStatusEnum.COMPLETED];
     if (BLOCKED_STATUSES.includes(order.status)) {
       throw new BadRequestException(
@@ -1160,6 +1214,8 @@ export class OrdersService {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
 
+    if (order.voucher_snapshot) return this.vouchers.refund(order, undefined, actor, true);
+
     if (order.status !== OrderStatusEnum.PARTIAL) {
       throw new BadRequestException('Đơn không ở trạng thái PARTIAL (thiếu số lượng)');
     }
@@ -1220,6 +1276,8 @@ export class OrdersService {
   async retryOrder(id: string, actor = 'admin') {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+
+    if (order.voucher_snapshot) throw new BadRequestException('Voucher dispatch is fenced; reconcile provider outcome instead of retrying');
 
     const retryableStatuses = [
       OrderStatusEnum.FAILED,
@@ -1865,6 +1923,7 @@ export class OrdersService {
   async importProxies(id: string, lines: string[], actor = 'admin') {
     const order = await this.orderModel.findById(id).populate('service_id').populate('country_id').exec();
     if (!order) throw new BadRequestException('Order not found');
+    if (order.voucher_snapshot) throw new BadRequestException('Use provider-order reconciliation for voucher orders');
 
     const parsed = lines
       .map((l) => l.trim())
@@ -1998,6 +2057,21 @@ export class OrdersService {
       throw new BadRequestException(`Provider "${partner.code}" không hỗ trợ fetchOrderProxies`);
     }
 
+    if (order.voucher_snapshot && (order.voucher_resolution === 'failed' || order.voucher_refund_plan)) throw new BadRequestException('Voucher order already resolved as failed/refunded');
+
+    if (order.voucher_snapshot) {
+      // Competes atomically with the worker's pre-buy claim. An in-flight PENDING
+      // worker cannot be reconciled; PROCESSING/PENDING_REFUND means buy has ended.
+      // Persist the supplied provider ID before fetching so a failed fetch is recoverable.
+      const fenced = await this.orderModel.findOneAndUpdate({ _id: order._id, voucher_resolution: 'open', voucher_refund_plan: null,
+        $or: [{ voucher_dispatch_claimed: false }, { voucher_dispatch_source: 'reconciliation' },
+          { status: OrderStatusEnum.PROCESSING }, { status: OrderStatusEnum.PENDING_REFUND, voucher_buy_finished: true }] },
+        { $set: { voucher_dispatch_claimed: true, voucher_dispatch_source: 'reconciliation', provider_order_id: providerOrderId,
+          status: OrderStatusEnum.PROCESSING } }, { new: true }).exec();
+      if (!fenced) throw new BadRequestException('Voucher dispatch is in flight or already resolved; reconcile after provider outcome is known');
+      order = fenced;
+    }
+
     // Cập nhật provider_order_id cho order (nếu khác)
     if (order.provider_order_id !== providerOrderId) {
       order.provider_order_id = providerOrderId;
@@ -2026,6 +2100,11 @@ export class OrdersService {
     this.logger.log(
       `syncProviderOrder: provider trả ${proxies.length} proxy. Sample: host=${proxies[0]?.host} port=${proxies[0]?.port} user=${proxies[0]?.username}`,
     );
+
+    if (order.voucher_snapshot) {
+      await this.vouchers.materialize(order._id, { proxies, provider_order_id: providerOrderId, provider_metadata: order.provider_metadata }, partner.code);
+      return { message: 'Voucher provider outcome reconciled', imported: proxies.length, quantity: order.quantity };
+    }
 
     // Tránh insert trùng theo (ip,port) trong cùng order
     const existing = await this.proxyModel
@@ -2221,7 +2300,7 @@ export class OrdersService {
   }
 
   async delete(id: string, actor = 'admin') {
-    const order = await this.orderModel.findByIdAndDelete(id).exec();
+    const order = await this.orderModel.findOneAndDelete({ _id: id, voucher_snapshot: null }).exec();
     if (!order) throw new BadRequestException('Order not found');
     void this.orderLogService.info(
       id,

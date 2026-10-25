@@ -36,6 +36,14 @@ export class User {
   @Prop({ type: Number, default: 0 })
   money: number;
 
+  // Durable idempotency boundary. Never prune without migrating receipt keys.
+  @Prop({ type: [Object], default: [], select: false })
+  deposit_credit_receipts: any[];
+
+  // Atomic money boundary for voucher debit/refund. Never prune keys; fail closed at cap.
+  @Prop({ type: [Object], default: [], select: false })
+  voucher_receipts: any[];
+
   @Prop({ default: '' })
   country: string;
 

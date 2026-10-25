@@ -13,6 +13,7 @@ export enum TransactionStatus {
   DUPLICATE  = 'duplicate',   // Trùng transaction_id
   FAILED     = 'failed',      // Lỗi khi xử lý
   REJECTED   = 'rejected',    // Admin huỷ giao dịch
+  CREDITING  = 'crediting',   // Durable credit plan reserved; retry to recover
 }
 
 export enum PaymentMethod {
@@ -24,6 +25,17 @@ export enum PaymentMethod {
 
 @Schema({ timestamps: true })
 export class Transaction {
+  @Prop({ type: Object, default: null })
+  credit_plan: any;
+
+  @Prop({ type: Object, default: null })
+  promotion_snapshot: any;
+
+  @Prop({ type: Date, default: null })
+  credited_at: Date | null;
+
+  @Prop({ type: Date, default: null })
+  topup_success_claimed_at: Date | null;
   // ─── Dữ liệu gốc từ pays2 ─────────────────────────────────────────────────
   @Prop({ required: true, unique: true })
   transaction_id: number;

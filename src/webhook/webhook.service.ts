@@ -1,5 +1,5 @@
 import { assertCommerceEnabled } from '../common/commerce-policy';
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, HttpException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as crypto from 'crypto';
@@ -12,6 +12,8 @@ import { WebhookLog, WebhookLogDocument, WebhookStep, WebhookStepStatus } from '
 import { OrderStatusEnum, PaymentStatusEnum } from '../enum/order.enum';
 import { NotificationGateway } from './notification.gateway';
 import { featureFlags } from '../common/feature-flags';
+import { DepositPromotionsService, vnd } from '../deposit-promotions/deposit-promotions.service';
+import { DepositCreditService } from '../deposit-promotions/deposit-credit.service';
 
 // Số tiền tối thiểu cho 1 lần nạp (VND). Nhỏ hơn sẽ bị từ chối, không cộng vào ví.
 const MIN_DEPOSIT_AMOUNT = 10_000;
@@ -55,7 +57,28 @@ export class WebhookService {
     @InjectModel(WalletTransaction.name) private walletTxModel: Model<WalletTransactionDocument>,
     @InjectModel(WebhookLog.name)   private webhookLogModel: Model<WebhookLogDocument>,
     private readonly notification: NotificationGateway,
+    private readonly promotions: DepositPromotionsService,
+    private readonly depositCredit: DepositCreditService,
   ) {}
+
+  private async notifyBankCredit(tx: any, userId: string) {
+    const claimed = await this.txModel.findOneAndUpdate(
+      { _id: tx._id, status: TransactionStatus.PROCESSED, topup_success_claimed_at: null },
+      { $set: { topup_success_claimed_at: new Date() } },
+      { new: true },
+    ).lean().exec();
+    if (!claimed) return;
+    const snapshot = claimed.promotion_snapshot;
+    await this.notification.sendTopupSuccess(userId, {
+      amount: claimed.transfer_amount,
+      balance: claimed.balance_after,
+      ...(snapshot ? {
+        bonusAmount: snapshot.bonusAmount,
+        totalAmount: snapshot.totalAmount,
+        promotionName: snapshot.promotionName,
+      } : {}),
+    });
+  }
 
   // ─── Xác minh checksum pays2 ──────────────────────────────────────────────
   // Formula: md5(id + gateway + transactionDate + accountNumber + transferAmount + PAYS2_CHECKSUM_KEY)
@@ -88,6 +111,10 @@ export class WebhookService {
   // ─── Tìm user theo mã nạp tiền trong nội dung CK ─────────────────────────
   // User cần ghi topup_code (VD: NAP3F9A2C1D) vào nội dung chuyển khoản
   private async findUserFromContent(content: string): Promise<UserDocument | null> {
+    if (this.promotions.code(content)) {
+      const intent = await this.promotions.findIntent(content);
+      return intent ? this.userModel.findById(intent.userId).select('_id email money topup_code').exec() : null;
+    }
     const text = content.toUpperCase();
 
     // 1. Tìm topup_code dạng NAP + 8 ký tự hex
@@ -127,6 +154,7 @@ export class WebhookService {
     assertCommerceEnabled();
     const results: string[] = [];
     const allSteps: WebhookStep[] = [];
+    let retryRequired = false;
 
     for (const tx of body.transactions) {
       // Normalize transaction_id về number để so sánh đúng khi duplicate check
@@ -157,7 +185,9 @@ export class WebhookService {
         }
 
         // Bước 2: Thông tin giao dịch ngân hàng
-        const amount = Number(tx.transferAmount);
+        const amount = vnd(Number(tx.transferAmount));
+        if (!Number.isSafeInteger(txId) || txId < 0) throw new BadRequestException('Invalid provider transaction id');
+        if (!Number.isFinite(new Date(tx.transactionDate).getTime())) throw new BadRequestException('Invalid transfer date');
         steps.push({
           step:   2,
           title:  'Giao dịch ngân hàng',
@@ -167,7 +197,7 @@ export class WebhookService {
         });
 
         // 2. Tìm user từ nội dung CK
-        const code = tx.content.toUpperCase().match(/NAP[0-9A-F]{8}/)?.[0] ?? '';
+        const code = this.promotions.code(tx.content) ?? tx.content.toUpperCase().match(/NAP[0-9A-F]{8}/)?.[0] ?? '';
         const user = await this.findUserFromContent(tx.content);
 
         // Bước 3: Khớp nội dung CK với user
@@ -178,7 +208,7 @@ export class WebhookService {
             detail: `Không tìm được user trong nội dung: "${tx.content}"`,
             status: err,
           });
-          await this.txModel.create({
+          await this.txModel.updateOne({ transaction_id: txId }, { $setOnInsert: {
             transaction_id:     txId,
             gateway:            tx.gateway,
             transaction_date:   new Date(tx.transactionDate),
@@ -193,7 +223,7 @@ export class WebhookService {
             note:               'Không tìm được user trong nội dung CK',
             raw_payload:        normalizedTx,
             raw_headers:        headers ?? null,
-          });
+          } }, { upsert: true }).exec();
           allSteps.push(...steps);
           results.push(`#${txId}: unmatched`);
           continue;
@@ -274,7 +304,7 @@ export class WebhookService {
               transfer_type:      tx.transferType,
               transfer_amount:    amount,
               checksum:           tx.checksum,
-              status:             holdForReview ? TransactionStatus.PENDING : TransactionStatus.PROCESSED,
+              status:             TransactionStatus.PENDING,
               user_id:            user._id,
               note:               holdForReview
                 ? `Nạp tiền đang tắt — chờ admin duyệt ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`
@@ -286,14 +316,15 @@ export class WebhookService {
           { upsert: true, new: false },
         ).exec();
 
-        if (existing) {
+        if (existing && (existing.status === TransactionStatus.REJECTED ||
+            (existing.status === TransactionStatus.PROCESSED && !existing.credit_plan))) {
           steps.push({ step: 4, title: 'Lệnh nạp tiền', detail: `Trùng giao dịch #${txId} — bỏ qua`, status: warn });
           allSteps.push(...steps);
           results.push(`#${txId}: duplicate → skipped`);
           continue;
         }
 
-        if (holdForReview) {
+        if (holdForReview && existing?.status !== TransactionStatus.CREDITING) {
           steps.push({
             step:   4,
             title:  'Chờ admin duyệt',
@@ -318,19 +349,14 @@ export class WebhookService {
         });
 
         // 5. Cộng tiền atomic
-        const updatedUser = await this.userModel.findByIdAndUpdate(
-          user._id,
-          { $inc: { money: amount } },
-          { new: true },
-        ).exec();
-
-        const balanceAfter  = Number(updatedUser?.money ?? 0);
-        const balanceBefore = balanceAfter - amount;
-
-        await this.txModel.findOneAndUpdate(
-          { transaction_id: txId },
-          { balance_before: balanceBefore, balance_after: balanceAfter },
-        ).exec();
+        const stored = await this.txModel.findOne({ transaction_id: txId }).exec();
+        if (!stored || stored.transfer_amount !== amount || stored.content !== tx.content ||
+            stored.transaction_date.getTime() !== new Date(tx.transactionDate).getTime()) {
+          throw new BadRequestException('Provider retry does not match original transfer');
+        }
+        const credited = await this.depositCredit.credit(stored._id.toString(), user._id.toString());
+        const balanceAfter = credited!.balance_after;
+        const balanceBefore = credited!.balance_before;
 
         // Bước 5: Tiền đã cộng
         steps.push({
@@ -342,7 +368,7 @@ export class WebhookService {
         });
 
         this.logger.log(`Webhook #${txId}: nạp ${amount}đ → ${user.email} (${balanceBefore} → ${balanceAfter})`);
-        this.notification.sendTopupSuccess(user._id.toString(), { amount, balance: balanceAfter });
+        await this.notifyBankCredit(credited, user._id.toString());
         allSteps.push(...steps);
         results.push(`#${tx.id}: processed → ${user.email}`);
 
@@ -351,10 +377,14 @@ export class WebhookService {
         allSteps.push(...steps);
         this.logger.error(`Webhook #${tx.id}: lỗi — ${e?.message}`);
         results.push(`#${tx.id}: error — ${e?.message}`);
+        // Permanent business errors are recorded in this batch's log, but must
+        // not poison later transfers. Unknown/DB/server errors require a retry.
+        const status = e instanceof HttpException ? e.getStatus() : 500;
+        if (status !== 400 && status !== 409) retryRequired = true;
       }
     }
 
-    const response = { success: true, message: results.join(', ') };
+    const response = { success: !retryRequired, message: results.join(', ') };
 
     await this.webhookLogModel.create({
       source,
@@ -362,10 +392,13 @@ export class WebhookService {
       payload:     body,
       response,
       steps:       allSteps,
-      status_code: 200,
+      status_code: retryRequired ? 503 : 200,
       ip:          ip ?? '',
     });
 
+    // Finish every item and persist the audit log before asking the provider to
+    // retry the batch. Already credited receipts remain safe on that retry.
+    if (retryRequired) throw new ServiceUnavailableException(response);
     return response;
   }
 
@@ -694,7 +727,7 @@ export class WebhookService {
     const [data, total, totalAmount] = await Promise.all([
       this.txModel
         .find(filter)
-        .select('transaction_id gateway transaction_date transfer_amount status source note createdAt')
+        .select('transaction_id gateway transaction_date transfer_amount status source note createdAt promotion_snapshot credited_at balance_before balance_after')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -717,7 +750,7 @@ export class WebhookService {
 
   // ─── API thống kê (admin) ─────────────────────────────────────────────────
   async getStats() {
-    const [total, processed, unmatched, failed, duplicate, totalAmount] = await Promise.all([
+    const [total, processed, unmatched, failed, duplicate, totalAmount, crediting] = await Promise.all([
       this.txModel.countDocuments({ transfer_type: 'IN' }),
       this.txModel.countDocuments({ status: TransactionStatus.PROCESSED }),
       this.txModel.countDocuments({ status: TransactionStatus.UNMATCHED }),
@@ -727,6 +760,7 @@ export class WebhookService {
         { $match: { status: TransactionStatus.PROCESSED } },
         { $group: { _id: null, total: { $sum: '$transfer_amount' } } },
       ]),
+      this.txModel.countDocuments({ status: TransactionStatus.CREDITING }),
     ]);
 
     return {
@@ -735,6 +769,7 @@ export class WebhookService {
       unmatched,
       failed,
       duplicate,
+      crediting,
       total_amount: totalAmount[0]?.total ?? 0,
     };
   }
@@ -768,7 +803,7 @@ export class WebhookService {
         .sort({ transaction_date: -1 })
         .skip(skip)
         .limit(limit)
-        .select('transaction_date content transfer_amount gateway user_id status transaction_number account_number')
+        .select('transaction_date content transfer_amount gateway user_id status transaction_number account_number promotion_snapshot credited_at balance_before balance_after')
         .exec(),
       this.txModel.countDocuments(filter),
       this.txModel.aggregate([
@@ -779,6 +814,7 @@ export class WebhookService {
             total_amount:     { $sum: '$transfer_amount' },
             total_processed:  { $sum: { $cond: [{ $eq: ['$status', TransactionStatus.PROCESSED] }, 1, 0] } },
             total_unmatched:  { $sum: { $cond: [{ $eq: ['$status', TransactionStatus.UNMATCHED] }, 1, 0] } },
+            total_crediting:  { $sum: { $cond: [{ $eq: ['$status', TransactionStatus.CREDITING] }, 1, 0] } },
             amount_processed: { $sum: { $cond: [{ $eq: ['$status', TransactionStatus.PROCESSED] }, '$transfer_amount', 0] } },
           },
         },
@@ -798,6 +834,10 @@ export class WebhookService {
         transaction_number: tx.transaction_number,
         recipient:          (tx.user_id as any)?.email ?? null,
         status:             tx.status,
+        promotion_snapshot: tx.promotion_snapshot,
+        credited_at:        tx.credited_at,
+        balance_before:     tx.balance_before,
+        balance_after:      tx.balance_after,
       })),
       pagination: { total, page, limit, total_pages: Math.ceil(total / limit) },
       summary: {
@@ -806,6 +846,7 @@ export class WebhookService {
         total_processed:    s.total_processed,
         amount_processed:   s.amount_processed,
         total_unmatched:    s.total_unmatched,
+        total_crediting:    s.total_crediting ?? 0,
       },
     };
   }
@@ -815,7 +856,7 @@ export class WebhookService {
     assertCommerceEnabled();
     const tx = await this.txModel.findById(txId).exec();
     if (!tx) throw new BadRequestException('Không tìm thấy giao dịch');
-    if (tx.status === TransactionStatus.PROCESSED) {
+    if (tx.status === TransactionStatus.PROCESSED && !tx.credit_plan) {
       throw new BadRequestException('Giao dịch đã được xử lý trước đó');
     }
 
@@ -832,40 +873,27 @@ export class WebhookService {
       if (!user) throw new BadRequestException('Không tìm thấy người dùng với email này');
     }
 
-    // Ưu tiên 3: dùng admin đang đăng nhập
-    if (!user && adminUserId) {
-      user = await this.userModel.findById(adminUserId).select('_id email money').exec();
-    }
-
     if (!user) {
       throw new BadRequestException('Cần nhập email để cộng tiền');
     }
 
     const amount = tx.transfer_amount;
-    const balanceBefore = Number(user.money ?? 0);
-    const balanceAfter = balanceBefore + amount;
+    const credited = await this.depositCredit.credit(txId, user._id.toString(), adminUserId ?? 'admin');
+    const balanceBefore = credited!.balance_before;
+    const balanceAfter = credited!.balance_after;
 
-    await this.userModel.findByIdAndUpdate(user._id, { $inc: { money: amount } }).exec();
-
-    tx.status = TransactionStatus.PROCESSED;
-    tx.user_id = user._id;
-    tx.balance_before = balanceBefore;
-    tx.balance_after = balanceAfter;
-    tx.source = 'bank';
-    tx.note = `Admin duyệt — nạp ${amount.toLocaleString('vi-VN')}đ cho ${user.email}`;
-    await tx.save();
-
-    this.notification.sendTopupSuccess(user._id.toString(), { amount, balance: balanceAfter });
+    await this.notifyBankCredit(credited, user._id.toString());
 
     return {
       message: 'Duyệt giao dịch thành công',
       data: {
         _id: tx._id,
-        status: tx.status,
+        status: credited!.status,
         user_id: { _id: user._id, email: user.email },
         balance_before: balanceBefore,
         balance_after: balanceAfter,
         transfer_amount: amount,
+        promotion_snapshot: credited!.promotion_snapshot,
       },
     };
   }
@@ -874,18 +902,21 @@ export class WebhookService {
   async rejectTransaction(txId: string, note?: string) {
     const tx = await this.txModel.findById(txId).exec();
     if (!tx) throw new BadRequestException('Giao dịch không tồn tại');
-    if (tx.status === TransactionStatus.PROCESSED) {
+    if (tx.status === TransactionStatus.PROCESSED || tx.status === TransactionStatus.CREDITING) {
       throw new BadRequestException('Không thể huỷ giao dịch đã xử lý');
     }
     if (tx.status === TransactionStatus.REJECTED) {
       throw new BadRequestException('Giao dịch đã bị huỷ');
     }
 
-    tx.status = TransactionStatus.REJECTED;
-    tx.note = note || 'Admin huỷ giao dịch';
-    await tx.save();
+    const rejected = await this.txModel.findOneAndUpdate(
+      { _id: tx._id, status: { $nin: [TransactionStatus.PROCESSED, TransactionStatus.CREDITING] }, credit_plan: null },
+      { $set: { status: TransactionStatus.REJECTED, note: note || 'Admin huỷ giao dịch' } },
+      { new: true },
+    ).exec();
+    if (!rejected) throw new BadRequestException('Transaction is being credited; cannot reject');
 
-    return { message: 'Đã huỷ giao dịch', transaction: tx };
+    return { message: 'Đã huỷ giao dịch', transaction: rejected };
   }
 
   // ─── User: dashboard ────────────────────────────────────────────────────
@@ -1041,7 +1072,7 @@ export class WebhookService {
       this.txModel
         .find({ transfer_type: 'IN' })
         .populate('user_id', 'email name')
-        .select('transaction_id gateway transfer_amount content status createdAt')
+        .select('transaction_id gateway transfer_amount content status createdAt promotion_snapshot credited_at balance_before balance_after')
         .sort({ createdAt: -1 })
         .limit(5)
         .exec(),

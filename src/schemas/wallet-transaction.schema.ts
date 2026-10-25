@@ -8,6 +8,7 @@ export type WalletTransactionDocument = WalletTransaction & Document & {
 
 export enum WalletTxType {
   DEPOSIT   = 'deposit',   // Nạp tiền (bank / admin thủ công)
+  PROMOTION_BONUS = 'promotion_bonus',
   PURCHASE  = 'purchase',  // Mua proxy
   RENEW     = 'renew',     // Gia hạn proxy
   REFUND    = 'refund',    // Hoàn tiền
@@ -16,6 +17,8 @@ export enum WalletTxType {
 
 @Schema({ timestamps: true })
 export class WalletTransaction {
+  @Prop({ type: String })
+  credit_key?: string;
   @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
   user_id: Types.ObjectId;
 
@@ -57,3 +60,4 @@ export const WalletTransactionSchema = SchemaFactory.createForClass(WalletTransa
 WalletTransactionSchema.index({ user_id: 1, createdAt: -1 });
 WalletTransactionSchema.index({ type: 1 });
 WalletTransactionSchema.index({ ref_id: 1 });
+WalletTransactionSchema.index({ credit_key: 1 }, { unique: true, partialFilterExpression: { credit_key: { $type: 'string' } } });

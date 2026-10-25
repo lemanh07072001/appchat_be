@@ -46,6 +46,11 @@ export class OrdersController {
   }
 
   // ─── Báo giá theo GB (xem được khi chưa đăng nhập) ───────
+  @Post('api/orders/quote')
+  quote(@Req() req: any, @Body() dto: BuyOrderDto) {
+    return this.ordersService.quote(req.user.sub, dto);
+  }
+
   // Public để khách vãng lai vẫn thấy giá trước khi tạo tài khoản; có JWT thì
   // `user.sub` được dùng để áp giá ưu đãi riêng.
   @Post('api/orders/quote-bandwidth')
@@ -159,8 +164,8 @@ export class OrdersController {
 
   @Post('api/admin/orders/:id/approve-refund')
   @UseGuards(AdminGuard)
-  approveRefund(@Param('id') id: string) {
-    return this.ordersService.approveRefund(id);
+  approveRefund(@Param('id') id: string, @Req() req: any) {
+    return this.ordersService.approveRefund(id, req.user.sub);
   }
 
   // ─── Admin: hoàn tiền thủ công (linh hoạt hơn approve-refund) ────────

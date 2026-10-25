@@ -16,6 +16,7 @@ import { OrderLogService } from './order-log.service';
 import { OrderLogStep } from '../schemas/order-log.schema';
 import { NotificationGateway } from '../webhook/notification.gateway';
 import { Service, ServiceDocument } from '../schemas/services.schema';
+import { VouchersService } from '../vouchers/vouchers.service';
 
 /** Timeout BRPOP — block tối đa 5s chờ order mới */
 const BRPOP_TIMEOUT_SECONDS  = 5;
@@ -45,6 +46,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
     private readonly affiliateService: AffiliateService,
     private readonly orderLogService:  OrderLogService,
     private readonly notification:     NotificationGateway,
+    private readonly vouchers: VouchersService,
   ) {}
 
   onModuleInit() {
@@ -82,14 +84,14 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
 
     const order = await this.orderModel
       .findById(orderId)
-      .select('_id provider_order_id provider_metadata partner_id service_id config user_id total_price quantity status')
+      .select('_id provider_order_id provider_metadata partner_id service_id config user_id total_price quantity status voucher_snapshot actual_quantity refunded_amount voucher_provider_confirmed_failed voucher_resolution')
       .exec();
 
     if (!order) {
       this.logger.warn(`Order ${orderId}: không tìm thấy trong DB`);
       return;
     }
-    if (order.status !== OrderStatusEnum.PROCESSING) {
+    if (order.status !== OrderStatusEnum.PROCESSING && !(order.voucher_snapshot && order.voucher_resolution === 'open' && order.status === OrderStatusEnum.PENDING_REFUND)) {
       this.logger.debug(`Order ${orderId}: status=${order.status}, không còn PROCESSING → bỏ qua`);
       void this.orderLogService.warn(
         orderId,
@@ -106,7 +108,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
 
     if (!partner?.code || !partner?.token_api) {
       this.logger.warn(`Order ${orderId}: không có partner hợp lệ`);
-      await this.orderModel.findByIdAndUpdate(orderId, {
+      await this.orderModel.findOneAndUpdate({ _id: orderId, $or: [{ voucher_snapshot: null }, { voucher_resolution: 'open', status: { $in: [OrderStatusEnum.PROCESSING, OrderStatusEnum.PENDING_REFUND] } }] }, {
         status:        OrderStatusEnum.PENDING_REFUND,
         error_message: 'Order không có partner hợp lệ',
       }).exec();
@@ -122,7 +124,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
     const provider = this.providerFactory.getProvider(partner.code);
     if (!provider.fetchOrderProxies) {
       this.logger.warn(`Order ${orderId}: provider "${partner.code}" không hỗ trợ fetchOrderProxies`);
-      await this.orderModel.findByIdAndUpdate(orderId, {
+      await this.orderModel.findOneAndUpdate({ _id: orderId, $or: [{ voucher_snapshot: null }, { voucher_resolution: 'open', status: { $in: [OrderStatusEnum.PROCESSING, OrderStatusEnum.PENDING_REFUND] } }] }, {
         status:        OrderStatusEnum.PENDING_REFUND,
         error_message: `Provider "${partner.code}" không hỗ trợ lấy proxy`,
       }).exec();
@@ -169,6 +171,11 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
         }
 
         // Idempotent: skip nếu proxy đã insert
+        if (order.voucher_snapshot) {
+          await this.vouchers.materialize(order._id, { proxies, provider_order_id: order.provider_order_id, provider_metadata: order.provider_metadata }, partner.code);
+          return;
+        }
+
         const existing = await this.proxyModel.countDocuments({ order_id: order._id }).exec();
         if (existing > 0) {
           await this.orderModel.findByIdAndUpdate(order._id, { status: OrderStatusEnum.ACTIVE }).exec();
@@ -285,7 +292,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
     const errorMsg = `Không nhận được proxy sau ${MAX_POLL_ATTEMPTS} lần poll (${elapsed}ms)`;
     this.logger.warn(`Order ${orderId}: hết ${MAX_POLL_ATTEMPTS} lần poll (${elapsed}ms) → PENDING_REFUND`);
 
-    await this.orderModel.findByIdAndUpdate(orderId, {
+    await this.orderModel.findOneAndUpdate({ _id: orderId, $or: [{ voucher_snapshot: null }, { voucher_resolution: 'open', status: { $in: [OrderStatusEnum.PROCESSING, OrderStatusEnum.PENDING_REFUND] } }] }, {
       status:        OrderStatusEnum.PENDING_REFUND,
       error_message: errorMsg,
       admin_note:    `Auto PENDING_REFUND: ProcessingWorker poll ${MAX_POLL_ATTEMPTS} lần không có proxy từ provider`,

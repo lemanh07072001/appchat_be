@@ -11,9 +11,11 @@ import { WebhookService } from './webhook.service';
 import { WebhookController } from './webhook.controller';
 import { ChatController } from './chat.controller';
 import { NotificationGateway } from './notification.gateway';
+import { DepositPromotionsModule } from '../deposit-promotions/deposit-promotions.module';
 
 @Module({
   imports: [
+    DepositPromotionsModule,
     MongooseModule.forFeature([
       { name: Transaction.name,  schema: TransactionSchema },
       { name: User.name,         schema: UserSchema },
