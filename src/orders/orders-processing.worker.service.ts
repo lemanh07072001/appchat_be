@@ -85,7 +85,8 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
 
     const order = await this.orderModel
       .findById(orderId)
-      .select('_id provider_order_id provider_metadata partner_id service_id config user_id total_price quantity status voucher_snapshot actual_quantity refunded_amount voucher_provider_confirmed_failed voucher_resolution')
+      .select('_id provider_order_id provider_metadata partner_id service_id config user_id total_price quantity status voucher_snapshot actual_quantity refunded_amount voucher_provider_confirmed_failed voucher_resolution country_id')
+      .populate({ path: 'country_id', select: 'code' })
       .exec();
 
     if (!order) {
@@ -189,6 +190,11 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
         // Batch insert
         const orderObjectId = new Types.ObjectId(order._id as any);
         const isCdk = (order.config as any)?.is_cdk === true;
+        // Quốc gia của ĐƠN (khách đã mua), dùng khi provider không trả
+        // country_code. Trước đây mặc định cứng 'VN' nên proxy US bị gắn nhãn VN.
+        const orderCountryCode =
+          ((order.country_id as any)?.code ?? '').toString().trim().toUpperCase() ||
+          undefined;
         const proxyDocs = proxies.map((p: any) => ({
           order_id:          orderObjectId,
           proxy_type_id:     order.service_id ?? null,
@@ -204,7 +210,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
           location:          p.location ?? '',
           isp:               p.isp      ?? '',
           provider:          partner.code,
-          country_code:      p.country_code ?? 'VN',
+          country_code:      p.country_code ?? orderCountryCode ?? 'VN',
           is_active:         true,
           is_available:      false,
           cdk_key:           isCdk ? randomBytes(16).toString('hex') : undefined,

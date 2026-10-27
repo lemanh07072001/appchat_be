@@ -2480,6 +2480,13 @@ export class OrdersService {
 
     const orderObjectId = new Types.ObjectId(order._id as any);
     const isCdk = (order.config as any)?.is_cdk === true;
+    // Quốc gia của đơn — dùng khi provider không trả country_code (tránh mặc
+    // định cứng 'VN' cho proxy thực tế ở nước khác).
+    const occDoc = order.country_id
+      ? await this.countryModel.findById(order.country_id).select('code').lean().exec()
+      : null;
+    const orderCountryCode =
+      ((occDoc as any)?.code ?? '').toString().trim().toUpperCase() || undefined;
     const docs = proxies
       .filter((p: any) => !existingSet.has(`${p.host}:${Number(p.port)}`))
       .map((p: any) => {
@@ -2496,7 +2503,7 @@ export class OrdersService {
           location:          p.location ?? '',
           isp:               p.isp      ?? '',
           provider:          partner.code,
-          country_code:      p.country_code ?? 'VN',
+          country_code:      p.country_code ?? orderCountryCode ?? 'VN',
           is_active:         true,
           is_available:      false,
         };
