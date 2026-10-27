@@ -1,4 +1,4 @@
-import { assertCommerceEnabled } from '../common/commerce-policy';
+import { assertDepositEnabled } from '../common/commerce-policy';
 import { BadRequestException, HttpException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -151,7 +151,7 @@ export class WebhookService {
     ip?: string,
     source: 'pays2' | 'sepay' = 'pays2',
   ): Promise<{ success: boolean; message: string }> {
-    assertCommerceEnabled();
+    assertDepositEnabled();
     const results: string[] = [];
     const allSteps: WebhookStep[] = [];
     let retryRequired = false;
@@ -437,7 +437,7 @@ export class WebhookService {
     headers?: Record<string, any>,
     ip?: string,
   ): Promise<{ success: boolean; message: string }> {
-    assertCommerceEnabled();
+    assertDepositEnabled();
     const steps: WebhookStep[] = [];
     const ok   = WebhookStepStatus.OK;
     const warn = WebhookStepStatus.WARN;
@@ -853,7 +853,7 @@ export class WebhookService {
 
   // ─── Admin: duyệt giao dịch — cộng tiền ────────────────────────────────
   async approveTransaction(txId: string, email?: string, adminUserId?: string) {
-    assertCommerceEnabled();
+    assertDepositEnabled();
     const tx = await this.txModel.findById(txId).exec();
     if (!tx) throw new BadRequestException('Không tìm thấy giao dịch');
     if (tx.status === TransactionStatus.PROCESSED && !tx.credit_plan) {

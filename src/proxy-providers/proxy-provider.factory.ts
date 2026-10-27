@@ -87,6 +87,12 @@ export class ProxyProviderFactory implements OnModuleInit {
           usage: typeof provider.fetchUsage === 'function',
           topup: typeof provider.extendBandwidth === 'function',
           check: typeof provider.checkConnection === 'function',
+          catalog: typeof provider.listPackages === 'function',
+          providerOrders: typeof provider.listProviderOrders === 'function',
+          countries: typeof provider.listCountries === 'function',
+          geo: typeof provider.fetchOrderGeo === 'function',
+          password: typeof provider.changeProxyPassword === 'function',
+          allowedIps: typeof provider.setAllowedIps === 'function',
         },
       }))
       .sort((a, b) => a.code.localeCompare(b.code));

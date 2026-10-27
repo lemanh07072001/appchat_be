@@ -31,6 +31,7 @@ describe('ProxyProviderFactory', () => {
         'twoproxy',
         'proxyseller',
         'omoproxy',
+        'gpnip',
       ]),
     );
   });
@@ -55,20 +56,20 @@ describe('ProxyProviderFactory', () => {
     expect(byCode['homeproxy'].rotate).toBe(true);
   });
 
-  it('chỉ OmoProxy đọc được lưu lượng — đó là provider duy nhất bán theo GB', () => {
+  it('OmoProxy và GPNIP hỗ trợ đọc lưu lượng theo GB', () => {
     const usage = factory
       .listProviders()
       .filter((p) => p.capabilities.usage)
       .map((p) => p.code);
-    expect(usage).toEqual(['omoproxy']);
+    expect(usage).toEqual(['gpnip', 'omoproxy']);
   });
 
-  it('chỉ OmoProxy nạp thêm GB được — cùng lý do: provider duy nhất bán theo GB', () => {
+  it('OmoProxy và GPNIP hỗ trợ nạp thêm GB', () => {
     const topup = factory
       .listProviders()
       .filter((p) => p.capabilities.topup)
       .map((p) => p.code);
-    expect(topup).toEqual(['omoproxy']);
+    expect(topup).toEqual(['gpnip', 'omoproxy']);
   });
 
   it('OmoProxy mua/gia hạn được, nhưng không xoay IP và không huỷ đơn', () => {
@@ -81,9 +82,42 @@ describe('ProxyProviderFactory', () => {
     });
   });
 
+  it('GPNIP hỗ trợ mua/gia hạn và GB, không hỗ trợ xoay/hủy', () => {
+    const gpnip = factory.listProviders().find((p) => p.code === 'gpnip')!;
+    expect(gpnip.capabilities).toMatchObject({
+      buy: true, renew: true, rotate: false, cancel: false,
+      usage: true, topup: true, check: true,
+    });
+  });
+  it('GPNIP khai đủ các năng lực tự phục vụ để giao diện ẩn/hiện đúng nút', () => {
+    const gpnip = factory.listProviders().find((p) => p.code === 'gpnip')!;
+    expect(gpnip.capabilities).toMatchObject({
+      catalog: true,
+      providerOrders: true,
+      countries: true,
+      geo: true,
+      password: true,
+      allowedIps: true,
+    });
+  });
+
+  // Dò bằng sự tồn tại của method: adapter chưa viết thì nút phải tắt, chứ
+  // không hiện ra rồi báo "chưa hỗ trợ" sau khi khách đã bấm.
+  it('provider chưa có các method đó thì năng lực phải là false', () => {
+    const sieutoc = factory.listProviders().find((p) => p.code === 'proxysieutoc')!;
+    expect(sieutoc.capabilities).toMatchObject({
+      password: false,
+      allowedIps: false,
+      geo: false,
+      countries: false,
+      providerOrders: false,
+    });
+  });
+
   it('hasProvider phân biệt được code có và không có adapter', () => {
     expect(factory.hasProvider('homeproxy')).toBe(true);
     expect(factory.hasProvider('omoproxy')).toBe(true);
+    expect(factory.hasProvider('gpnip')).toBe(true);
     expect(factory.hasProvider('ncc-chua-co')).toBe(false);
   });
 

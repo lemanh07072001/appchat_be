@@ -1,4 +1,3 @@
-import { COMMERCE_DISABLED } from '../common/commerce-policy';
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
@@ -81,7 +80,6 @@ export class RenewScheduler implements OnModuleInit {
   /** 8h sáng giờ VN mỗi ngày — quét các bộ đã bật lịch tự gia hạn */
   @Cron('0 8 * * *', { timeZone: 'Asia/Ho_Chi_Minh' })
   async scanAndRenew(): Promise<void> {
-    if (COMMERCE_DISABLED) return;
     // Tắt mua/gia hạn thì bỏ cả lượt quét: không trừ ví, và cũng không để
     // runSelection tự tắt lịch của user vì một lần gia hạn không được phép chạy.
     if (!featureFlags.purchaseEnabled) {

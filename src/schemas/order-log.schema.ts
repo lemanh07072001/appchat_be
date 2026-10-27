@@ -70,6 +70,10 @@ export enum OrderLogStep {
   AUTO_ORDER_RENEWED     = 'auto.order_renewed',
   ADMIN_ORDER_RETRY      = 'admin.order_retry',
   ADMIN_PROXY_IMPORTED   = 'admin.proxy_imported',
+
+  // ─── User tự phục vụ trên đơn (không tiêu tiền) ──────────────────────
+  USER_PROXY_PASSWORD_CHANGED = 'user.proxy_password_changed',
+  USER_ALLOWED_IPS_UPDATED    = 'user.allowed_ips_updated',
 }
 
 @Schema({ collection: 'order_logs', timestamps: true })

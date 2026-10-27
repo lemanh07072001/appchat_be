@@ -9,7 +9,7 @@
                               │
                     ┌─────────▼───────────┐
                     │  proxy-server (PM2)  │  ← HTTP API + Scheduler backup
-                    │     dist/main.js     │
+                    │     dist/src/main.js     │
                     └─────────┬───────────┘
                               │ LPUSH
                     ┌─────────▼───────────┐
@@ -18,7 +18,7 @@
                               │ BRPOP (realtime)
                     ┌─────────▼───────────┐
                     │  proxy-worker (PM2)  │  ← Xử lý order, gọi Provider API
-                    │    dist/worker.js    │
+                    │    dist/src/worker.js    │
                     └─────────────────────┘
                               │
                     ┌─────────▼───────────┐
@@ -172,8 +172,8 @@ pm2 start ecosystem.config.js
 ```
 
 Se khoi dong 2 process:
-- **proxy-server** (`dist/main.js`) — HTTP API + scheduler backup 30 phut
-- **proxy-worker** (`dist/worker.js`) — BRPOP worker xu ly order realtime
+- **proxy-server** (`dist/src/main.js`) — HTTP API + scheduler backup 30 phut
+- **proxy-worker** (`dist/src/worker.js`) — BRPOP worker xu ly order realtime
 
 Kiem tra:
 

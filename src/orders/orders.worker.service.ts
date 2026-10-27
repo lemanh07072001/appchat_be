@@ -1,3 +1,4 @@
+import { ORDER_WORKER_READY_KEY } from './worker-readiness';
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -56,6 +57,10 @@ export class OrdersWorkerService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
+    const heartbeat = () => this.redis.set(ORDER_WORKER_READY_KEY, '1', 'EX', 30)
+      .catch(() => this.logger.warn('Worker readiness heartbeat failed'));
+    void heartbeat();
+    setInterval(() => { void heartbeat(); }, 10_000).unref();
     void this.startWorker();
   }
 
@@ -141,7 +146,7 @@ export class OrdersWorkerService implements OnModuleInit {
         order.service_id ? this.serviceModel.findById(order.service_id).exec() : null,
       ]);
 
-      if (!partner || !partner.code) {
+      if (!partner || !partner.code || partner.status !== true || !partner.token_api?.trim()) {
         throw new Error('Order không có partner hợp lệ');
       }
 
@@ -191,12 +196,30 @@ export class OrdersWorkerService implements OnModuleInit {
         idService = service?.id_service || '';
       }
 
+      const maxAttempts = provider.retryBuy === false || order.voucher_snapshot ? 1 : MAX_RETRIES;
+
+      // A GPNIP POST may have charged upstream even if the network times out.
+      // Persist a claim before submission; ambiguous attempts require manual reconciliation.
+      if (partner.code === 'gpnip') {
+        if (order.provider_order_id) {
+          order.status = OrderStatusEnum.PROCESSING;
+          await order.save();
+          await this.redis.lpush(PROCESSING_ORDERS_KEY, orderId);
+          return;
+        }
+        if (order.config?.gpnip_purchase_started) {
+          throw new Error('GPNIP purchase already attempted; reconcile with provider before retrying');
+        }
+        order.config = { ...order.config, gpnip_purchase_started: true };
+        order.markModified('config');
+        await order.save();
+      }
+
       // Retry buy() tối đa MAX_RETRIES lần
       const retryErrors: string[] = [];
       let result: any = null;
       const tProviderStart = Date.now();
 
-      const maxAttempts = order.voucher_snapshot ? 1 : MAX_RETRIES;
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const tAttempt = Date.now();
         try {
@@ -222,11 +245,13 @@ export class OrdersWorkerService implements OnModuleInit {
           result = await provider.buy({
             token_api:        partner.token_api,
             quantity:         order.quantity,
+            pricing_mode:     order.pricing_mode,
+            bandwidth_gb:     order.bandwidth_gb,
             // HomeProxy rotating: product chỉ có gói 1 ngày
             duration_days:    (partner.code === 'homeproxy' && order.order_type === 'rotating') ? 1 : order.duration_days,
             proxy_type:       order.proxy_type,
-            body_api:         service?.body_api,
-            id_service:       idService,
+            body_api:         partner.code === 'gpnip' ? order.config?.gpnip_body_api as string ?? service?.body_api : service?.body_api,
+            id_service:       partner.code === 'gpnip' ? order.config?.gpnip_id_service as string ?? idService : idService,
             isp:              order.config?.isp             as string | undefined,
             protocol:         order.config?.protocol        as string | undefined,
             rotate_interval:  order.config?.rotate_interval as number | undefined,
@@ -241,6 +266,11 @@ export class OrdersWorkerService implements OnModuleInit {
           if (order.voucher_snapshot) await this.orderModel.updateOne({ _id: order._id }, {
             $set: { voucher_provider_result: result, voucher_provider_result_partner: partner.code, provider_order_id: result.provider_order_id ?? '', provider_metadata: result.provider_metadata ?? {} },
           });
+          if (partner.code === 'gpnip') {
+            order.provider_order_id = result.provider_order_id;
+            order.provider_metadata = result.provider_metadata ?? {};
+            await order.save();
+          }
 
           const providerCallMs = Date.now() - tAttempt;
           this.logger.log(`Order ${orderId}: [STEP 2] provider.buy() OK in ${providerCallMs}ms (attempt ${attempt})`);
@@ -319,9 +349,9 @@ export class OrdersWorkerService implements OnModuleInit {
         void this.orderLogService.error(
           orderId,
           OrderLogStep.WORKER_PROVIDER_FAIL,
-          `provider.buy() thất bại tất cả ${MAX_RETRIES} lần: ${errorSummary}`,
+          `provider.buy() thất bại tất cả ${maxAttempts} lần: ${errorSummary}`,
           {
-            retries:       MAX_RETRIES,
+            retries:       maxAttempts,
             errors:        retryErrors,
             provider_data: lastProviderData,
           },

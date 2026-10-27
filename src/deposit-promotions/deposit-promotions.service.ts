@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { randomBytes } from 'crypto';
-import { assertCommerceEnabled } from '../common/commerce-policy';
+import { assertDepositEnabled } from '../common/commerce-policy';
 import { DepositIntent, DepositPromotionCatalog, PromotionQuote } from './deposit-promotions.schema';
 
 export function vnd(value: unknown, minimum = 0): number {
@@ -101,7 +101,7 @@ export class DepositPromotionsService {
   }
 
   async createIntent(userId: string, amount: number) {
-    assertCommerceEnabled();
+    assertDepositEnabled();
     const now = new Date();
     const terms = (await this.list()).find(p => p.status === 'active' && new Date(p.start) <= now && now < new Date(p.end)) ?? null;
     const quote = calculateQuote(amount, terms);

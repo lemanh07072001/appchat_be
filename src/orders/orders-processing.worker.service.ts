@@ -13,6 +13,7 @@ import { REDIS_CLIENT, REDIS_BLOCKING_CLIENT } from '../redis/redis.module';
 import { PROCESSING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
+import { resolveServicePorts } from './service-ports.util';
 import { OrderLogStep } from '../schemas/order-log.schema';
 import { NotificationGateway } from '../webhook/notification.gateway';
 import { Service, ServiceDocument } from '../schemas/services.schema';
@@ -156,6 +157,8 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
           {
             metadata: order.provider_metadata,
             protocol: (order.config as any)?.protocol ?? (order as any).protocol,
+            // Cổng admin khai ở dịch vụ — thắng cổng nhà cung cấp trả về.
+            ports: await resolveServicePorts(order),
           },
         );
         this.logger.log(`Order ${orderId}: [STEP 4] fetchOrderProxies returned ${proxies?.length ?? 0} proxies (${Date.now() - tPoll}ms)`);

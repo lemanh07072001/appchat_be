@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsIn, IsMongoId, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsInt, IsMongoId, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /** Một bậc trong bảng giá theo GB. */
@@ -60,6 +60,24 @@ export class CreateServiceDto {
   @IsArray()
   @IsString({ each: true })
   protocol?: string[];
+
+  /**
+   * Cổng gateway admin tự khai. 0 = chưa khai (dùng cổng nhà cung cấp trả về).
+   *
+   * Cho phép 0 chứ không `@Min(1)`: admin phải xoá được giá trị đã khai để
+   * quay về cổng nhà cung cấp, mà form gửi 0 chứ không gửi `undefined`.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(65535)
+  port_http?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(65535)
+  port_socks?: number;
 
   @IsOptional()
   @IsObject()

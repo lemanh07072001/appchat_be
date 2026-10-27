@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { assertCommerceEnabled } from '../common/commerce-policy';
+import { assertDepositEnabled } from '../common/commerce-policy';
 import { Transaction, TransactionDocument, TransactionStatus, PaymentMethod } from '../schemas/transactions.schema';
 import { User, UserDocument } from '../schemas/users.schema';
 import { WalletTransaction, WalletTransactionDocument, WalletTxType } from '../schemas/wallet-transaction.schema';
@@ -17,7 +17,7 @@ export class DepositCreditService {
   ) {}
 
   async credit(id: string, userId: string, actor = 'webhook') {
-    assertCommerceEnabled();
+    assertDepositEnabled();
     let tx = await this.transactions.findById(id).lean().exec();
     if (!tx) throw new BadRequestException('Transaction not found');
     // Historical processed transactions predate this protocol: never credit again.

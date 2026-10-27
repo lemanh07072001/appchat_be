@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, Use
 import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
 import { ServicesService } from './services.service';
+import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 import { CreateServiceDto } from '../dto/create-service.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
@@ -15,6 +16,7 @@ export class ServicesController {
   constructor(
     private readonly servicesService: ServicesService,
     private readonly jwtService: JwtService,
+    private readonly providerFactory: ProxyProviderFactory,
   ) {}
 
   /** Soft-parse JWT từ Authorization header — không throw nếu thiếu/invalid. */
@@ -47,6 +49,17 @@ export class ServicesController {
   ) {
     const userId = await this.resolveUserId(req);
     return this.servicesService.findPublicList(category, usage_type, ip_version, userId);
+  }
+
+  /**
+   * Vùng phủ quốc gia của gói mà dịch vụ này bán — chỉ đọc.
+   *
+   * Lấy theo DỊCH VỤ, không theo lựa chọn tay: adapter tự đọc `product` từ
+   * gói, nên không ai khai được mã quốc gia mà gói đó không bán.
+   */
+  @Get('api/admin/services/:id/countries')
+  listCountries(@Param('id') id: string) {
+    return this.servicesService.listCountriesForService(this.providerFactory, id);
   }
 
   @Get('api/admin/services')

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { OrdersService } from './orders.service';
 import { OrdersExpirationScheduler } from './orders-expiration.scheduler';
@@ -8,6 +8,8 @@ import { CreateOrderDto } from '../dto/create-order.dto';
 import { BuyOrderDto } from '../dto/buy-order.dto';
 import { QuoteBandwidthDto } from '../dto/quote-bandwidth.dto';
 import { TopUpBandwidthDto } from '../dto/topup-bandwidth.dto';
+import { ChangeProxyPasswordDto } from '../dto/change-proxy-password.dto';
+import { SetAllowedIpsDto } from '../dto/set-allowed-ips.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { UserOrderQueryDto } from '../dto/user-order-query.dto';
 import { AuthGuard } from '../guards/auth.guard';
@@ -129,6 +131,39 @@ export class OrdersController {
   ) {
     const userId = (req as any).user.sub as string;
     return this.ordersService.topUpBandwidth(userId, id, dto.gb, idempotencyKey);
+  }
+
+  // ─── User: tự phục vụ trên đơn, KHÔNG tiêu tiền ──────────
+  // Không gắn PurchaseEnabledGuard: ba endpoint này không trừ ví, nên tắt
+  // bán hàng không được phép khoá luôn quyền quản lý đơn khách đã trả tiền.
+
+  /** Danh mục quốc gia/vùng của riêng đơn này — chỉ đọc. */
+  @Get('api/orders/my/:id/geo')
+  fetchOrderGeo(@Req() req: Request, @Param('id') id: string) {
+    const userId = (req as any).user.sub as string;
+    return this.ordersService.fetchOrderGeo(userId, id);
+  }
+
+  /** Đổi mật khẩu proxy ở nhà cung cấp rồi đồng bộ về proxy nội bộ. */
+  @Put('api/orders/my/:id/proxy-password')
+  changeProxyPassword(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() dto: ChangeProxyPasswordDto,
+  ) {
+    const userId = (req as any).user.sub as string;
+    return this.ordersService.changeProxyPassword(userId, id, dto.new_password);
+  }
+
+  /** Whitelist IP của đơn. Mảng rỗng = xoá whitelist. */
+  @Put('api/orders/my/:id/allowed-ips')
+  setAllowedIps(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() dto: SetAllowedIpsDto,
+  ) {
+    const userId = (req as any).user.sub as string;
+    return this.ordersService.setAllowedIps(userId, id, dto.allowed_ips);
   }
 
   // ─── Admin ────────────────────────────────────────────────

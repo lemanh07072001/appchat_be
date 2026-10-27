@@ -13,6 +13,7 @@ import { AffiliateService } from '../affiliate/affiliate.service';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
+import { resolveServicePorts } from './service-ports.util';
 import { OrderLogStep, OrderLogLevel } from '../schemas/order-log.schema';
 
 /** Window phục hồi: chỉ thử lại order tạo trong khoảng này (phút) */
@@ -129,6 +130,8 @@ export class OrdersRecoveryScheduler {
         {
           metadata: order.provider_metadata,
           protocol: (order.config as any)?.protocol ?? (order as any).protocol,
+          // Cổng admin khai ở dịch vụ — thắng cổng nhà cung cấp trả về.
+          ports: await resolveServicePorts(order),
         },
       );
     } catch (err: any) {

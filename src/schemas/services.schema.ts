@@ -38,6 +38,27 @@ export class Service {
   @Prop({ type: [String], default: [] })
   protocol: string[];
 
+  /**
+   * Cổng gateway của dịch vụ, do admin tự khai — KHÔNG phụ thuộc nhà cung cấp.
+   *
+   * Cổng là thuộc tính hạ tầng của sản phẩm (ví dụ `v3-v6-dc` luôn là 50/51),
+   * không phải thuộc tính của từng đơn. Nhà cung cấp lại không khai đều: field
+   * `ports` trong `/packages` trả `null`, và response của đơn có thể thiếu
+   * `port_socks` — lúc đó khách mất hẳn SOCKS5.
+   *
+   * 0 = chưa khai, dùng cổng nhà cung cấp trả về. Khác 0 = THẮNG cổng nhà cung
+   * cấp: với sản phẩm dùng DẢI cổng (Residential Pool 10000–10009) thì chỉ
+   * admin biết nên dùng cổng nào.
+   *
+   * Đọc sống (không snapshot vào đơn): nhà cung cấp đổi cổng thì mọi đơn đang
+   * chạy phải đổi theo, snapshot là để lại một loạt đơn trỏ vào cổng đã chết.
+   */
+  @Prop({ default: 0, min: 0, max: 65535 })
+  port_http: number;
+
+  @Prop({ default: 0, min: 0, max: 65535 })
+  port_socks: number;
+
   @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
   note: Record<string, string>;
 

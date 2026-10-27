@@ -159,6 +159,73 @@ export class PartnersService {
     };
   }
 
+  /**
+   * Partner + adapter cho các endpoint catalog CHỈ ĐỌC.
+   *
+   * Gộp lại một chỗ vì cả ba (gói / quốc gia / đơn NCC) cần đúng một bộ điều
+   * kiện: id hợp lệ, có key, có adapter. Mỗi endpoint tự kiểm tra method nó
+   * cần, để thông báo nói rõ thiếu CÁI GÌ.
+   */
+  private async resolveCatalogProvider(
+    factory: ProxyProviderFactory,
+    id: string,
+    missingKeyMessage: string,
+  ) {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid partner ID');
+    const partner = await this.partnerModel.findById(id).exec();
+    if (!partner?.token_api?.trim()) throw new BadRequestException(missingKeyMessage);
+    return { partner, provider: factory.getProvider(partner.code) };
+  }
+
+  async listProviderPackages(factory: ProxyProviderFactory, id: string, page = 1, perPage = 20) {
+    const { partner, provider } = await this.resolveCatalogProvider(
+      factory,
+      id,
+      'Lưu API key trước khi tải danh mục gói',
+    );
+    if (!provider.listPackages) throw new BadRequestException('Adapter chưa hỗ trợ danh mục gói');
+    return provider.listPackages(partner.token_api, page, perPage);
+  }
+
+  /**
+   * Danh mục quốc gia theo loại sản phẩm. Vùng phủ khác nhau theo sản phẩm nên
+   * `product` do người gọi chọn, không mặc định hộ ở tầng này.
+   */
+  async listProviderCountries(factory: ProxyProviderFactory, id: string, product?: string) {
+    const { partner, provider } = await this.resolveCatalogProvider(
+      factory,
+      id,
+      'Lưu API key trước khi tải danh mục quốc gia',
+    );
+    if (!provider.listCountries) throw new BadRequestException('Adapter chưa hỗ trợ danh mục quốc gia');
+    return provider.listCountries(partner.token_api, product);
+  }
+
+  /**
+   * Đơn phía nhà cung cấp — CHỈ ĐỌC, để đối soát khi lệnh mua timeout.
+   *
+   * Không tự so khớp rồi sửa đơn nội bộ: đối soát là việc admin đọc và quyết
+   * định, còn tự động gán ID nhà cung cấp cho một đơn đoán được là cách tạo ra
+   * hai đơn trỏ cùng một hàng.
+   */
+  async listProviderOrders(
+    factory: ProxyProviderFactory,
+    id: string,
+    page = 1,
+    perPage = 20,
+    status?: number,
+  ) {
+    const { partner, provider } = await this.resolveCatalogProvider(
+      factory,
+      id,
+      'Lưu API key trước khi tải đơn của nhà cung cấp',
+    );
+    if (!provider.listProviderOrders) {
+      throw new BadRequestException('Adapter chưa hỗ trợ đọc đơn của nhà cung cấp');
+    }
+    return provider.listProviderOrders(partner.token_api, page, perPage, status);
+  }
+
   async findAllList(status?: string) {
     const filter: any = {};
     if (status === 'true') filter.status = true;

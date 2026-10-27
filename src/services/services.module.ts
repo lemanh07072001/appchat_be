@@ -8,6 +8,7 @@ import { Country, CountrySchema } from '../schemas/countries.schema';
 import { ServicesService } from './services.service';
 import { ServicesController } from './services.controller';
 import { ApiTokenGuard } from '../guards/api-token.guard';
+import { ProxyProvidersModule } from '../proxy-providers/proxy-providers.module';
 
 @Module({
   imports: [
@@ -18,6 +19,8 @@ import { ApiTokenGuard } from '../guards/api-token.guard';
       { name: Country.name, schema: CountrySchema },
     ]),
     JwtModule,
+    // Để form dịch vụ tra được vùng phủ quốc gia của gói nhà cung cấp.
+    ProxyProvidersModule,
   ],
   controllers: [ServicesController],
   providers: [ServicesService, ApiTokenGuard],

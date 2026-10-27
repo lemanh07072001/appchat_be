@@ -2,6 +2,8 @@
 
 export interface ProviderBuyParams {
   token_api: string;         // lấy từ partner.token_api
+  pricing_mode?: string;
+  bandwidth_gb?: number | null;
   quantity: number;
   duration_days: number;
   country_code?: string;
@@ -92,6 +94,18 @@ export interface ProviderCapabilities {
   topup: boolean;
   /** Kiểm tra được API key và số dư trước khi lưu */
   check: boolean;
+  /** Đọc được danh mục gói của nhà cung cấp */
+  catalog: boolean;
+  /** Đọc được danh sách đơn phía nhà cung cấp (để đối soát) */
+  providerOrders: boolean;
+  /** Đọc được danh mục quốc gia */
+  countries: boolean;
+  /** Đọc được danh mục địa lý theo từng đơn */
+  geo: boolean;
+  /** Đổi được mật khẩu proxy ở phía nhà cung cấp */
+  password: boolean;
+  /** Đặt được whitelist IP cho đơn */
+  allowedIps: boolean;
 }
 
 /** Kết quả kiểm tra kết nối tới nhà cung cấp. */
@@ -115,6 +129,11 @@ export interface IProxyProvider {
     'buy' | 'renew' | 'rotate' | 'cancel'
   >;
 
+  /** Local validation must never spend money; preflight may call quote/catalog APIs only. */
+  validateBuy?(params: ProviderBuyParams): void;
+  preflightBuy?(params: ProviderBuyParams): Promise<void>;
+  /** Disable blind retries for non-idempotent purchase APIs. */
+  readonly retryBuy?: boolean;
   buy(params: ProviderBuyParams): Promise<BuyResult>;
   renew(params: ProviderRenewParams): Promise<RenewResult>;
   rotate(params: ProviderRotateParams): Promise<RotateResult>;
@@ -127,7 +146,16 @@ export interface IProxyProvider {
   fetchOrderProxies?(
     token_api: string,
     provider_order_id: string,
-    context?: { metadata?: Record<string, any>; protocol?: string },
+    context?: {
+      metadata?: Record<string, any>;
+      protocol?: string;
+      /**
+       * Cổng admin khai ở dịch vụ. Khác 0 thì THẮNG cổng nhà cung cấp trả về:
+       * đây là lựa chọn tường minh của con người, và có sản phẩm dùng dải cổng
+       * nên chỉ admin biết nên lấy cổng nào.
+       */
+      ports?: { http?: number; socks?: number };
+    },
   ): Promise<ProxyCredential[]>;
 
   /**
@@ -170,6 +198,91 @@ export interface IProxyProvider {
    * thay vì đợi đơn đầu tiên của khách fail.
    */
   checkConnection?(token_api: string): Promise<ProviderConnectionInfo>;
+  /** Read-only package catalog, retaining provider pagination metadata. */
+  listPackages?(token_api: string, page?: number, perPage?: number): Promise<unknown>;
+
+  /**
+   * Danh sách đơn phía nhà cung cấp — CHỈ ĐỌC, dùng để đối soát.
+   *
+   * TÙY CHỌN. Điểm cắm duy nhất để biết một đơn có thật sự được tạo bên nhà
+   * cung cấp hay không khi lệnh mua timeout: không có nó thì chỉ còn cách mở
+   * trang nhà cung cấp xem tay, và trong lúc đó không ai dám retry.
+   */
+  listProviderOrders?(
+    token_api: string,
+    page?: number,
+    perPage?: number,
+    status?: number,
+  ): Promise<unknown>;
+
+  /**
+   * Danh mục quốc gia theo loại sản phẩm — CHỈ ĐỌC.
+   *
+   * TÙY CHỌN. Vùng phủ khác nhau theo sản phẩm nên không cache chung được.
+   */
+  listCountries?(token_api: string, product?: string): Promise<unknown>;
+
+  /**
+   * Vùng phủ quốc gia của ĐÚNG một gói — CHỈ ĐỌC.
+   *
+   * TÙY CHỌN. Khác `listCountries` ở chỗ không ai phải đoán loại sản phẩm:
+   * adapter tự đọc `product` từ gói. Mỗi gói một vùng phủ khác nhau, nên đây
+   * mới là đường dùng đúng khi cấu hình dịch vụ.
+   */
+  listCountriesForPackage?(
+    token_api: string,
+    packageId: string,
+  ): Promise<{
+    package_id: string;
+    /** Tên sản phẩm NHÀ CUNG CẤP echo lại, không phải cái caller gửi lên. */
+    product: string;
+    /** Mã ISO-2 VIẾT HOA, đã bỏ trùng. */
+    iso_codes: string[];
+    capabilities?: Record<string, boolean>;
+    raw?: unknown;
+  }>;
+
+  /**
+   * Danh mục địa lý của riêng một đơn — CHỈ ĐỌC.
+   *
+   * TÙY CHỌN. Khác `listCountries` ở chỗ không phải đoán loại sản phẩm, vì đơn
+   * đã biết nó thuộc sản phẩm nào.
+   */
+  fetchOrderGeo?(
+    token_api: string,
+    provider_order_id: string,
+  ): Promise<{
+    /** Mã ISO-2 VIẾT HOA, đã bỏ trùng. Rỗng là câu trả lời hợp lệ. */
+    iso_codes: string[];
+    capabilities?: Record<string, boolean>;
+    raw?: unknown;
+  }>;
+
+  /**
+   * Đổi mật khẩu proxy ở phía nhà cung cấp.
+   *
+   * TÙY CHỌN: provider nào không có thì nút đổi mật khẩu tự tắt.
+   *
+   * PHẢI trả về mật khẩu nhà cung cấp đang dùng thật. Caller có nghĩa vụ ghi
+   * đúng giá trị đó vào proxy nội bộ — ghi cái mình gửi lên mà nhà cung cấp
+   * chuẩn hoá khác đi là khách nhận credential không kết nối được.
+   */
+  changeProxyPassword?(
+    token_api: string,
+    provider_order_id: string,
+    newPassword: string,
+  ): Promise<{ password: string; raw?: any }>;
+
+  /**
+   * Đặt whitelist IP cho đơn.
+   *
+   * TÙY CHỌN. Mảng rỗng = xoá whitelist, là trạng thái hợp lệ.
+   */
+  setAllowedIps?(
+    token_api: string,
+    provider_order_id: string,
+    ips: string[],
+  ): Promise<{ allowed_ips: string[]; raw?: any }>;
 
   /**
    * Lấy lại proxy theo danh sách provider_proxy_id (idproxy) — dùng để admin

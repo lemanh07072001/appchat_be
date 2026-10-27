@@ -1,4 +1,6 @@
-import { assertCommerceEnabled } from '../common/commerce-policy';
+import { ORDER_WORKER_READY_KEY } from './worker-readiness';
+import { ProviderBuyParams } from '../proxy-providers/proxy-provider.interface';
+import { assertPurchaseEnabled } from '../common/commerce-policy';
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -20,6 +22,7 @@ import { REDIS_CLIENT } from '../redis/redis.module';
 import { PENDING_ORDERS_KEY } from './orders.scheduler';
 import type { Redis } from 'ioredis';
 import { OrderLogService } from './order-log.service';
+import { resolveServicePorts } from './service-ports.util';
 import { OrderLogStep } from '../schemas/order-log.schema';
 import { WalletTransactionService } from '../wallet/wallet-transaction.service';
 import { WalletTxType } from '../schemas/wallet-transaction.schema';
@@ -420,7 +423,7 @@ export class OrdersService {
       config: Record<string, any>;
     };
   }> {
-    assertCommerceEnabled();
+    assertPurchaseEnabled();
     if (dto.voucher_code !== undefined) {
       if (!normalizeCode(dto.voucher_code)) throw new BadRequestException('Invalid voucher code');
       return this.buyVoucher(userId, dto, idempotencyKey);
@@ -463,6 +466,16 @@ export class OrdersService {
       throw new BadRequestException('Dịch vụ này đang tạm dừng mua');
     }
 
+    // Reject incomplete/demo providers BEFORE wallet deduction or order creation.
+    const partner = service.partner ? await this.partnerModel.findById(service.partner).exec() : null;
+    if (!partner || partner.status !== true || !partner.code || !partner.token_api?.trim()) {
+      throw new BadRequestException('Nhà cung cấp chưa sẵn sàng hoặc chưa có API key; chưa trừ ví');
+    }
+    const provider = this.providerFactory.getProvider(partner.code);
+    if (provider.capabilities?.buy === false) {
+      throw new BadRequestException('Nhà cung cấp chưa hỗ trợ mua; chưa trừ ví');
+    }
+
     // 2. Tính giá server-side theo chế độ bán của service — không tin frontend
     const {
       pricingMode,
@@ -480,6 +493,19 @@ export class OrdersService {
 
     // 3. Resolve country_id
     const countryId = await this.resolveCountryId(dto.country) ?? service.country ?? null;
+
+    const providerParams: ProviderBuyParams = {
+      token_api: partner.token_api, quantity, duration_days: durationDays,
+      pricing_mode: pricingMode, bandwidth_gb: bandwidthGb,
+      body_api: service.body_api, id_service: service.id_service,
+      protocol: dto.protocol,
+    };
+    provider.validateBuy?.(providerParams);
+    if (!(await this.redis.exists(ORDER_WORKER_READY_KEY))) {
+      throw new BadRequestException('Bộ xử lý đơn chưa sẵn sàng; chưa trừ ví');
+    }
+    // Catalog/stock/quote APIs only. Never place a provider order here.
+    await provider.preflightBuy?.(providerParams);
 
     // 4. Trừ tiền atomic — chỉ trừ nếu đủ số dư
     const user = await this.userModel.findOneAndUpdate(
@@ -531,6 +557,10 @@ export class OrdersService {
         let bodyApi: any = {};
         try { bodyApi = JSON.parse(service.body_api ?? '{}'); } catch {}
         return {
+          ...(partner.code === 'gpnip' ? {
+            gpnip_body_api: service.body_api,
+            gpnip_id_service: service.id_service,
+          } : {}),
           protocol:        dto.protocol ?? null,
           isp:             (() => {
             if (!dto.isp) return null;
@@ -830,10 +860,43 @@ export class OrdersService {
       .findOne({ _id: new Types.ObjectId(orderId), user_id: new Types.ObjectId(userId) })
       .populate('service_id', 'name proxy_type ip_version allow_renew')
       .populate('country_id', 'name code')
-      .select('-admin_note -cost_per_unit -total_cost -profit -provider_order_id -error_message -credentials -partner_id -provider_metadata')
+      // `partner_id` + `provider_order_id` + `provider_metadata` được lấy để
+      // suy ra năng lực tự phục vụ, rồi XOÁ khỏi response bên dưới. Giữ lại
+      // một query thay vì gọi thêm một vòng chỉ để đọc code nhà cung cấp.
+      .populate('partner_id', 'code status')
+      .select('-admin_note -cost_per_unit -total_cost -profit -error_message -credentials')
       .lean()
       .exec();
     if (!order) throw new BadRequestException('Order not found');
+
+    const self_service = this.resolveSelfServiceFlags(order as any);
+    // Whitelist đang có hiệu lực là dữ liệu của chính khách, không phải danh
+    // tính nhà cung cấp — trả ra để form điền sẵn.
+    const allowed_ips: string[] = Array.isArray(
+      (order as any).provider_metadata?.allowed_ips,
+    )
+      ? (order as any).provider_metadata.allowed_ips
+      : [];
+
+    // Danh tính nhà cung cấp KHÔNG được ra khỏi đây.
+    //
+    // `config` cũng phải lọc: luồng mua GPNIP ghi vào đó
+    // `gpnip_body_api`, `gpnip_id_service`, `gpnip_purchase_started` để
+    // snapshot cấu hình gói theo đơn và chống mua trùng. Chúng CẦN tồn tại
+    // trong DB, nhưng trả nguyên ra cho khách là đưa luôn tên nhà cung cấp và
+    // MÃ GÓI của họ — khách tự mua trực tiếp được. Các provider khác chỉ ghi
+    // key trung tính (protocol, isp, gateway_host) nên không bị ảnh hưởng.
+    const partnerCode: string | undefined = (order as any).partner_id?.code;
+    const config = (order as any).config;
+    if (partnerCode && config && typeof config === 'object') {
+      for (const key of Object.keys(config)) {
+        if (key.startsWith(`${partnerCode}_`)) delete config[key];
+      }
+    }
+
+    delete (order as any).partner_id;
+    delete (order as any).provider_order_id;
+    delete (order as any).provider_metadata;
 
     const page  = query.page ?? 1;
     const limit = query.limit ?? 10;
@@ -843,8 +906,12 @@ export class OrdersService {
     const [proxies, totalProxies] = await Promise.all([
       this.proxyModel
         .find(proxyFilter)
-        // KHÔNG trả `provider` / `provider_proxy_id` cho user (ẩn danh tính NCC)
-        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain location')
+        // KHÔNG trả `provider` / `provider_proxy_id` cho user (ẩn danh tính NCC).
+        // Hai cổng thì PHẢI trả: khách đổi giao thức trong modal dựa vào
+        // `provider_metadata.port_socks`, thiếu nó là nút SOCKS5 bị tắt dù đơn
+        // có cổng socks. Chỉ lấy đúng hai khoá con, không lấy cả
+        // `provider_metadata` (chỗ đó còn id và cấu hình phía NCC).
+        .select('ip_address port protocol auth_username auth_password cdk_key country_code region city isp is_active health_status domain location provider_metadata.port_http provider_metadata.port_socks')
         .skip(skip)
         .limit(limit)
         .lean()
@@ -854,10 +921,41 @@ export class OrdersService {
 
     return {
       ...order,
+      self_service,
+      allowed_ips,
       proxies: {
         data: proxies,
         meta: { total: totalProxies, page, limit, totalPages: Math.ceil(totalProxies / limit) },
       },
+    };
+  }
+
+  /**
+   * Đơn này làm được những thao tác tự phục vụ nào — trả "làm được gì", KHÔNG
+   * trả nhà cung cấp nào.
+   *
+   * Giao diện cần cờ này để ẩn nút. Hiện nút rồi báo "nhà cung cấp chưa hỗ
+   * trợ" sau khi khách đã bấm thì tệ hơn là không hiện.
+   *
+   * Điều kiện phải khớp `resolveOwnedProviderOrder`, nếu không nút hiện ra mà
+   * bấm vào vẫn lỗi.
+   */
+  private resolveSelfServiceFlags(order: {
+    partner_id?: any;
+    provider_order_id?: string;
+  }) {
+    const off = { password: false, allowed_ips: false, geo: false };
+    const partner = order.partner_id;
+    if (!order.provider_order_id || partner?.status !== true || !partner?.code) {
+      return off;
+    }
+    if (!this.providerFactory.hasProvider(partner.code)) return off;
+
+    const provider = this.providerFactory.getProvider(partner.code);
+    return {
+      password: typeof provider.changeProxyPassword === 'function',
+      allowed_ips: typeof provider.setAllowedIps === 'function',
+      geo: typeof provider.fetchOrderGeo === 'function',
     };
   }
 
@@ -918,7 +1016,7 @@ export class OrdersService {
   }
 
   async create(data: CreateOrderDto): Promise<OrderDocument> {
-    assertCommerceEnabled();
+    assertPurchaseEnabled();
     const order = new this.orderModel({
       ...data,
       order_code:  this.generateOrderCode(),
@@ -1035,7 +1133,7 @@ export class OrdersService {
     proxiesip?: string[];
     timestamp?: number;
   }> {
-    assertCommerceEnabled();
+    assertPurchaseEnabled();
     const POLL_INTERVAL_MS = 500;
     const MAX_WAIT_MS      = 60_000;
 
@@ -1289,6 +1387,10 @@ export class OrdersService {
       );
     }
 
+    if (order.config?.gpnip_purchase_started) {
+      throw new BadRequestException('GPNIP đã gửi yêu cầu mua; cần đối soát đơn NCC trước khi thử lại để tránh mua trùng');
+    }
+
     // Delete old proxies of this order
     await this.proxyModel.deleteMany({ order_id: order._id }).exec();
 
@@ -1369,7 +1471,7 @@ export class OrdersService {
    * - Nếu thành công → update end_date, log wallet tx
    */
   async renewByUser(userId: string, orderId: string, duration_days: number) {
-    assertCommerceEnabled();
+    assertPurchaseEnabled();
     if (!duration_days || duration_days < 1) {
       throw new BadRequestException('duration_days phải >= 1');
     }
@@ -1439,13 +1541,259 @@ export class OrdersService {
    * Bậc giá tính trên riêng lượng nạp thêm, không cộng dồn với GB đã mua trước
    * đó — đơn giản, và không tạo kỳ vọng hoàn tiền hồi tố.
    */
+  /**
+   * Partner + adapter của một đơn CỦA CHÍNH user đó.
+   *
+   * Dùng cho các thao tác tự phục vụ KHÔNG tiêu tiền (đọc danh mục địa lý, đổi
+   * mật khẩu proxy, đặt whitelist IP): cả ba cần đúng một bộ điều kiện nên gộp
+   * lại một chỗ, tránh một endpoint quên mất một lớp kiểm tra.
+   */
+  private async resolveOwnedProviderOrder(userId: string, orderId: string) {
+    if (!Types.ObjectId.isValid(orderId)) {
+      throw new BadRequestException('Order id không hợp lệ');
+    }
+
+    const order = await this.orderModel
+      .findById(orderId)
+      .populate('partner_id')
+      .exec();
+
+    if (!order) throw new BadRequestException('Order không tồn tại');
+    if (order.user_id?.toString() !== userId) {
+      throw new BadRequestException('Bạn không có quyền thao tác trên đơn này');
+    }
+
+    const partner = order.partner_id as any;
+    if (partner?.status !== true) {
+      throw new BadRequestException('Nhà cung cấp đang tắt');
+    }
+    if (!partner?.token_api || !partner?.code) {
+      throw new BadRequestException('Đơn không có thông tin nhà cung cấp');
+    }
+    if (!order.provider_order_id) {
+      throw new BadRequestException(
+        'Đơn chưa có mã đơn phía nhà cung cấp — vui lòng đợi đơn được cấp xong',
+      );
+    }
+
+    return {
+      order,
+      partner,
+      provider: this.providerFactory.getProvider(partner.code),
+    };
+  }
+
+  /**
+   * Chỉ cho thao tác lên đơn còn dùng được.
+   *
+   * DEPLETED (cạn GB) vẫn tính là còn dùng được, giống `topUpBandwidth`: khách
+   * nạp thêm GB là chạy tiếp, nên đừng khoá mật khẩu/whitelist của họ lại.
+   */
+  private assertOrderUsable(order: OrderDocument, action: string) {
+    const USABLE = [OrderStatusEnum.ACTIVE, OrderStatusEnum.DEPLETED];
+    if (!USABLE.includes(order.status)) {
+      throw new BadRequestException(`Chỉ ${action} được cho đơn đang chạy`);
+    }
+    if (order.end_date && new Date(order.end_date).getTime() <= Date.now()) {
+      throw new BadRequestException('Đơn đã hết hạn sử dụng');
+    }
+  }
+
+  /**
+   * Danh sách quốc gia mà ĐƠN NÀY chọn được — chỉ đọc, không tiêu tiền.
+   *
+   * Hai nguồn, theo thứ tự:
+   *   1. `/orders/{id}/geo` của nhà cung cấp — hẹp nhất và đúng nhất.
+   *   2. Vùng phủ của chính gói đang bán, nếu (1) trả rỗng.
+   *
+   * Phải có bước 2: kiểm chứng trên GPNIP 2026-10-19, đơn IPv6 Datacenter thật
+   * trả `/geo` = `[]` trong khi gói của nó (`product=ipv6-datacenter`) khai 1
+   * nước. Dừng ở bước 1 là ô chọn quốc gia rỗng trên một đơn có quốc gia.
+   *
+   * KHÔNG trả `raw` cho khách: payload gốc mang nhãn và tên của nhà cung cấp.
+   */
+  async fetchOrderGeo(userId: string, orderId: string) {
+    const { order, partner, provider } = await this.resolveOwnedProviderOrder(
+      userId,
+      orderId,
+    );
+
+    if (typeof provider.fetchOrderGeo !== 'function') {
+      throw new BadRequestException(
+        'Nhà cung cấp chưa hỗ trợ danh mục địa lý',
+      );
+    }
+
+    const geo = await provider.fetchOrderGeo(
+      partner.token_api,
+      order.provider_order_id,
+    );
+    const fromOrder = Array.isArray(geo?.iso_codes) ? geo.iso_codes : [];
+    if (fromOrder.length > 0) {
+      return {
+        iso_codes: fromOrder,
+        source: 'order' as const,
+        capabilities: geo?.capabilities,
+      };
+    }
+
+    // Dự phòng: vùng phủ của gói. Lỗi ở đây KHÔNG được làm sập cả endpoint —
+    // nguồn chính đã trả lời xong, đây chỉ là bù thêm.
+    if (typeof provider.listCountriesForPackage === 'function') {
+      try {
+        const service = await this.serviceModel
+          .findById(order.service_id)
+          .select('id_service')
+          .lean()
+          .exec();
+        const packageId = (service as any)?.id_service;
+        if (packageId) {
+          const pkg = await provider.listCountriesForPackage(
+            partner.token_api,
+            String(packageId),
+          );
+          if (pkg?.iso_codes?.length) {
+            return {
+              iso_codes: pkg.iso_codes,
+              source: 'package' as const,
+              capabilities: pkg.capabilities,
+            };
+          }
+        }
+      } catch (err: any) {
+        this.logger.warn(
+          `[geo] order ${orderId}: không đọc được vùng phủ gói: ` +
+            `${err?.message}`,
+        );
+      }
+    }
+
+    // Rỗng là câu trả lời, không phải lỗi: nhà cung cấp không khai geo cho
+    // sản phẩm này.
+    return { iso_codes: [] as string[], source: 'none' as const };
+  }
+
+  /**
+   * Đổi mật khẩu proxy ở phía nhà cung cấp, rồi ghi lại vào proxy nội bộ.
+   *
+   * Thứ tự là bắt buộc: gọi nhà cung cấp TRƯỚC, ghi DB SAU. Ghi DB trước mà
+   * nhà cung cấp lỗi là khách đọc được mật khẩu mới trong khi proxy vẫn đang
+   * dùng mật khẩu cũ.
+   *
+   * Lưu đúng mật khẩu nhà cung cấp trả về, không phải cái khách gửi lên: nhà
+   * cung cấp có thể chuẩn hoá, lệch một ký tự là credential vô dụng.
+   */
+  async changeProxyPassword(
+    userId: string,
+    orderId: string,
+    newPassword: string,
+  ) {
+    const { order, partner, provider } = await this.resolveOwnedProviderOrder(
+      userId,
+      orderId,
+    );
+
+    if (typeof provider.changeProxyPassword !== 'function') {
+      throw new BadRequestException(
+        'Nhà cung cấp chưa hỗ trợ đổi mật khẩu proxy',
+      );
+    }
+    this.assertOrderUsable(order, 'đổi mật khẩu');
+
+    const { password } = await provider.changeProxyPassword(
+      partner.token_api,
+      order.provider_order_id,
+      newPassword,
+    );
+
+    try {
+      const res = await this.proxyModel
+        .updateMany({ order_id: order._id }, { $set: { auth_password: password } })
+        .exec();
+
+      // `credentials` chỉ có với đơn dạng gateway; đơn nhiều IP thì null.
+      if (order.credentials?.password !== undefined) {
+        await this.orderModel
+          .updateOne({ _id: order._id }, { $set: { 'credentials.password': password } })
+          .exec();
+      }
+
+      // KHÔNG ghi mật khẩu vào order_logs — đó là bảng audit, không phải chỗ
+      // lưu credential.
+      await this.orderLogService.info(
+        order._id,
+        OrderLogStep.USER_PROXY_PASSWORD_CHANGED,
+        'User đổi mật khẩu proxy ở nhà cung cấp',
+        { proxies_updated: res.modifiedCount },
+        userId,
+      );
+    } catch (err: any) {
+      // Nhà cung cấp đã đổi thật rồi. Im lặng ở đây là để khách dùng mật khẩu
+      // cũ trong DB và không hiểu vì sao proxy báo sai mật khẩu.
+      this.logger.error(
+        `Order ${orderId}: đã đổi mật khẩu ở NCC nhưng ghi DB thất bại: ${err?.message}`,
+      );
+      throw new BadRequestException(
+        `Đã đổi mật khẩu ở nhà cung cấp nhưng chưa lưu được vào hệ thống. ` +
+          `Mật khẩu đang dùng là: ${password}`,
+      );
+    }
+
+    return { success: true, password };
+  }
+
+  /**
+   * Đặt whitelist IP cho đơn. Mảng rỗng = xoá whitelist.
+   *
+   * Lưu lại danh sách nhà cung cấp XÁC NHẬN, không phải danh sách khách gửi:
+   * đó là thứ đang có hiệu lực thật.
+   */
+  async setAllowedIps(userId: string, orderId: string, ips: string[]) {
+    const { order, partner, provider } = await this.resolveOwnedProviderOrder(
+      userId,
+      orderId,
+    );
+
+    if (typeof provider.setAllowedIps !== 'function') {
+      throw new BadRequestException(
+        'Nhà cung cấp chưa hỗ trợ whitelist IP',
+      );
+    }
+    this.assertOrderUsable(order, 'đặt whitelist IP');
+
+    const { allowed_ips } = await provider.setAllowedIps(
+      partner.token_api,
+      order.provider_order_id,
+      ips,
+    );
+
+    await this.orderModel
+      .updateOne(
+        { _id: order._id },
+        { $set: { 'provider_metadata.allowed_ips': allowed_ips } },
+      )
+      .exec();
+
+    await this.orderLogService.info(
+      order._id,
+      OrderLogStep.USER_ALLOWED_IPS_UPDATED,
+      allowed_ips.length
+        ? `User đặt whitelist ${allowed_ips.length} IP`
+        : 'User xoá whitelist IP',
+      { allowed_ips },
+      userId,
+    );
+
+    return { success: true, allowed_ips };
+  }
+
   async topUpBandwidth(
     userId: string,
     orderId: string,
     gb: number,
     idempotencyKey?: string,
   ) {
-    assertCommerceEnabled();
+    assertPurchaseEnabled();
     if (!Types.ObjectId.isValid(orderId)) {
       throw new BadRequestException('Order id không hợp lệ');
     }
@@ -1485,6 +1833,7 @@ export class OrdersService {
     }
 
     const partner = order.partner_id as any;
+    if (partner?.status !== true) throw new BadRequestException('Nhà cung cấp đang tắt');
     if (!partner?.token_api || !partner?.code) {
       throw new BadRequestException('Đơn không có thông tin nhà cung cấp');
     }
@@ -1610,8 +1959,13 @@ export class OrdersService {
       return 'Chỉ có thể gia hạn đơn ở trạng thái ACTIVE';
     }
     const partner = order.partner_id as any;
+    if (partner?.status !== true) return 'Nhà cung cấp đang tắt';
     if (!partner?.token_api || !partner?.code) {
       return 'Order không có thông tin NCC';
+    }
+    if (partner.code === 'gpnip' && (order.pricing_mode === 'bandwidth' ||
+      !order.provider_order_id || (order.end_date && new Date(order.end_date).getTime() <= Date.now()))) {
+      return 'GPNIP: chỉ gia hạn đơn theo thời gian còn hoạt động; gói GB dùng nạp thêm dung lượng';
     }
     const service = order.service_id as any;
     if (service?.allow_renew === false) {
@@ -1649,6 +2003,12 @@ export class OrdersService {
     const partner = order.partner_id as any;
     const service = order.service_id as any;
 
+    const provider = this.providerFactory.getProvider(partner.code);
+    if (provider.capabilities?.renew === false) throw new BadRequestException('NCC không hỗ trợ gia hạn');
+    if (partner.code === 'gpnip' && chargeQuantity !== Number(order.quantity)) {
+      throw new BadRequestException('GPNIP chỉ gia hạn toàn bộ đơn; vui lòng chọn tất cả proxy của đơn');
+    }
+
     // 1. Tính phí gia hạn
     const pricePerUnit = Number(order.price_per_unit ?? 0);
     const totalPrice   = pricePerUnit * chargeQuantity * duration_days;
@@ -1668,7 +2028,6 @@ export class OrdersService {
     }
 
     // 3. Gọi provider.renew() — nếu fail toàn bộ thì rollback tiền
-    const provider = this.providerFactory.getProvider(partner.code);
     const idService = this.deriveIdServiceForRenew(partner.code, order, service);
     let result;
     try {
@@ -1807,7 +2166,7 @@ export class OrdersService {
    * - Update end_date + duration_days
    */
   async renewByAdmin(orderId: string, duration_days: number, actor = 'admin') {
-    assertCommerceEnabled();
+    assertPurchaseEnabled();
     if (!duration_days || duration_days < 1) {
       throw new BadRequestException('duration_days phải >= 1');
     }
@@ -1822,6 +2181,9 @@ export class OrdersService {
       .populate('partner_id')
       .exec();
     if (!order) throw new BadRequestException('Order không tồn tại');
+
+    const guardError = this.checkOrderRenewable(order);
+    if (guardError) throw new BadRequestException(guardError);
 
     const partner = order.partner_id as any;
     if (!partner?.token_api || !partner?.code) {
@@ -2084,6 +2446,8 @@ export class OrdersService {
       {
         metadata: order.provider_metadata,
         protocol: (order.config as any)?.protocol ?? (order as any).protocol,
+        // Cổng admin khai ở dịch vụ — thắng cổng nhà cung cấp trả về.
+        ports: await resolveServicePorts(order),
       },
     );
 
@@ -2246,6 +2610,8 @@ export class OrdersService {
         {
           metadata: order.provider_metadata,
           protocol: (order.config as any)?.protocol ?? (order as any).protocol,
+          // Cổng admin khai ở dịch vụ — thắng cổng nhà cung cấp trả về.
+          ports: await resolveServicePorts(order),
         },
       );
       const wanted = new Set(providerProxyIds);
@@ -2546,7 +2912,7 @@ export class OrdersService {
     duration_days: number,
     opts?: { actor?: string },
   ) {
-    assertCommerceEnabled();
+    assertPurchaseEnabled();
     const actor = opts?.actor ?? userId;
     const isAuto = actor !== userId; // auto-renew (cron) KHÔNG xoá proxy — chỉ manual mới prune
     if (!duration_days || duration_days < 1) {
@@ -2599,7 +2965,9 @@ export class OrdersService {
       const reason =
         order.user_id?.toString() !== userId
           ? 'Bạn không có quyền gia hạn đơn hàng này'
-          : this.checkOrderRenewable(order) ?? BULK_UNSUPPORTED_PARTNERS[partner?.code] ?? null;
+          : this.checkOrderRenewable(order) ?? BULK_UNSUPPORTED_PARTNERS[partner?.code] ??
+            (partner?.code === 'gpnip' && list.length !== Number(order.quantity)
+              ? 'GPNIP chỉ gia hạn toàn bộ đơn; hãy chọn tất cả proxy của đơn' : null);
 
       if (reason) {
         results.push({

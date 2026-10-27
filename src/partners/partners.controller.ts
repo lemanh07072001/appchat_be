@@ -44,6 +44,41 @@ export class PartnersController {
     return this.partnersService.checkAllConnections(this.providerFactory, ids);
   }
 
+  @Get(':id/packages')
+  listPackages(@Param('id') id: string, @Query('page') page?: string, @Query('per_page') perPage?: string) {
+    return this.partnersService.listProviderPackages(this.providerFactory, id, Number(page ?? 1), Number(perPage ?? 20));
+  }
+
+  /**
+   * Danh mục quốc gia của nhà cung cấp. `product` tuỳ loại sản phẩm — adapter
+   * tự từ chối giá trị không có trong tài liệu.
+   */
+  @Get(':id/countries')
+  listCountries(@Param('id') id: string, @Query('product') product?: string) {
+    return this.partnersService.listProviderCountries(this.providerFactory, id, product);
+  }
+
+  /**
+   * Đơn phía nhà cung cấp, để đối soát khi lệnh mua timeout — chỉ đọc.
+   */
+  @Get(':id/provider-orders')
+  listProviderOrders(
+    @Param('id') id: string,
+    @Query('page') page?: string,
+    @Query('per_page') perPage?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.partnersService.listProviderOrders(
+      this.providerFactory,
+      id,
+      Number(page ?? 1),
+      Number(perPage ?? 20),
+      // Không truyền `status` khác hẳn truyền `status=0` (đơn chờ): chỉ đổi
+      // sang số khi admin thật sự gửi tham số.
+      status === undefined || status === '' ? undefined : Number(status),
+    );
+  }
+
   @Get('list')
   findAllList(@Query('status') status?: string) {
     return this.partnersService.findAllList(status);

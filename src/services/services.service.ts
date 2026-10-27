@@ -6,6 +6,7 @@ import { Country } from '../schemas/countries.schema';
 import { Model, Types } from 'mongoose';
 import { CreateServiceDto } from '../dto/create-service.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
+import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -21,6 +22,52 @@ export class ServicesService {
     @InjectModel(Country.name)
     private countryModel: Model<Country>,
   ) {}
+
+  /**
+   * Vùng phủ quốc gia của ĐÚNG gói mà dịch vụ này đang bán.
+   *
+   * Không để người cấu hình tự chọn loại sản phẩm: mỗi gói mang `product`
+   * riêng và vùng phủ lệch nhau rất xa (ipv6-datacenter 1 nước, residential
+   * 166, residential-lite 202). Chọn tay là khai một mã quốc gia mà gói đó
+   * không bán, và lỗi chỉ nổ lúc khách bấm mua.
+   *
+   * Chỉ đọc: không sửa gì ở dịch vụ, không gọi API tốn tiền.
+   */
+  async listCountriesForService(factory: ProxyProviderFactory, id: string) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Service id không hợp lệ');
+    }
+    const service = await this.serviceModel.findById(id).lean().exec();
+    if (!service) throw new BadRequestException('Không tìm thấy dịch vụ');
+    if (!service.partner) {
+      throw new BadRequestException('Dịch vụ chưa gắn nhà cung cấp');
+    }
+
+    const partner = await this.partnerModel.findById(service.partner).lean().exec();
+    if (!partner?.token_api?.trim() || !partner?.code) {
+      throw new BadRequestException('Nhà cung cấp chưa có API key đã lưu');
+    }
+    if (!factory.hasProvider(partner.code)) {
+      throw new BadRequestException('Chưa có adapter cho nhà cung cấp này');
+    }
+
+    const provider = factory.getProvider(partner.code);
+    if (!provider.listCountriesForPackage) {
+      throw new BadRequestException(
+        'Adapter chưa hỗ trợ tra quốc gia theo gói',
+      );
+    }
+    if (!service.id_service?.trim()) {
+      throw new BadRequestException(
+        'Dịch vụ chưa khai ID gói nhà cung cấp (id_service)',
+      );
+    }
+
+    return provider.listCountriesForPackage(
+      partner.token_api,
+      service.id_service.trim(),
+    );
+  }
 
   /**
    * Áp discount user-specific lên pricing và xoá field user_discounts trước khi trả về cho user.
@@ -171,6 +218,10 @@ export class ServicesService {
     updateData.country = this.toObjectId(data.country);
     if (data.isp !== undefined) updateData.isp = data.isp;
     if (data.protocol !== undefined) updateData.protocol = data.protocol;
+    // Cổng do admin khai. Gán khi `!== undefined` (không phải khi truthy) để
+    // 0 cũng ghi được — 0 là cách xoá cấu hình, quay về cổng nhà cung cấp.
+    if (data.port_http !== undefined) updateData.port_http = data.port_http;
+    if (data.port_socks !== undefined) updateData.port_socks = data.port_socks;
     Object.assign(service, updateData);
     service.markModified('pricing');
     service.markModified('duration_ids');

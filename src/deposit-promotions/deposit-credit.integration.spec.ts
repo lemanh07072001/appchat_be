@@ -9,7 +9,7 @@ import { WebhookService } from '../webhook/webhook.service';
 import { WebhookLog, WebhookLogSchema } from '../schemas/webhook-log.schema';
 
 // Only this test process bypasses commerce shutdown. Production flag is untouched.
-jest.mock('../common/commerce-policy', () => ({ assertCommerceEnabled: jest.fn() }));
+jest.mock('../common/commerce-policy', () => ({ assertDepositEnabled: jest.fn() }));
 jest.mock('../common/feature-flags', () => ({ featureFlags: { depositEnabled: true } }));
 
 // Explicit opt-in: creates and drops ONLY a uniquely named disposable database.
