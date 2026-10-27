@@ -202,6 +202,31 @@ describe('GpnipProvider API routing', () => {
       BadRequestException,
     );
   });
+
+  // Prod có IPv6 hỏng + kết nối Cloudflare chập chờn (~10% call rớt tức thì).
+  // Call CHỈ ĐỌC phải thử lại khi fetch NÉM, để khách không "mua được lúc được
+  // lúc không" ở bước preflight.
+  it('retries a read-only call on a connection error, then succeeds', async () => {
+    jest.spyOn((provider as any).logger, 'warn').mockImplementation(() => undefined);
+    fetchMock
+      .mockRejectedValueOnce(Object.assign(new Error('socket hang up'), { name: 'TypeError' }))
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: true, data: { username: 'u' } }) });
+    await expect(provider.checkConnection(testToken)).resolves.toMatchObject({ account: 'u' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // POST /orders KHÔNG idempotent: thử lại có thể tạo đơn trùng (trừ tiền khách
+  // hai lần). Lỗi kết nối phải nổi lên ngay, không retry.
+  it('never retries a non-idempotent /orders call on a connection error', async () => {
+    fetchMock.mockRejectedValue(Object.assign(new Error('ECONNRESET'), { name: 'TypeError' }));
+    await expect(
+      provider.buy({
+        token_api: testToken, id_service: '6ad36c775a0fd3280a199639', body_api: '{}',
+        pricing_mode: 'bandwidth', bandwidth_gb: 1, quantity: 1, duration_days: 0,
+      } as any),
+    ).rejects.toThrow(/network error/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
   const params = (extra: Record<string, any> = {}) => ({
     token_api: testToken,
     quantity: 1,

@@ -69,47 +69,77 @@ export class GpnipProvider implements IProxyProvider {
    * Mọi phản hồi bọc trong `{ success, data }`; lỗi là
    * `{ success: false, error: { code, message } }`.
    */
+  /**
+   * `retries`: số lần thử LẠI khi fetch NÉM (lỗi kết nối hoặc timeout) — KHÔNG
+   * phải khi nhận được phản hồi HTTP. Chỉ truyền > 0 cho call CHỈ ĐỌC
+   * (idempotent): GET và POST /check-price. TUYỆT ĐỐI để 0 cho call thay đổi
+   * trạng thái (POST /orders, /renew, /extend, PUT …) vì thử lại một request đã
+   * có thể tới nơi sẽ tạo trùng đơn.
+   *
+   * Vì sao cần: môi trường prod có IPv6 hỏng + kết nối tới Cloudflare chập chờn
+   * (kiểm chứng 2026-10-27: ~10% call IPv4 bị rớt kết nối tức thì kiểu
+   * ECONNRESET, ngoài các lần treo do thử IPv6). Một lần rớt ở bước preflight là
+   * khách "không mua được". Thử lại với kết nối mới xử lý gọn các lỗi đó.
+   */
   private async request<T>(
     method: 'GET' | 'POST' | 'PUT',
     path: string,
     token: string,
     body?: Record<string, unknown>,
     envelope = false,
+    retries = 0,
   ): Promise<T> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
+    let lastErr: any;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
 
-    let res: Response;
-    try {
-      res = await fetch(`${this.BASE_URL}${path}`, {
-        method,
-        signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json',
-          ...(body ? { 'Content-Type': 'application/json' } : {}),
-        },
-        ...(body ? { body: JSON.stringify(body) } : {}),
-      });
-    } catch (err: any) {
-      throw new BadRequestException(
-        err?.name === 'AbortError'
-          ? `GPNIP API timeout sau ${this.TIMEOUT_MS}ms`
-          : `GPNIP network error: ${err?.message}`,
-      );
-    } finally {
+      let res: Response;
+      try {
+        res = await fetch(`${this.BASE_URL}${path}`, {
+          method,
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+            ...(body ? { 'Content-Type': 'application/json' } : {}),
+          },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        });
+      } catch (err: any) {
+        clearTimeout(timer);
+        lastErr = err;
+        // Lỗi kết nối / timeout (fetch NÉM) — thử lại nếu còn lượt.
+        if (attempt < retries) {
+          this.logger.warn(
+            `GPNIP ${method} ${path}: lỗi kết nối (${err?.name ?? err?.message}), ` +
+              `thử lại ${attempt + 1}/${retries}`,
+          );
+          await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+          continue;
+        }
+        throw new BadRequestException(
+          err?.name === 'AbortError'
+            ? `GPNIP API timeout sau ${this.TIMEOUT_MS}ms`
+            : `GPNIP network error: ${err?.message}`,
+        );
+      }
       clearTimeout(timer);
+
+      // Có phản hồi HTTP: KHÔNG thử lại (đây là câu trả lời của NCC, kể cả lỗi
+      // nghiệp vụ) để tránh lặp lại một thao tác có thể đã thay đổi trạng thái.
+      const payload: any = await res.json().catch(() => ({}));
+      if (!res.ok || payload?.success !== true) {
+        const msg =
+          payload?.error?.message ?? payload?.message ?? `HTTP ${res.status}`;
+        throw new BadRequestException(`GPNIP API error: ${msg}`);
+      }
+      return (envelope ? payload : payload.data) as T;
     }
-
-    const payload: any = await res.json().catch(() => ({}));
-
-    if (!res.ok || payload?.success !== true) {
-      const msg =
-        payload?.error?.message ?? payload?.message ?? `HTTP ${res.status}`;
-      throw new BadRequestException(`GPNIP API error: ${msg}`);
-    }
-
-    return (envelope ? payload : payload.data) as T;
+    // Không bao giờ tới đây (vòng lặp luôn return hoặc throw), nhưng để chắc.
+    throw new BadRequestException(
+      `GPNIP network error: ${lastErr?.message ?? 'unknown'}`,
+    );
   }
 
   // ─── Mua ─────────────────────────────────────────────────────────────────────
@@ -240,6 +270,7 @@ export class GpnipProvider implements IProxyProvider {
       token,
       undefined,
       true,
+      2,
     );
   }
 
@@ -252,6 +283,9 @@ export class GpnipProvider implements IProxyProvider {
       'GET',
       '/packages/' + body.packageId,
       params.token_api,
+      undefined,
+      false,
+      2,
     );
     const mode = pkg?.pricing?.mode;
     const staticPerIp = pkg?.servicePricing?.quantity_field === 'ips' &&
@@ -339,6 +373,9 @@ export class GpnipProvider implements IProxyProvider {
         'GET',
         '/packages/' + body.packageId + '/stock',
         params.token_api,
+        undefined,
+        false,
+        2,
       );
     } catch (err: any) {
       this.logger.warn(
@@ -374,6 +411,8 @@ export class GpnipProvider implements IProxyProvider {
             ips: body.ips,
             pool: body.pool,
           },
+      false,
+      2,
     );
     if (
       quote?.price == null ||
@@ -696,7 +735,14 @@ export class GpnipProvider implements IProxyProvider {
       currency?: string;
     }
 
-    const data = await this.request<MeResponse>('GET', '/me', token_api);
+    const data = await this.request<MeResponse>(
+      'GET',
+      '/me',
+      token_api,
+      undefined,
+      false,
+      2,
+    );
 
     const rawBalance = data?.balance;
     const balance = Number(rawBalance);
