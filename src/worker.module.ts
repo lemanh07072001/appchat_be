@@ -6,6 +6,7 @@ import { Partner, PartnerSchema } from './schemas/partners.schema';
 import { Service, ServiceSchema } from './schemas/services.schema';
 import { Proxy, ProxySchema } from './schemas/proxies.schema';
 import { OrderLog, OrderLogSchema } from './schemas/order-log.schema';
+import { Country, CountrySchema } from './schemas/countries.schema';
 import { RedisModule } from './redis/redis.module';
 import { ProxyProvidersModule } from './proxy-providers/proxy-providers.module';
 import { AffiliateModule } from './affiliate/affiliate.module';
@@ -41,6 +42,10 @@ import { VouchersModule } from './vouchers/vouchers.module';
       { name: Service.name, schema: ServiceSchema },
       { name: Proxy.name,   schema: ProxySchema },
       { name: OrderLog.name, schema: OrderLogSchema },
+      // Country: cần đăng ký để worker populate('country_id') khi gắn
+      // country_code cho proxy (nếu thiếu, populate NÉM MissingSchemaError →
+      // pollUntilActive reject âm thầm → đơn kẹt PROCESSING). Kiểm chứng 2026-10-27.
+      { name: Country.name, schema: CountrySchema },
     ]),
 
     RedisModule,

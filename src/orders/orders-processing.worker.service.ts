@@ -71,7 +71,17 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
         this.logger.log(`ProcessingWorker received order ${orderId} (active: ${this.activeCount + 1}/${MAX_CONCURRENCY})`);
 
         this.activeCount++;
-        void this.pollUntilActive(orderId).finally(() => { this.activeCount--; });
+        // .catch bắt buộc: nếu pollUntilActive ném (vd lỗi cấu hình/schema),
+        // KHÔNG được để reject âm thầm — trước đây thiếu .catch nên đơn kẹt
+        // PROCESSING mà không có log nào. Ít nhất phải log để thấy.
+        void this.pollUntilActive(orderId)
+          .catch((err) =>
+            this.logger.error(
+              `Order ${orderId}: pollUntilActive lỗi không mong đợi: ${err?.message}`,
+              err?.stack,
+            ),
+          )
+          .finally(() => { this.activeCount--; });
       } catch (err) {
         this.logger.error('ProcessingWorker unexpected error', err?.message);
         await this.sleep(2000);
