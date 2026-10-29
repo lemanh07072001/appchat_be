@@ -2,7 +2,7 @@ import { ORDER_WORKER_READY_KEY } from './worker-readiness';
 import { CountryPolicyService } from '../countries/country-policy.service';
 import { countryProviderParams, publicOrderConfig } from '../countries/country-policy';
 import { resolveProduct, productProviderParams, ProductSnapshot } from '../services/product-mapping';
-import { ProviderBuyParams } from '../proxy-providers/proxy-provider.interface';
+import { ProviderBuyParams, ProviderRenewParams } from '../proxy-providers/proxy-provider.interface';
 import { assertPurchaseEnabled } from '../common/commerce-policy';
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -2017,6 +2017,28 @@ export class OrdersService {
     return null;
   }
 
+  private renewParams(order: OrderDocument, proxies: { provider_proxy_id: string }[], duration_days: number): ProviderRenewParams {
+    const partner = order.partner_id as any;
+    return {
+      token_api: partner.token_api, provider_order_id: order.provider_order_id ?? '', duration_days,
+      provider_proxy_ids: proxies.map(p => p.provider_proxy_id), provider_metadata: order.provider_metadata,
+      id_service: this.deriveIdServiceForRenew(partner.code, order, order.service_id as any),
+    };
+  }
+
+  private validateProxysellerRenewal(order: OrderDocument, proxies: { provider_proxy_id: string }[], duration_days: number): void {
+    const ids = proxies.map(p => p.provider_proxy_id);
+    if (!ids.length || ids.some(id => typeof id !== 'string' || !id.trim()) || new Set(ids).size !== ids.length) {
+      throw new BadRequestException('Danh sách ID proxy gia hạn không hợp lệ hoặc bị trùng');
+    }
+    const renewParams = this.renewParams(order, proxies, duration_days);
+    const type = String(order.provider_metadata?.proxyseller_type ||
+      (order.provider_order_id?.includes(':') ? order.provider_order_id.split(':')[0] : renewParams.id_service) || 'ipv4').toLowerCase();
+    if (['ipv6', 'mix', 'mix_isp'].includes(type) && ids.length !== Number(order.quantity)) {
+      throw new BadRequestException('Loại proxy này chỉ hỗ trợ gia hạn toàn bộ đơn; vui lòng chọn tất cả proxy của đơn');
+    }
+  }
+
   /**
    * Gia hạn một tập proxy của MỘT order: trừ tiền → gọi NCC → cập nhật hạn → ghi log.
    * Dùng chung cho gia hạn đơn lẻ (toàn bộ proxy) và gia hạn hàng loạt (một phần proxy).
@@ -2059,6 +2081,12 @@ export class OrdersService {
       throw new BadRequestException('Không thể xác định giá gia hạn');
     }
 
+    const renewParams = partner.code === 'proxyseller' ? this.renewParams(order, proxies, duration_days) : undefined;
+    if (renewParams) {
+      this.validateProxysellerRenewal(order, proxies, duration_days);
+      provider.validateRenew?.(renewParams);
+    }
+
     // 2. Trừ tiền atomic (chỉ trừ khi đủ)
     const deducted = await this.userModel.findOneAndUpdate(
       { _id: new Types.ObjectId(userId), money: { $gte: totalPrice } },
@@ -2071,17 +2099,10 @@ export class OrdersService {
     }
 
     // 3. Gọi provider.renew() — nếu fail toàn bộ thì rollback tiền
-    const idService = this.deriveIdServiceForRenew(partner.code, order, service);
+    const providerParams = renewParams ?? this.renewParams(order, proxies, duration_days);
     let result;
     try {
-      result = await provider.renew({
-        token_api:          partner.token_api,
-        provider_order_id:  order.provider_order_id ?? '',
-        duration_days,
-        provider_proxy_ids: proxies.map(p => p.provider_proxy_id),
-        id_service:         idService,
-        provider_metadata:  order.provider_metadata,
-      });
+      result = await provider.renew(providerParams);
     } catch (err: any) {
       // Rollback tiền nếu provider fail
       const refunded = await this.userModel
@@ -2247,17 +2268,14 @@ export class OrdersService {
 
     // Gọi provider.renew()
     const provider = this.providerFactory.getProvider(partner.code);
-    const idService = this.deriveIdServiceForRenew(partner.code, order, service);
+    const renewParams = this.renewParams(order, proxies, duration_days);
+    if (partner.code === 'proxyseller') {
+      this.validateProxysellerRenewal(order, proxies, duration_days);
+      provider.validateRenew?.(renewParams);
+    }
     let result;
     try {
-      result = await provider.renew({
-        token_api:          partner.token_api,
-        provider_order_id:  order.provider_order_id ?? '',
-        duration_days,
-        provider_proxy_ids: proxies.map(p => p.provider_proxy_id),
-        id_service:         idService,
-        provider_metadata:  order.provider_metadata,
-      });
+      result = await provider.renew(renewParams);
     } catch (err: any) {
       this.logger.error(`Order ${orderId}: admin renew fail: ${err?.message}`);
       void this.orderLogService.error(

@@ -141,6 +141,7 @@ export interface IProxyProvider {
   readonly retryBuy?: boolean;
   buy(params: ProviderBuyParams): Promise<BuyResult>;
   renew(params: ProviderRenewParams): Promise<RenewResult>;
+  validateRenew?(params: ProviderRenewParams): void;
   rotate(params: ProviderRotateParams): Promise<RotateResult>;
   cancel(params: ProviderCancelParams): Promise<void>;
   /**
