@@ -19,7 +19,7 @@ import {
  */
 @ProxyProvider('proxyv6')
 export class Proxyv6Provider implements IProxyProvider {
-  readonly capabilities = { buy: true, renew: true, rotate: true, cancel: true };
+  readonly capabilities = { buy: true, renew: true, rotate: true, cancel: true, countrySelection: true };
 
   private readonly BASE_URL = 'https://api.proxyv6.com/v1'; // ← thay bằng URL thực
 
@@ -53,11 +53,17 @@ export class Proxyv6Provider implements IProxyProvider {
 
   // ─── Mua proxy ──────────────────────────────────────────────────────────────
 
+  validateBuy(params: ProviderBuyParams): void {
+    if (params.product_id_configured)
+      throw new BadRequestException('ProxyV6 does not support explicit product mapping');
+  }
+
   async buy(params: ProviderBuyParams): Promise<BuyResult> {
+    this.validateBuy(params);
     const raw = await this.request<any>('POST', '/orders/buy', params.token_api, {
       quantity:      params.quantity,
       duration_days: params.duration_days,
-      country:       params.country_code,
+      country:       params.country_policy_configured ? params.country_provider_value : params.country_code,
       type:          params.proxy_type,
       protocol:      params.protocol,
       isp:           params.isp,

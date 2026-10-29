@@ -97,7 +97,7 @@ export class OmoproxyProvider implements IProxyProvider {
    * `gb` từ `quantity` là mua sai dung lượng bằng tiền thật. Admin khai body ở
    * `service.body_api`; adapter chỉ điền hộ `id` khi thiếu.
    */
-  async buy(params: ProviderBuyParams): Promise<BuyResult> {
+  private buyBody(params: ProviderBuyParams): Record<string, unknown> {
     let body: Record<string, unknown> = {};
     if (params.body_api) {
       try {
@@ -117,7 +117,18 @@ export class OmoproxyProvider implements IProxyProvider {
       );
     }
 
-    if (params.id_service && body.id === undefined) body.id = params.id_service;
+    if (params.product_id_configured && !params.id_service?.trim())
+      throw new BadRequestException('OmoProxy: mapped product ID required');
+    if (params.product_id_configured || (params.id_service && body.id === undefined)) body.id = params.id_service;
+    return body;
+  }
+
+  validateBuy(params: ProviderBuyParams): void {
+    if (params.product_id_configured) this.buyBody(params);
+  }
+
+  async buy(params: ProviderBuyParams): Promise<BuyResult> {
+    const body = this.buyBody(params);
 
     const data = await this.request<any>('POST', '/orders', params.token_api, body);
 

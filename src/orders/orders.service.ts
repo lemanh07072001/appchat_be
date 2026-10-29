@@ -1,4 +1,7 @@
 import { ORDER_WORKER_READY_KEY } from './worker-readiness';
+import { CountryPolicyService } from '../countries/country-policy.service';
+import { countryProviderParams, publicOrderConfig } from '../countries/country-policy';
+import { resolveProduct, productProviderParams, ProductSnapshot } from '../services/product-mapping';
 import { ProviderBuyParams } from '../proxy-providers/proxy-provider.interface';
 import { assertPurchaseEnabled } from '../common/commerce-policy';
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
@@ -86,6 +89,7 @@ export class OrdersService {
     private readonly notification: NotificationGateway,
     private readonly providerFactory: ProxyProviderFactory,
     private readonly vouchers: VouchersService,
+    private readonly countryPolicy: CountryPolicyService,
   ) {}
 
   private toObjectId(id?: string): Types.ObjectId | null {
@@ -359,7 +363,8 @@ export class OrdersService {
   private async resolveCountryId(country?: string): Promise<Types.ObjectId | null> {
     if (!country) return null;
     if (Types.ObjectId.isValid(country)) return new Types.ObjectId(country);
-    const found = await this.countryModel.findOne({ name: { $regex: `^${country}$`, $options: 'i' } }).exec();
+    const safe = country.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const found = await this.countryModel.findOne({ $or: [{ name: { $regex: `^${safe}$`, $options: 'i' } }, { code: country.trim().toUpperCase() }] }).exec();
     return found ? (found._id as Types.ObjectId) : null;
   }
 
@@ -368,6 +373,9 @@ export class OrdersService {
     const service = await this.serviceModel.findById(dto.service_id).exec();
     if (!service?.status || !service.api_enabled) throw new BadRequestException('Service unavailable');
     const p = this.resolvePricing(service, dto, userId);
+    const partner = service.partner ? await this.partnerModel.findById(service.partner).exec() : null;
+    resolveProduct(service, dto.isp, p.durationDays, partner?.code);
+    await this.countryPolicy.select(service, dto.country, p.durationDays, partner, dto.isp);
     integer(p.quantity, 'quantity');
     return { ...await this.vouchers.quote(dto.voucher_code, dto.service_id, p.totalPrice), quantity: p.quantity, price_per_unit: p.pricePerUnit };
   }
@@ -380,20 +388,45 @@ export class OrdersService {
     if (!service?.status || !service.api_enabled || !service.partner) throw new BadRequestException('Service unavailable');
     const p = this.resolvePricing(service, dto, userId);
     integer(p.quantity, 'quantity'); integer(p.totalPrice, 'subtotal', 0); integer(p.pricePerUnit, 'price_per_unit', 0);
+    const partner = await this.partnerModel.findById(service.partner).exec();
+    if (!partner?.status || !partner.code || !partner.token_api?.trim()) throw new BadRequestException('Provider unavailable');
+    const provider = this.providerFactory.getProvider(partner.code);
+    if (provider.capabilities?.buy === false) throw new BadRequestException('Provider does not support purchase');
+    const productSnapshot = resolveProduct(service, dto.isp, p.durationDays, partner.code);
+    const countrySnapshot = await this.countryPolicy.select(service, dto.country, p.durationDays, partner, dto.isp);
+    if (!productSnapshot.product_id_configured && countrySnapshot?.package_id && !['homeproxy', 'proxyvn', 'twoproxy'].includes(partner.code)) {
+      productSnapshot.product_id = countrySnapshot.package_id;
+      productSnapshot.product_id_configured = partner.code === 'gpnip';
+    }
+    let body: any = {}; try { body = JSON.parse(service.body_api ?? '{}'); } catch {}
+    const rotateInterval = dto.rotate_interval ?? body.rotate_interval ?? null;
+    const providerParams: ProviderBuyParams = {
+      token_api: partner.token_api, quantity: p.quantity, duration_days: p.durationDays,
+      pricing_mode: p.pricingMode, bandwidth_gb: p.bandwidthGb, body_api: service.body_api,
+      protocol: dto.protocol, ...countryProviderParams(countrySnapshot, partner.code),
+      ...productProviderParams(productSnapshot),
+      rotate_interval: rotateInterval,
+      proxy_type: partner.code === 'homeproxy' && service.type === 'rotating' ? 'rotating' : dto.proxy_type ?? service.proxy_type,
+    };
+    provider.validateBuy?.(providerParams);
+    if (!(await this.redis.exists(ORDER_WORKER_READY_KEY))) throw new BadRequestException('Order worker unavailable; purchase has not been charged');
+    await provider.preflightBuy?.(providerParams);
     const now = new Date();
     const end = p.durationDays > 0 ? new Date(+now + p.durationDays * 86400000) : null;
-    let body: any = {}; try { body = JSON.parse(service.body_api ?? '{}'); } catch {}
     return this.vouchers.purchase(userId, key, dto, {
       order_code: this.generateOrderCode(), user_id: new Types.ObjectId(userId), service_id: new Types.ObjectId(dto.service_id),
-      partner_id: service.partner, country_id: await this.resolveCountryId(dto.country) ?? service.country ?? null,
+      partner_id: service.partner, country_id: countrySnapshot ? await this.resolveCountryId(countrySnapshot.code) : await this.resolveCountryId(dto.country) ?? service.country ?? null,
       proxy_type: dto.proxy_type ?? service.proxy_type, order_type: service.type ?? '', pricing_mode: p.pricingMode,
       quantity: p.quantity, duration_days: p.durationDays, bandwidth_gb: p.bandwidthGb, price_per_unit: p.pricePerUnit,
       base_price_per_unit: p.discountPerUnit > 0 ? p.basePrice : null, discount_per_unit: p.discountPerUnit, discount_amount: p.discountAmount,
       cost_per_unit: p.costPerUnit, total_cost: p.totalCost, total_price: p.totalPrice,
       payment_status: PaymentStatusEnum.PAID, payment_method: PaymentMethodEnum.BALANCE, status: OrderStatusEnum.PENDING,
       start_date: now, end_date: end, config: {
-        protocol: dto.protocol ?? null, isp: (service.isp ?? []).find((i: any) => i.code === dto.isp || i.name === dto.isp)?.code ?? dto.isp ?? null,
-        rotate_interval: dto.rotate_interval ?? body.rotate_interval ?? null, is_cdk: body.isCdk === true,
+        product_mapping: productSnapshot,
+        ...(countrySnapshot ? { country_policy: countrySnapshot } : {}),
+        ...(partner.code === 'gpnip' ? { gpnip_body_api: service.body_api, gpnip_id_service: service.id_service } : {}),
+        protocol: dto.protocol ?? null, isp: productSnapshot.selection ?? null,
+        rotate_interval: rotateInterval, is_cdk: body.isCdk === true,
         ...(dto.username ? { username: dto.username } : {}), ...(dto.password ? { password: dto.password } : {}),
       },
     }, service.name);
@@ -492,13 +525,25 @@ export class OrdersService {
     } = this.resolvePricing(service, dto, userId);
 
     // 3. Resolve country_id
-    const countryId = await this.resolveCountryId(dto.country) ?? service.country ?? null;
+    const productSnapshot = resolveProduct(service, dto.isp, durationDays, partner.code);
+    const countrySnapshot = await this.countryPolicy.select(service, dto.country, durationDays, partner, dto.isp);
+    if (!productSnapshot.product_id_configured && countrySnapshot?.package_id && !['homeproxy', 'proxyvn', 'twoproxy'].includes(partner.code)) {
+      productSnapshot.product_id = countrySnapshot.package_id;
+      productSnapshot.product_id_configured = partner.code === 'gpnip';
+    }
+    const countryId = countrySnapshot ? await this.resolveCountryId(countrySnapshot.code) : await this.resolveCountryId(dto.country) ?? service.country ?? null;
 
+    let bodyApi: any = {}; try { bodyApi = JSON.parse(service.body_api ?? '{}'); } catch {}
+    const rotateInterval = dto.rotate_interval ?? bodyApi.rotate_interval ?? null;
     const providerParams: ProviderBuyParams = {
       token_api: partner.token_api, quantity, duration_days: durationDays,
       pricing_mode: pricingMode, bandwidth_gb: bandwidthGb,
-      body_api: service.body_api, id_service: service.id_service,
+      body_api: service.body_api,
       protocol: dto.protocol,
+      ...countryProviderParams(countrySnapshot, partner.code),
+      ...productProviderParams(productSnapshot),
+      rotate_interval: rotateInterval,
+      proxy_type: partner.code === 'homeproxy' && service.type === 'rotating' ? 'rotating' : dto.proxy_type ?? service.proxy_type,
     };
     provider.validateBuy?.(providerParams);
     if (!(await this.redis.exists(ORDER_WORKER_READY_KEY))) {
@@ -554,22 +599,16 @@ export class OrdersService {
       start_date:     now,
       end_date:       endDate,
       config: (() => {
-        let bodyApi: any = {};
-        try { bodyApi = JSON.parse(service.body_api ?? '{}'); } catch {}
         return {
+          product_mapping: productSnapshot,
+          ...(countrySnapshot ? { country_policy: countrySnapshot } : {}),
           ...(partner.code === 'gpnip' ? {
             gpnip_body_api: service.body_api,
             gpnip_id_service: service.id_service,
           } : {}),
           protocol:        dto.protocol ?? null,
-          isp:             (() => {
-            if (!dto.isp) return null;
-            const found = (service.isp ?? []).find(
-              (i: any) => i.code === dto.isp || i.name === dto.isp,
-            );
-            return found?.code ?? dto.isp;
-          })(),
-          rotate_interval: dto.rotate_interval ?? bodyApi?.rotate_interval ?? null,
+          isp:             productSnapshot.selection ?? null,
+          rotate_interval: rotateInterval,
           is_cdk:          bodyApi?.isCdk === true,
           ...(dto.username ? { username: dto.username } : {}),
           ...(dto.password ? { password: dto.password } : {}),
@@ -605,7 +644,7 @@ export class OrdersService {
         balance_after:  user.money,
         start_date:     now,
         end_date:       endDate,
-        config:         dataOrder.config,
+        config:         publicOrderConfig(dataOrder.config),
         duration_ms:    Date.now() - t0,
       },
       userId,
@@ -669,7 +708,7 @@ export class OrdersService {
         total_price:    totalPrice,
         balance_before: balanceBefore,
         balance_after:  balanceAfter,
-        config:         dataOrder.config,
+        config:         publicOrderConfig(dataOrder.config),
       },
     };
 
@@ -846,6 +885,7 @@ export class OrdersService {
 
     const data = orders.map((order) => ({
       ...order,
+      config: publicOrderConfig(order.config),
       proxies: proxyMap.get((order._id as Types.ObjectId).toString()) ?? [],
     }));
 
@@ -888,6 +928,7 @@ export class OrdersService {
     // key trung tính (protocol, isp, gateway_host) nên không bị ảnh hưởng.
     const partnerCode: string | undefined = (order as any).partner_id?.code;
     const config = (order as any).config;
+    if (config) { delete config.product_mapping; if (config.country_policy) config.country_policy = publicOrderConfig(config).country_policy; }
     if (partnerCode && config && typeof config === 'object') {
       for (const key of Object.keys(config)) {
         if (key.startsWith(`${partnerCode}_`)) delete config[key];
@@ -1419,6 +1460,8 @@ export class OrdersService {
    * Copy logic từ orders.worker.service.ts để đảm bảo renew dùng đúng giá trị như buy.
    */
   private deriveIdService(partnerCode: string, order: OrderDocument, service: any): string {
+    const snapshot = order.config?.product_mapping as ProductSnapshot | undefined;
+    if (snapshot) return snapshot.product_id;
     const isp = (order.config?.isp as string) ?? '';
 
     if (partnerCode === 'homeproxy') {
@@ -1646,7 +1689,7 @@ export class OrdersService {
           .select('id_service')
           .lean()
           .exec();
-        const packageId = (service as any)?.id_service;
+        const packageId = (order.config?.product_mapping as ProductSnapshot | undefined)?.product_id ?? (service as any)?.id_service;
         if (packageId) {
           const pkg = await provider.listCountriesForPackage(
             partner.token_api,
@@ -1874,7 +1917,7 @@ export class OrdersService {
         partner.token_api,
         order.provider_order_id ?? '',
         bandwidthGb!,
-        { metadata: order.provider_metadata, id_service: service.id_service },
+        { metadata: order.provider_metadata, id_service: this.deriveIdService(partner.code, order, service) },
       );
     } catch (err: any) {
       await this.userModel
@@ -2486,6 +2529,7 @@ export class OrdersService {
       ? await this.countryModel.findById(order.country_id).select('code').lean().exec()
       : null;
     const orderCountryCode =
+      (order.config?.country_policy as any)?.code ||
       ((occDoc as any)?.code ?? '').toString().trim().toUpperCase() || undefined;
     const docs = proxies
       .filter((p: any) => !existingSet.has(`${p.host}:${Number(p.port)}`))

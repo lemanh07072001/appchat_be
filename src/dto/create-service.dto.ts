@@ -1,5 +1,17 @@
 import { IsArray, IsBoolean, IsIn, IsInt, IsMongoId, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
+import { CountryConfigDto, normalizeIso } from '../countries/country-policy';
+import { Transform } from 'class-transformer';
+import { IsISO31661Alpha2 } from 'class-validator';
+import { DurationIds } from '../services/product-mapping';
+
+export class ServiceIspDto {
+  @IsString() @IsNotEmpty() name: string;
+  @IsString() @IsNotEmpty() code: string;
+  @IsOptional() @IsString() @IsNotEmpty() provider_product_id?: string;
+  @IsOptional() @IsString() @IsNotEmpty() provider_isp?: string;
+  @IsOptional() @DurationIds() duration_ids?: Record<string, string>;
+}
 
 /** Một bậc trong bảng giá theo GB. */
 export class BandwidthTierDto {
@@ -23,7 +35,16 @@ export class BandwidthTierDto {
   days?: number;
 }
 
-export class CreateServiceDto {
+export class CreateServiceDto extends CountryConfigDto {
+  @IsOptional() @IsIn(['inherit', 'manual', 'api', 'none'])
+  country_source?: 'inherit' | 'manual' | 'api' | 'none';
+
+  @IsOptional() @IsIn(['all', 'allowlist'])
+  country_sales_mode?: 'all' | 'allowlist';
+
+  @IsOptional() @IsArray() @Transform(({ value }) => Array.isArray(value) ? value.map(normalizeIso) : value)
+  @IsISO31661Alpha2({ each: true })
+  country_allowlist?: string[];
   @IsNotEmpty()
   @IsString()
   name: string;
@@ -85,7 +106,9 @@ export class CreateServiceDto {
 
   @IsOptional()
   @IsArray()
-  isp?: { name: string; code: string }[];
+  @ValidateNested({ each: true })
+  @Type(() => ServiceIspDto)
+  isp?: ServiceIspDto[];
 
   @IsOptional()
   @IsString()
@@ -149,6 +172,7 @@ export class CreateServiceDto {
 
   @IsOptional()
   @IsObject()
+  @DurationIds()
   duration_ids?: Record<string, string>;
 
   @IsOptional()

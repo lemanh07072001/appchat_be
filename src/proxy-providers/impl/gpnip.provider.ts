@@ -22,6 +22,7 @@ import {
 @ProxyProvider('gpnip')
 export class GpnipProvider implements IProxyProvider {
   readonly capabilities = {
+    countrySelection: true,
     buy: true,
     renew: true,
     rotate: false,
@@ -156,7 +157,7 @@ export class GpnipProvider implements IProxyProvider {
       throw new BadRequestException('GPNIP: body_api must be a JSON object');
     }
     const packageId = GpnipProvider.normalisePackageId(
-      body.packageId ?? body.id ?? params.id_service,
+      params.product_id_configured ? params.id_service : body.packageId ?? body.id ?? params.id_service,
     );
     if (packageId === null) {
       throw new BadRequestException(
@@ -202,7 +203,18 @@ export class GpnipProvider implements IProxyProvider {
       body.period = String(params.duration_days);
       delete body.duration;
     }
-    if (params.country_code && body.country === undefined)
+    if (params.country_policy_configured) {
+      delete body.country;
+      if (body.serviceOptions && typeof body.serviceOptions === 'object') {
+        body.serviceOptions = { ...body.serviceOptions };
+        delete (body.serviceOptions as Record<string, unknown>).country;
+      }
+      if (params.country_code) {
+        const value = params.country_provider_value ?? params.country_code;
+        if (!isStatic && body.serviceOptions && typeof body.serviceOptions === 'object') (body.serviceOptions as Record<string, unknown>).country = value;
+        else body.country = value;
+      }
+    } else if (params.country_code && body.country === undefined)
       body.country = params.country_code;
     // GPNIP (từ 2026-10-27): các field purchaseFields của gói static PHẢI nằm
     // trong `serviceOptions`, không để top-level. Kiểm chứng trên API thật:

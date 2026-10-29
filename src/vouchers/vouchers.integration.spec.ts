@@ -19,7 +19,7 @@ const uri = process.env.VOUCHER_TEST_MONGO_URI;
 (uri ? describe : describe.skip)('Voucher saga on disposable standalone Mongo', () => {
   let db: Connection, users: any, orders: any, services: any, proxies: any, sut: VouchersService;
   let affiliate: AffiliateService, commissions: any, configs: any;
-  const redis = { get: jest.fn(async () => null), set: jest.fn(async () => 'OK'), del: jest.fn(async () => 1), lpush: jest.fn(async () => 1), eval: jest.fn(async () => 1) };
+  const redis = { get: jest.fn(async () => null), set: jest.fn(async () => 'OK'), del: jest.fn(async () => 1), lpush: jest.fn(async () => 1), eval: jest.fn(async () => 1), exists: jest.fn(async () => 1) };
   beforeAll(async () => {
     db = await createConnection(uri!, { dbName: `voucher_test_${new Types.ObjectId()}`, serverSelectionTimeoutMS: 5000 }).asPromise();
     users = db.model(User.name, UserSchema); orders = db.model(Order.name, OrderSchema);
@@ -130,7 +130,10 @@ const uri = process.env.VOUCHER_TEST_MONGO_URI;
     const f = await fixture();
     await services.updateOne({ _id: f.serviceId }, { $set: { pricing: { '30': { price: 500 } }, partner: f.snapshot.partner_id,
       user_discounts: { [f.userId.toString()]: { '30': 100 } } } });
-    const host = new OrdersService(orders, users, services, {} as any, proxies, {} as any, redis as any, {} as any, {} as any, {} as any, {} as any, sut);
+    const host = new OrdersService(orders, users, services, {} as any, proxies,
+      { findById: () => ({ exec: async () => ({ status: true, code: 'test', token_api: 'test-key' }) }) } as any,
+      redis as any, {} as any, {} as any, {} as any,
+      { getProvider: () => ({}) } as any, sut, { select: async () => undefined } as any);
     const quote = await host.quote(f.userId.toString(), f.dto);
     expect(quote.subtotal).toBe(1200); expect(quote.total_price).toBe(901);
     await expect(host.buy(f.userId.toString(), f.dto)).rejects.toThrow('Idempotency-Key');
@@ -263,7 +266,7 @@ const uri = process.env.VOUCHER_TEST_MONGO_URI;
     const partners = { findById: () => ({ select: () => ({ exec: async () => partner }), exec: async () => partner }) };
     const factory = { getProvider: () => provider };
     const logs = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
-    const host = new OrdersService(orders, users, services, {} as any, proxies, partners as any, redis as any, logs as any, {} as any, {} as any, factory as any, sut);
+    const host = new OrdersService(orders, users, services, {} as any, proxies, partners as any, redis as any, logs as any, {} as any, {} as any, factory as any, sut, { select: async () => undefined } as any);
     const worker = new OrdersWorkerService(orders, partners as any, services, proxies, redis as any, redis as any, factory as any, affiliate, logs as any, {} as any, sut);
     const syncing = host.syncProviderOrder(id, 'manual-provider-id', 'operator');
     await fetching;

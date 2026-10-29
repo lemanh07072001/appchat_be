@@ -9,9 +9,11 @@ import { ServicesService } from './services.service';
 import { ServicesController } from './services.controller';
 import { ApiTokenGuard } from '../guards/api-token.guard';
 import { ProxyProvidersModule } from '../proxy-providers/proxy-providers.module';
+import { CountryPolicyModule } from '../countries/country-policy.module';
 
 @Module({
   imports: [
+    CountryPolicyModule,
     MongooseModule.forFeature([
       { name: Service.name, schema: ServiceSchema },
       { name: User.name, schema: UserSchema },

@@ -17,6 +17,7 @@ import { OrderLogService } from './order-log.service';
 import { OrderLogStep, OrderLogLevel } from '../schemas/order-log.schema';
 import { NotificationGateway } from '../webhook/notification.gateway';
 import { VouchersService } from '../vouchers/vouchers.service';
+import { CountrySnapshot, countryProviderParams } from '../countries/country-policy';
 
 
 /** Timeout BRPOP — block tối đa 5 giây chờ order mới */
@@ -155,7 +156,9 @@ export class OrdersWorkerService implements OnModuleInit {
       let idService = '';
       const isp = (order.config?.isp as string) ?? '';
 
-      if (partner.code === 'homeproxy') {
+      if (order.config?.product_mapping) {
+        idService = (order.config.product_mapping as any).product_id;
+      } else if (partner.code === 'homeproxy') {
         // CẢNH BÁO: các UUID dưới đây là id sản phẩm của MỘT tài khoản merchant
         // HomeProxy cụ thể. Đổi API key sang tài khoản khác là toàn bộ mã này
         // hết hiệu lực, và triệu chứng là đơn fail với
@@ -249,7 +252,7 @@ export class OrdersWorkerService implements OnModuleInit {
             bandwidth_gb:     order.bandwidth_gb,
             // HomeProxy rotating: product chỉ có gói 1 ngày
             duration_days:    (partner.code === 'homeproxy' && order.order_type === 'rotating') ? 1 : order.duration_days,
-            proxy_type:       order.proxy_type,
+            proxy_type:       partner.code === 'homeproxy' && order.order_type === 'rotating' ? 'rotating' : order.proxy_type,
             body_api:         partner.code === 'gpnip' ? order.config?.gpnip_body_api as string ?? service?.body_api : service?.body_api,
             id_service:       partner.code === 'gpnip' ? order.config?.gpnip_id_service as string ?? idService : idService,
             isp:              order.config?.isp             as string | undefined,
@@ -259,6 +262,12 @@ export class OrdersWorkerService implements OnModuleInit {
             username:         order.config?.username as string | undefined,
             password:         order.config?.password as string | undefined,
             user_id:          order.user_id?.toString(),
+            ...countryProviderParams(order.config?.country_policy as CountrySnapshot | undefined, partner.code),
+            ...(order.config?.product_mapping ? {
+              id_service: (order.config.product_mapping as any).product_id,
+              isp: (order.config.product_mapping as any).provider_isp,
+              product_id_configured: (order.config.product_mapping as any).product_id_configured,
+            } : {}),
           });
 
           // Persist the complete response before materializing proxies/status. A crash
@@ -391,7 +400,7 @@ export class OrdersWorkerService implements OnModuleInit {
           location:          p.location ?? '',
           isp:               p.isp      ?? '',
           provider:          partner.code,
-          country_code:      p.country_code ?? 'VN',
+          country_code:      p.country_code ?? (order.config?.country_policy as CountrySnapshot | undefined)?.code ?? 'VN',
           is_active:         true,
           is_available:      false,
         }));

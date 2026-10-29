@@ -30,6 +30,18 @@ describe('HomeproxyProvider.checkConnection', () => {
     mockFetch(200, { data: [], total: 0 });
     await expect(provider.checkConnection('token-that')).resolves.toBeDefined();
   });
+  it('mapped invalid ISP never falls back to VIETTEL or calls the network', async () => {
+    mockFetch(200, { id: 'order' });
+    await expect(provider.buy({ token_api: 'key', quantity: 1, duration_days: 30, id_service: 'fp1', isp: 'fpt_fp1', product_id_configured: true })).rejects.toThrow('provider_isp');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+  it('mapped FPT sends the product and provider enum with no catalog lookup', async () => {
+    mockFetch(200, { id: 'order' });
+    await provider.buy({ token_api: 'key', quantity: 1, duration_days: 30, id_service: 'fp1', isp: 'FPT', product_id_configured: true });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const [, init] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(JSON.parse(init.body).products[0]).toMatchObject({ provider: 'FPT', product: { id: 'fp1' } });
+  });
 
   it('gọi endpoint chỉ-đọc bằng GET, kèm Bearer token', async () => {
     mockFetch(200, { data: [] });

@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Schema as MongooseSchema, Types } from 'mongoose';
+import { ServiceIsp } from '../services/product-mapping';
 
 export type ServiceDocument = Service & Document & {
   createdAt: Date;
@@ -8,6 +9,18 @@ export type ServiceDocument = Service & Document & {
 
 @Schema({ timestamps: true })
 export class Service {
+  @Prop({ type: String, enum: ['inherit', 'manual', 'api', 'none'] })
+  country_source?: string;
+
+  @Prop({ type: [{ _id: false, code: String, name: String, provider_value: String }], default: undefined })
+  country_options?: { code: string; name?: string; provider_value?: string }[];
+
+  @Prop({ type: String, enum: ['all', 'allowlist'] })
+  country_sales_mode?: string;
+
+  @Prop({ type: [String], default: undefined })
+  country_allowlist?: string[];
+
   @Prop({ required: true })
   name: string;
 
@@ -62,8 +75,8 @@ export class Service {
   @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
   note: Record<string, string>;
 
-  @Prop({ type: [{ name: String, code: String }], default: [] })
-  isp: { name: string; code: string }[];
+  @Prop({ type: [{ name: String, code: String, provider_product_id: String, provider_isp: String, duration_ids: MongooseSchema.Types.Mixed }], default: [] })
+  isp: ServiceIsp[];
 
   @Prop({ default: 'private' })
   usage_type: string;

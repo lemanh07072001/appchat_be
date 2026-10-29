@@ -1,6 +1,9 @@
-import { IsBoolean, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
+import { CountryConfigDto } from '../countries/country-policy';
 
-export class CreatePartnerDto {
+export class CreatePartnerDto extends CountryConfigDto {
+  @IsOptional() @IsIn(['manual', 'api', 'none'])
+  country_source?: 'manual' | 'api' | 'none';
   @IsNotEmpty()
   @IsString()
   name: string;

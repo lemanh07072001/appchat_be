@@ -27,6 +27,17 @@ describe('GpnipProvider API routing', () => {
     global.fetch = originalFetch;
   });
 
+  it('configured policy overrides top-level/nested country and template package', () => {
+    const params: any = { token_api: testToken, quantity: 1, duration_days: 30, id_service: '77', product_id_configured: true, country_policy_configured: true, country_code: 'US', country_provider_value: 'mapped-us',
+      body_api: JSON.stringify({ packageId: 42, country: 'VN', period: '7', ips: 1, serviceOptions: { country: 'DE' } }) };
+    expect(provider.buildBuyBody(params)).toMatchObject({ packageId: 77, serviceOptions: { country: 'mapped-us', period: '30' } });
+    delete params.country_code;
+    expect(provider.buildBuyBody(params).serviceOptions).not.toHaveProperty('country');
+    params.body_api = JSON.stringify({ packageId: 42, country: 'VN', serviceOptions: { country: 'DE' } });
+    expect(provider.buildBuyBody(params)).not.toHaveProperty('country');
+    expect(provider.buildBuyBody(params).serviceOptions).not.toHaveProperty('country');
+  });
+
   it('quotes static IP quantity and period from the billed order', async () => {
     const pkg = {
       pricing: { mode: 'time' }, servicePricing: { quantity_field: 'ips', rows: [{ when: { period: '30' }, price: 2.25 }] },

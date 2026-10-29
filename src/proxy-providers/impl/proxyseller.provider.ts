@@ -62,7 +62,7 @@ interface ProxyListData {
 
 @ProxyProvider('proxyseller')
 export class ProxysellerProvider implements IProxyProvider {
-  readonly capabilities = { buy: true, renew: true, rotate: false, cancel: false };
+  readonly capabilities = { buy: true, renew: true, rotate: false, cancel: false, countrySelection: true };
 
   private readonly logger = new Logger(ProxysellerProvider.name);
   private readonly BASE_URL = 'https://proxy-seller.com/personal/api/v1';
@@ -159,6 +159,13 @@ export class ProxysellerProvider implements IProxyProvider {
       } catch {
         // bỏ qua, dùng object rỗng
       }
+    }
+
+    if (params.country_policy_configured) {
+      if (!params.country_code || !params.country_provider_value) {
+        throw new BadRequestException('ProxySeller requires a configured countryId mapping');
+      }
+      extra.countryId = params.country_provider_value;
     }
 
     // periodId: ưu tiên body_api.periodId, fallback auto-map từ duration_days

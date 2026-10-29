@@ -203,6 +203,7 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
         // Quốc gia của ĐƠN (khách đã mua), dùng khi provider không trả
         // country_code. Trước đây mặc định cứng 'VN' nên proxy US bị gắn nhãn VN.
         const orderCountryCode =
+          (order.config?.country_policy as any)?.code ||
           ((order.country_id as any)?.code ?? '').toString().trim().toUpperCase() ||
           undefined;
         const proxyDocs = proxies.map((p: any) => ({
