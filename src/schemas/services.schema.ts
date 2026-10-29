@@ -8,6 +8,17 @@ export type ServiceDocument = Service & Document & {
 
 @Schema({ timestamps: true })
 export class Service {
+  @Prop({ type: Number, default: 0, select: false })
+  connector_checkout_revision: number;
+  /** Server-managed package selection. Never accepted from a customer order payload. */
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  connector_binding: {
+    accountId: string;
+    connectorCode: string;
+    connectorVersion: number;
+    packages: Record<string, string>;
+  } | null;
+
   @Prop({ required: true })
   name: string;
 
@@ -38,6 +49,10 @@ export class Service {
   @Prop({ type: [String], default: [] })
   protocol: string[];
 
+  /** Public purchase UX, set only when binding a versioned Connector definition. */
+  @Prop({ type: String, enum: ['fixed', 'select', 'dual'], default: undefined })
+  connector_protocol_mode?: 'fixed' | 'select' | 'dual';
+
   /**
    * Cổng gateway của dịch vụ, do admin tự khai — KHÔNG phụ thuộc nhà cung cấp.
    *
@@ -64,6 +79,10 @@ export class Service {
 
   @Prop({ type: [{ name: String, code: String }], default: [] })
   isp: { name: string; code: string }[];
+
+  /** Optional multi-country selection with shared VND pricing. Does not replace legacy country. */
+  @Prop({ type: [{ _id: false, name: String, code: String }], default: [] })
+  country_choices: { name: string; code: string }[];
 
   @Prop({ default: 'private' })
   usage_type: string;

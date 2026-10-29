@@ -9,6 +9,10 @@ export type ProxyDocument = Proxy & Document & {
 
 @Schema({ timestamps: true })
 export class Proxy {
+  /** Stable Connector delivery identity. Absent for legacy proxies. */
+  @Prop({ type: String })
+  connector_delivery_key?: string;
+
   @Prop({ type: Types.ObjectId, ref: 'Order', default: null })
   order_id: Types.ObjectId;
 
@@ -23,6 +27,10 @@ export class Proxy {
 
   @Prop({ type: String, enum: ProxyProtocolEnum, required: true })
   protocol: ProxyProtocolEnum;
+
+  /** One purchased proxy may expose multiple protocol endpoints; never multiple billable units. */
+  @Prop({ type: [{ _id: false, protocol: { type: String, enum: ProxyProtocolEnum }, port: Number }], default: undefined })
+  access_endpoints?: { protocol: ProxyProtocolEnum; port: number }[];
 
   @Prop({ required: true })
   auth_username: string;
@@ -96,6 +104,7 @@ export class Proxy {
 }
 
 export const ProxySchema = SchemaFactory.createForClass(Proxy);
+ProxySchema.index({ connector_delivery_key: 1 }, { unique: true, sparse: true });
 
 // Tự động ẩn proxy đã xoá mềm khỏi MỌI truy vấn đọc (find*, countDocuments) — không
 // phải sửa từng call-site. Khi cần lấy cả proxy đã xoá: .setOptions({ withDeleted: true }).

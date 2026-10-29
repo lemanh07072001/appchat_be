@@ -95,7 +95,7 @@ export class ServicesService {
     const services = await this.serviceModel
       .find({ status: true, api_enabled: true })
       .populate('country', 'name code image_url')
-      .select('_id name type proxy_type ip_version protocol isp pricing pricing_mode bandwidth_tiers bandwidth_max_gb usage_type user_discounts')
+      .select('_id name type proxy_type ip_version protocol connector_protocol_mode isp country_choices pricing pricing_mode bandwidth_tiers bandwidth_max_gb usage_type user_discounts')
       .sort({ order: 1, createdAt: -1 })
       .lean()
       .exec();
@@ -115,7 +115,7 @@ export class ServicesService {
     const services = await this.serviceModel
       .find(filter)
       .populate('country', 'name code image_url')
-      .select('-partner -body_api')
+      .select('-partner -body_api -connector_binding')
       .sort({ order: 1, createdAt: -1 })
       .lean()
       .exec();
@@ -257,6 +257,7 @@ export class ServicesService {
       ip_version: service.ip_version,
       partner: service.partner,
       country: service.country,
+      country_choices: service.country_choices,
       body_api: service.body_api,
       id_service: service.id_service,
       protocol: service.protocol,

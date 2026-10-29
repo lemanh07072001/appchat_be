@@ -18,9 +18,12 @@ export function calculateQuote(amount: number, program?: any): PromotionQuote {
     .sort((a: any, b: any) => b.minAmount - a.minAmount)[0];
   const rate = tier?.rate ?? 0;
   // Rates have at most two decimal places. BigInt avoids multiplication rounding.
+  const calculatedBonus = BigInt(amount) * BigInt(Math.round(rate * 100)) / BigInt(10_000);
+  // Match the admin UI: a zero cap means unlimited, not a zero-value bonus.
   const bonusAmount = program ? Number(
-    [BigInt(amount) * BigInt(Math.round(rate * 100)) / BigInt(10_000), BigInt(program.maxBonus)]
-      .reduce((a, b) => a < b ? a : b),
+    program.maxBonus > 0 && calculatedBonus > BigInt(program.maxBonus)
+      ? BigInt(program.maxBonus)
+      : calculatedBonus,
   ) : 0;
   const totalAmount = vnd(amount + bonusAmount);
   return { promotionId: program?._id ?? null, promotionName: program?.name ?? null, rate, bonusAmount, totalAmount, amount };

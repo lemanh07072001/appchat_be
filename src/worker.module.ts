@@ -15,6 +15,9 @@ import { OrdersWorkerService } from './orders/orders.worker.service';
 import { OrdersProcessingWorkerService } from './orders/orders-processing.worker.service';
 import { OrderLogService } from './orders/order-log.service';
 import { VouchersModule } from './vouchers/vouchers.module';
+import { ProviderConnectorsModule } from './provider-connectors/provider-connectors.module';
+import { ConnectorWorkflowsWorker } from './provider-connectors/connector-workflows.worker';
+import { ConnectorFulfillmentEffects } from './orders/connector-fulfillment-effects.service';
 
 /**
  * Module tối giản cho worker process — không có HTTP server.
@@ -49,11 +52,12 @@ import { VouchersModule } from './vouchers/vouchers.module';
     ]),
 
     RedisModule,
+    ProviderConnectorsModule,
     ProxyProvidersModule,
     AffiliateModule,
     WebhookModule,
     VouchersModule,
   ],
-  providers: [OrdersWorkerService, OrdersProcessingWorkerService, OrderLogService],
+  providers: [OrdersWorkerService, OrdersProcessingWorkerService, OrderLogService, ConnectorWorkflowsWorker, ConnectorFulfillmentEffects],
 })
 export class WorkerModule {}

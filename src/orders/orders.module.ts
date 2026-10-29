@@ -23,6 +23,7 @@ import { AffiliateModule } from '../affiliate/affiliate.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { WebhookModule } from '../webhook/webhook.module';
 import { VouchersModule } from '../vouchers/vouchers.module';
+import { ProviderConnectorsModule } from '../provider-connectors/provider-connectors.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { VouchersModule } from '../vouchers/vouchers.module';
     WalletModule,
     WebhookModule,
     VouchersModule,
+    ProviderConnectorsModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService, OrdersScheduler, OrdersProcessingScheduler, OrdersExpirationScheduler, OrdersBandwidthScheduler, /* OrdersRecoveryScheduler, */ OrderLogService, ProxyRotateService, ApiTokenGuard],

@@ -64,6 +64,7 @@ export class OrdersRecoveryScheduler {
       const orders = await this.orderModel
         .find({
           status:            OrderStatusEnum.PENDING_REFUND,
+          connector_purchase: null,
           provider_order_id: { $ne: '' },
           createdAt:         { $gte: cutoff },
         })
@@ -87,6 +88,7 @@ export class OrdersRecoveryScheduler {
   }
 
   private async tryRecover(order: OrderDocument): Promise<void> {
+    if (order.connector_purchase) return;
     const orderId = (order._id as Types.ObjectId).toString();
 
     if (!order.partner_id) return;

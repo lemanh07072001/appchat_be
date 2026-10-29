@@ -17,6 +17,7 @@ import { OrderLogService } from './order-log.service';
 import { OrderLogStep, OrderLogLevel } from '../schemas/order-log.schema';
 import { NotificationGateway } from '../webhook/notification.gateway';
 import { VouchersService } from '../vouchers/vouchers.service';
+import { ConnectorOrderPurchase } from '../provider-connectors/connector-order-purchase.service';
 
 
 /** Timeout BRPOP — block tối đa 5 giây chờ order mới */
@@ -54,6 +55,7 @@ export class OrdersWorkerService implements OnModuleInit {
     private readonly orderLogService: OrderLogService,
     private readonly notification: NotificationGateway,
     private readonly vouchers: VouchersService,
+    private readonly connectorPurchase?: ConnectorOrderPurchase,
   ) {}
 
   onModuleInit() {
@@ -110,6 +112,7 @@ export class OrdersWorkerService implements OnModuleInit {
     // Khai báo ở scope ngoài để dùng được trong catch (gửi Telegram lỗi)
     let lastProviderData: any = undefined;
     let ownsVoucherDispatch = false;
+    let connectorBound = false;
 
     try {
       // Re-fetch từ DB để xác nhận vẫn còn PENDING (tránh race condition)
@@ -120,6 +123,15 @@ export class OrdersWorkerService implements OnModuleInit {
 
       if (!order) {
         void this.orderLogService.warn(orderId, OrderLogStep.WORKER_ORDER_VERIFIED, 'Order không còn ở trạng thái PENDING, bỏ qua');
+        return;
+      }
+
+      // Connector orders must never fall through to legacy adapters or automatic refunds.
+      if (order.connector_purchase) {
+        connectorBound = true;
+        if (!this.connectorPurchase) throw new Error('Connector purchase service unavailable');
+        await this.connectorPurchase.purchase(orderId);
+        await this.redis.lpush(PROCESSING_ORDERS_KEY, orderId);
         return;
       }
 
@@ -481,6 +493,10 @@ export class OrdersWorkerService implements OnModuleInit {
         );
       }
     } catch (err) {
+      if (connectorBound) {
+        this.logger.warn(`Order ${orderId}: connector purchase paused; reconciliation required`);
+        return;
+      }
       this.logger.error(`Order ${orderId} thất bại: ${err?.message}`);
       await this.orderModel.findOneAndUpdate({ _id: orderId, status: { $in: [OrderStatusEnum.PENDING, OrderStatusEnum.PROCESSING] } }, {
         status:        OrderStatusEnum.PENDING_REFUND,

@@ -10,6 +10,15 @@ describe('Deposit promotion calculations', () => {
     expect(calculateQuote(200_000, program)).toMatchObject({ rate: 15.25, bonusAmount: 25_000, totalAmount: 225_000 });
     expect(calculateQuote(100_000)).toMatchObject({ promotionId: null, rate: 0, bonusAmount: 0 });
   });
+  it('treats a zero cap as unlimited and preserves positive caps', () => {
+    const unlimited = { ...program, maxBonus: 0, tiers: [{ minAmount: 100_000, rate: 5 }] };
+    expect(calculateQuote(100_000, unlimited)).toMatchObject({ rate: 5, bonusAmount: 5_000, totalAmount: 105_000 });
+    expect(calculateQuote(100_019, unlimited).bonusAmount).toBe(5_000);
+    expect(calculateQuote(99_999, unlimited).bonusAmount).toBe(0);
+    expect(calculateQuote(1_000_000, { ...program, maxBonus: 0 }).bonusAmount).toBe(152_500);
+    expect(calculateQuote(1_000_000, program).bonusAmount).toBe(25_000);
+    expect(() => calculateQuote(Number.MAX_SAFE_INTEGER, unlimited)).toThrow();
+  });
   it('rejects fractions, unsafe values, strings, below-minimum deposits and overflow', () => {
     for (const value of [NaN, Infinity, -1, 1.5, '10000', Number.MAX_SAFE_INTEGER + 1]) expect(() => vnd(value)).toThrow();
     expect(() => calculateQuote(9999)).toThrow();

@@ -36,6 +36,11 @@ export class OrdersExpirationScheduler {
         { voucher_snapshot: null },
         { voucher_resolution: 'fulfilled', actual_quantity: { $gt: 0 }, voucher_affiliate_pending: { $ne: true } },
       ] };
+      // A paid Connector purchase awaiting delivery/reconciliation must not disappear
+      // into EXPIRED merely because the checkout's estimated end_date has passed.
+      const connectorEligibility = { $and: [{ $or: [
+        { connector_purchase: null }, { connector_purchase_state: 'delivered', connector_affiliate_pending: { $ne: true } },
+      ] }] };
 
       // Tìm orders ACTIVE hoặc PROCESSING có end_date <= now
       const expiredOrders = await this.orderModel
@@ -43,6 +48,7 @@ export class OrdersExpirationScheduler {
           status: { $in: [OrderStatusEnum.ACTIVE, OrderStatusEnum.PROCESSING] },
           end_date: { $ne: null, $lte: now },
           ...voucherEligibility,
+          ...connectorEligibility,
         })
         .select('_id order_code')
         .lean()
@@ -62,7 +68,7 @@ export class OrdersExpirationScheduler {
 
         // Cập nhật status order → EXPIRED
         await this.orderModel.updateMany(
-          { _id: { $in: orderIds }, status: { $in: [OrderStatusEnum.ACTIVE, OrderStatusEnum.PROCESSING] }, end_date: { $ne: null, $lte: now }, ...voucherEligibility },
+          { _id: { $in: orderIds }, status: { $in: [OrderStatusEnum.ACTIVE, OrderStatusEnum.PROCESSING] }, end_date: { $ne: null, $lte: now }, ...voucherEligibility, ...connectorEligibility },
           { status: OrderStatusEnum.EXPIRED },
         ).exec();
 

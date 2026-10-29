@@ -21,6 +21,7 @@ import { AnnouncementsModule } from './announcements/announcements.module';
 import { BlogModule } from './blog/blog.module';
 import { StatsModule } from './stats/stats.module';
 import { RenewModule } from './renew/renew.module';
+import { ProviderConnectorsModule } from './provider-connectors/provider-connectors.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { RenewModule } from './renew/renew.module';
     CountriesModule,
 
     PartnersModule,
+    ProviderConnectorsModule,
 
     ServicesModule,
 

@@ -13,6 +13,32 @@ export type OrderDocument = Order & Document & {
 
 @Schema({ timestamps: true })
 export class Order {
+  @Prop({ type: String, select: false })
+  connector_checkout_key?: string;
+
+  @Prop({ type: String, select: false })
+  connector_checkout_hash?: string;
+
+  @Prop({ type: MongooseSchema.Types.Mixed, select: false })
+  connector_checkout_response?: Record<string, any>;
+  /** Immutable execution binding set by trusted checkout, never from customer config. */
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  connector_purchase: {
+    accountId: string;
+    connectorCode: string;
+    connectorVersion: number;
+    input: Record<string, unknown>;
+    protocolSelection?: { mode: 'fixed' | 'select' | 'dual'; protocols: string[] };
+    ispSelection?: { code: string; name: string; value: string };
+    countrySelection?: { code: string; name: string; value: string };
+  } | null;
+
+  @Prop({ type: String, default: null, enum: [null, 'dispatching', 'awaiting_delivery', 'reconciliation', 'delivered'] })
+  connector_purchase_state: string | null;
+
+  @Prop({ type: Boolean, default: false })
+  connector_affiliate_pending: boolean;
+
   @Prop({ type: Number, default: null })
   subtotal: number | null;
 
@@ -217,6 +243,8 @@ export class Order {
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);
+OrderSchema.index({ connector_checkout_key: 1 }, { unique: true,
+  partialFilterExpression: { connector_checkout_key: { $type: 'string' } } });
 
 OrderSchema.index({ user_id: 1, status: 1 });
 OrderSchema.index({ end_date: 1, status: 1 });

@@ -45,6 +45,7 @@ export class OrdersBandwidthScheduler {
       const orders = await this.orderModel
         .find({
           pricing_mode: 'bandwidth',
+          connector_purchase: null,
           status: OrderStatusEnum.ACTIVE,
           provider_order_id: { $ne: '' },
         })

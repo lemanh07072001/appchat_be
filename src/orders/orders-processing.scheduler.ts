@@ -36,7 +36,14 @@ export class OrdersProcessingScheduler implements OnModuleInit {
 
     try {
       const orders = await this.orderModel
-        .find({ status: OrderStatusEnum.PROCESSING, provider_order_id: { $ne: '' }, $or: [{ end_date: { $gt: new Date() } }, { end_date: null }] })
+        .find({ $or: [
+          { status: OrderStatusEnum.PROCESSING, connector_purchase: null, provider_order_id: { $ne: '' },
+            $or: [{ end_date: { $gt: new Date() } }, { end_date: null }] },
+          { status: OrderStatusEnum.PROCESSING, connector_purchase: { $ne: null },
+            connector_purchase_state: { $in: ['awaiting_delivery', 'dispatching', 'reconciliation'] } },
+          { status: OrderStatusEnum.ACTIVE, connector_purchase: { $ne: null },
+            connector_purchase_state: 'delivered', connector_affiliate_pending: true },
+        ] })
         .select('_id')
         .lean()
         .exec();

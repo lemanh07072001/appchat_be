@@ -29,6 +29,8 @@ import { WalletTxType } from '../schemas/wallet-transaction.schema';
 import { NotificationGateway } from '../webhook/notification.gateway';
 import { VouchersService } from '../vouchers/vouchers.service';
 import { integer, normalizeCode } from '../vouchers/voucher.rules';
+import { ConnectorCheckout } from '../provider-connectors/connector-checkout.service';
+import { ConnectorServiceBinding } from '../provider-connectors/connector-service-binding.service';
 
 /** Kết quả gia hạn của MỘT order (dùng cho cả gia hạn đơn lẻ và hàng loạt) */
 export interface PerOrderRenewResult {
@@ -86,6 +88,8 @@ export class OrdersService {
     private readonly notification: NotificationGateway,
     private readonly providerFactory: ProxyProviderFactory,
     private readonly vouchers: VouchersService,
+    private readonly connectorCheckout?: ConnectorCheckout,
+    private readonly connectorBindings?: ConnectorServiceBinding,
   ) {}
 
   private toObjectId(id?: string): Types.ObjectId | null {
@@ -378,6 +382,7 @@ export class OrdersService {
     if (prior) return prior;
     const service = await this.serviceModel.findById(dto.service_id).exec();
     if (!service?.status || !service.api_enabled || !service.partner) throw new BadRequestException('Service unavailable');
+    if (service.connector_binding) throw new BadRequestException('Dịch vụ Connector chưa mở thanh toán voucher; chưa trừ ví');
     const p = this.resolvePricing(service, dto, userId);
     integer(p.quantity, 'quantity'); integer(p.totalPrice, 'subtotal', 0); integer(p.pricePerUnit, 'price_per_unit', 0);
     const now = new Date();
@@ -424,6 +429,11 @@ export class OrdersService {
     };
   }> {
     assertPurchaseEnabled();
+    const checkoutPayload = Object.fromEntries(Object.entries(dto).filter(([, value]) => value !== undefined));
+    if (idempotencyKey && this.connectorCheckout) {
+      const prior = await this.connectorCheckout.replay(userId, idempotencyKey, checkoutPayload);
+      if (prior) return prior as any;
+    }
     if (dto.voucher_code !== undefined) {
       if (!normalizeCode(dto.voucher_code)) throw new BadRequestException('Invalid voucher code');
       return this.buyVoucher(userId, dto, idempotencyKey);
@@ -465,8 +475,45 @@ export class OrdersService {
     if (!service.api_enabled) {
       throw new BadRequestException('Dịch vụ này đang tạm dừng mua');
     }
+    if (service.connector_binding) {
+      if (!this.connectorCheckout || !this.connectorBindings || !idempotencyKey) {
+        throw new BadRequestException('Idempotency-Key required for Connector purchase; chưa trừ ví');
+      }
+      const p = this.resolvePricing(service, dto, userId);
+      if (p.pricingMode !== 'duration' || dto.rotate_interval !== undefined) {
+        throw new BadRequestException('Connector checkout chưa hỗ trợ chu kỳ xoay; chưa trừ ví');
+      }
+      const binding = await this.connectorBindings.prepare(service.connector_binding, {
+        quantity: p.quantity, durationDays: p.durationDays, protocol: dto.protocol, serviceProtocols: service.protocol ?? [],
+         username: dto.username, password: dto.password,
+         isp: dto.isp, serviceIsps: service.isp ?? [],
+         country: dto.country, serviceCountries: service.country_choices ?? [],
+      });
+      if ((binding.protocolSelection?.mode ?? null) !== (service.connector_protocol_mode ?? null)) {
+        throw new BadRequestException('Cấu hình giao thức cần gắn lại với mẫu Connector; chưa trừ ví');
+      }
+      if (!(await this.redis.exists(ORDER_WORKER_READY_KEY))) throw new BadRequestException('Bộ xử lý đơn chưa sẵn sàng; chưa trừ ví');
+      const response = await this.connectorCheckout.commit({ userId, key: idempotencyKey, payload: checkoutPayload, service,
+        order: { order_code: this.generateOrderCode(), connector_purchase: binding,
+          country_id: binding.countrySelection ? undefined : service.country ?? undefined, proxy_type: service.proxy_type, order_type: service.type,
+          pricing_mode: 'duration', quantity: p.quantity, duration_days: p.durationDays,
+          price_per_unit: p.pricePerUnit, total_price: p.totalPrice, total_cost: p.totalCost ?? undefined,
+          cost_per_unit: p.costPerUnit ?? undefined, discount_amount: p.discountAmount, discount_per_unit: p.discountPerUnit,
+          base_price_per_unit: p.discountPerUnit > 0 ? p.basePrice : undefined,
+           profit: p.totalCost != null ? p.totalPrice - p.totalCost : undefined,
+            config: { ...(binding.input.protocol ? { protocol: binding.input.protocol } : {}),
+              ...(binding.ispSelection ? { isp: binding.ispSelection.code, isp_name: binding.ispSelection.name } : {}),
+              ...(binding.countrySelection ? { country: binding.countrySelection.code, country_name: binding.countrySelection.name } : {}) },
+        } });
+      // Committed orders survive Redis outages; pending scheduler repairs lost queue delivery.
+      await this.redis.lpush(PENDING_ORDERS_KEY, response.data.order_id).catch(() => {});
+      return response as any;
+    }
 
     // Reject incomplete/demo providers BEFORE wallet deduction or order creation.
+    if (service.country_choices?.length) {
+      throw new BadRequestException('Dịch vụ nhiều quốc gia cần cấu hình Connector; chưa trừ ví');
+    }
     const partner = service.partner ? await this.partnerModel.findById(service.partner).exec() : null;
     if (!partner || partner.status !== true || !partner.code || !partner.token_api?.trim()) {
       throw new BadRequestException('Nhà cung cấp chưa sẵn sàng hoặc chưa có API key; chưa trừ ví');
@@ -1032,6 +1079,7 @@ export class OrdersService {
   async updateStatus(id: string, status: OrderStatusEnum, actor = 'admin'): Promise<OrderDocument> {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+    this.assertLegacyOrderMutation(order);
     if (order.voucher_snapshot) throw new BadRequestException('Use provider reconciliation or confirmed-failure voucher refund');
     const prevStatus = order.status;
     order.status = status;
@@ -1049,6 +1097,7 @@ export class OrdersService {
   async updatePaymentStatus(id: string, status: PaymentStatusEnum, actor = 'admin'): Promise<OrderDocument> {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+    this.assertLegacyOrderMutation(order);
     if (order.voucher_snapshot) throw new BadRequestException('Voucher payment status follows durable wallet receipts');
     const prevStatus = order.payment_status;
     order.payment_status = status;
@@ -1066,6 +1115,7 @@ export class OrdersService {
   async approveRefund(id: string, actor = 'admin'): Promise<OrderDocument> {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+    this.assertLegacyOrderMutation(order);
 
     if (order.voucher_snapshot) return (await this.vouchers.refund(order, undefined, actor)).order as any;
 
@@ -1217,6 +1267,7 @@ export class OrdersService {
   ): Promise<{ refunded_amount: number; balance_after: number; order: OrderDocument }> {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+    this.assertLegacyOrderMutation(order);
 
     if (order.voucher_snapshot) return this.vouchers.refund(order, amount, actor);
 
@@ -1311,6 +1362,7 @@ export class OrdersService {
   async refundMissingQuantity(id: string, actor = 'admin') {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+    this.assertLegacyOrderMutation(order);
 
     if (order.voucher_snapshot) return this.vouchers.refund(order, undefined, actor, true);
 
@@ -1374,6 +1426,7 @@ export class OrdersService {
   async retryOrder(id: string, actor = 'admin') {
     const order = await this.orderModel.findById(id).exec();
     if (!order) throw new BadRequestException('Order not found');
+    this.assertLegacyOrderMutation(order);
 
     if (order.voucher_snapshot) throw new BadRequestException('Voucher dispatch is fenced; reconcile provider outcome instead of retrying');
 
@@ -1562,6 +1615,7 @@ export class OrdersService {
     if (order.user_id?.toString() !== userId) {
       throw new BadRequestException('Bạn không có quyền thao tác trên đơn này');
     }
+    this.assertLegacyOrderMutation(order);
 
     const partner = order.partner_id as any;
     if (partner?.status !== true) {
@@ -1818,6 +1872,7 @@ export class OrdersService {
     if (order.user_id?.toString() !== userId) {
       throw new BadRequestException('Bạn không có quyền nạp thêm cho đơn này');
     }
+    this.assertLegacyOrderMutation(order);
     if ((order as any).pricing_mode !== 'bandwidth') {
       throw new BadRequestException('Đơn này không bán theo dung lượng');
     }
@@ -1954,7 +2009,14 @@ export class OrdersService {
    * Kiểm tra điều kiện gia hạn của 1 order (dùng chung cho renew đơn lẻ + bulk).
    * Trả về chuỗi lý do nếu KHÔNG gia hạn được, null nếu OK.
    */
+  private assertLegacyOrderMutation(order: Pick<Order, 'connector_purchase'>): void {
+    if (order.connector_purchase) {
+      throw new BadRequestException('Đơn Connector chưa hỗ trợ thao tác này; cần đối soát qua luồng Connector, không dùng xử lý nhà cung cấp cũ');
+    }
+  }
+
   private checkOrderRenewable(order: OrderDocument): string | null {
+    if (order.connector_purchase) return 'Đơn Connector chưa hỗ trợ gia hạn';
     if (order.status !== OrderStatusEnum.ACTIVE) {
       return 'Chỉ có thể gia hạn đơn ở trạng thái ACTIVE';
     }
@@ -1994,6 +2056,7 @@ export class OrdersService {
     actor?: string;
   }): Promise<PerOrderRenewResult> {
     const { order, proxies, duration_days, userId, chargeQuantity, bulkRef } = params;
+    this.assertLegacyOrderMutation(order);
     const actor = params.actor ?? userId;
     const isAuto = actor !== userId;
     const logStep = isAuto
@@ -2285,6 +2348,7 @@ export class OrdersService {
   async importProxies(id: string, lines: string[], actor = 'admin') {
     const order = await this.orderModel.findById(id).populate('service_id').populate('country_id').exec();
     if (!order) throw new BadRequestException('Order not found');
+    this.assertLegacyOrderMutation(order);
     if (order.voucher_snapshot) throw new BadRequestException('Use provider-order reconciliation for voucher orders');
 
     const parsed = lines
@@ -2402,6 +2466,7 @@ export class OrdersService {
     if (!providerOrderId) {
       providerOrderId = order.provider_order_id || '';
     }
+    this.assertLegacyOrderMutation(order);
     if (!providerOrderId) {
       throw new BadRequestException('Thiếu provider_order_id (truyền trong body hoặc nằm sẵn trong order)');
     }
@@ -2573,6 +2638,7 @@ export class OrdersService {
 
     const order = await this.orderModel.findById(id).populate('service_id').exec();
     if (!order) throw new BadRequestException('Order not found');
+    this.assertLegacyOrderMutation(order);
 
     const partner = order.partner_id
       ? await this.partnerModel.findById(order.partner_id).select('code token_api').exec()
@@ -2673,7 +2739,8 @@ export class OrdersService {
   }
 
   async delete(id: string, actor = 'admin') {
-    const order = await this.orderModel.findOneAndDelete({ _id: id, voucher_snapshot: null }).exec();
+    // Checkout receipts live on Connector orders and must survive indefinitely.
+    const order = await this.orderModel.findOneAndDelete({ _id: id, voucher_snapshot: null, connector_purchase: null }).exec();
     if (!order) throw new BadRequestException('Order not found');
     void this.orderLogService.info(
       id,
@@ -2835,7 +2902,7 @@ export class OrdersService {
       .populate('service_id', 'name allow_renew')
       .populate('partner_id', 'code token_api')
       // status/user_id cần cho checkOrderRenewable — không bỏ khỏi select
-      .select('order_code end_date price_per_unit quantity duration_days proxy_type order_type status user_id')
+      .select('order_code end_date price_per_unit quantity duration_days proxy_type order_type status user_id connector_purchase')
       .sort({ end_date: 1 })
       .exec();
 

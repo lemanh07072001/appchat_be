@@ -18,6 +18,9 @@ import { OrderLogStep } from '../schemas/order-log.schema';
 import { NotificationGateway } from '../webhook/notification.gateway';
 import { Service, ServiceDocument } from '../schemas/services.schema';
 import { VouchersService } from '../vouchers/vouchers.service';
+import { ConnectorOrderDelivery } from '../provider-connectors/connector-order-delivery.service';
+import { ConnectorOrderPurchase } from '../provider-connectors/connector-order-purchase.service';
+import { ConnectorFulfillmentEffects } from './connector-fulfillment-effects.service';
 
 /** Timeout BRPOP — block tối đa 5s chờ order mới */
 const BRPOP_TIMEOUT_SECONDS  = 5;
@@ -48,6 +51,9 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
     private readonly orderLogService:  OrderLogService,
     private readonly notification:     NotificationGateway,
     private readonly vouchers: VouchersService,
+    private readonly connectorDelivery?: ConnectorOrderDelivery,
+    private readonly connectorPurchase?: ConnectorOrderPurchase,
+    private readonly connectorEffects?: ConnectorFulfillmentEffects,
   ) {}
 
   onModuleInit() {
@@ -95,12 +101,23 @@ export class OrdersProcessingWorkerService implements OnModuleInit {
 
     const order = await this.orderModel
       .findById(orderId)
-      .select('_id provider_order_id provider_metadata partner_id service_id config user_id total_price quantity status voucher_snapshot actual_quantity refunded_amount voucher_provider_confirmed_failed voucher_resolution country_id')
+      .select('_id connector_purchase provider_order_id provider_metadata partner_id service_id config user_id total_price quantity status voucher_snapshot actual_quantity refunded_amount voucher_provider_confirmed_failed voucher_resolution country_id')
       .populate({ path: 'country_id', select: 'code' })
       .exec();
 
     if (!order) {
       this.logger.warn(`Order ${orderId}: không tìm thấy trong DB`);
+      return;
+    }
+    if (order.connector_purchase) {
+      // Errors stay isolated from legacy failure/refund handling. The backup scheduler
+      // can retry this read without re-submitting a purchase.
+      try {
+        await this.connectorPurchase?.recover(orderId);
+        await this.connectorDelivery?.poll(orderId);
+        await this.connectorEffects?.reconcile(orderId);
+      }
+      catch { this.logger.warn(`Order ${orderId}: Connector delivery pending; no purchase/refund attempted`); }
       return;
     }
     if (order.status !== OrderStatusEnum.PROCESSING && !(order.voucher_snapshot && order.voucher_resolution === 'open' && order.status === OrderStatusEnum.PENDING_REFUND)) {

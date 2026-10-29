@@ -1,5 +1,18 @@
-import { IsArray, IsBoolean, IsIn, IsInt, IsMongoId, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, Max, Min, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayUnique, IsArray, IsBoolean, IsIn, IsInt, IsMongoId, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, Matches, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
+
+/** Explicit per-service display name and provider API code. */
+export class ServiceIspDto {
+  @IsString()
+  @MaxLength(128)
+  @Matches(/^[^\s\x00-\x1f\x7f](?:[^\x00-\x1f\x7f]*[^\s\x00-\x1f\x7f])?$/)
+  name: string;
+
+  @IsString()
+  @MaxLength(128)
+  @Matches(/^[^\s\x00-\x1f\x7f](?:[^\x00-\x1f\x7f]*[^\s\x00-\x1f\x7f])?$/)
+  code: string;
+}
 
 /** Một bậc trong bảng giá theo GB. */
 export class BandwidthTierDto {
@@ -85,7 +98,19 @@ export class CreateServiceDto {
 
   @IsOptional()
   @IsArray()
-  isp?: { name: string; code: string }[];
+  @ArrayMaxSize(200)
+  @ArrayUnique((item: ServiceIspDto) => item?.code)
+  @ValidateNested({ each: true })
+  @Type(() => ServiceIspDto)
+  isp?: ServiceIspDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ArrayUnique((item: ServiceIspDto) => item?.code)
+  @ValidateNested({ each: true })
+  @Type(() => ServiceIspDto)
+  country_choices?: ServiceIspDto[];
 
   @IsOptional()
   @IsString()
