@@ -83,6 +83,7 @@ export class ProxyProviderFactory implements OnModuleInit {
           renew:  provider.capabilities?.renew  ?? true,
           rotate: provider.capabilities?.rotate ?? true,
           cancel: provider.capabilities?.cancel ?? true,
+          countrySelection: provider.capabilities?.countrySelection === true,
           // Mấy cái tuỳ chọn dò được bằng sự tồn tại của method.
           usage: typeof provider.fetchUsage === 'function',
           topup: typeof provider.extendBandwidth === 'function',

@@ -24,9 +24,11 @@ import { WalletModule } from '../wallet/wallet.module';
 import { WebhookModule } from '../webhook/webhook.module';
 import { VouchersModule } from '../vouchers/vouchers.module';
 import { ProviderConnectorsModule } from '../provider-connectors/provider-connectors.module';
+import { CountryPolicyModule } from '../countries/country-policy.module';
 
 @Module({
   imports: [
+    CountryPolicyModule,
     MongooseModule.forFeature([
       { name: Order.name, schema: OrderSchema },
       { name: User.name, schema: UserSchema },

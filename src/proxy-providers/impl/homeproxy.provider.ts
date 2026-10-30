@@ -106,7 +106,16 @@ export class HomeproxyProvider implements IProxyProvider {
 
   // ─── Mua proxy ───────────────────────────────────────────────────────────────
 
+  validateBuy(params: ProviderBuyParams): void {
+    if (!params.product_id_configured) return;
+    if (!params.id_service?.trim()) throw new BadRequestException('HomeProxy requires a product ID');
+    const rotating = (params.rotate_interval ?? 0) > 0 || params.proxy_type === 'rotating';
+    if (!(rotating ? ['HOMEPROXY'] : ['VIETTEL', 'VNPT', 'FPT']).includes(params.isp?.toUpperCase() ?? ''))
+      throw new BadRequestException('Invalid HomeProxy provider_isp');
+  }
+
   async buy(params: ProviderBuyParams): Promise<BuyResult> {
+    this.validateBuy(params);
     const { user, password } = params.username && params.password
       ? { user: params.username, password: params.password }
       : this.generateCredentials();

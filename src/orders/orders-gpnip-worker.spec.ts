@@ -99,10 +99,45 @@ describe('GPNIP worker purchase safety', () => {
       expect.objectContaining({ status: OrderStatusEnum.PENDING_REFUND }),
     );
   });
+  it('dispatches snapshot ISO/mapping/package despite changed service templates', async () => {
+    order.config.country_policy = { source: 'manual', code: 'US', provider_value: 'mapped-us', package_id: '77' };
+    await worker.processOrder(order._id);
+    expect(provider.buy).toHaveBeenCalledWith(expect.objectContaining({ country_policy_configured: true, country_code: 'US', country_provider_value: 'mapped-us', id_service: '77' }));
+  });
   it('does not resubmit an attempted purchase without a reconciled provider ID', async () => {
     order.config.gpnip_purchase_started = true;
     await worker.processOrder(order._id);
     expect(provider.buy).not.toHaveBeenCalled();
+  });
+  it('uses variant snapshot over live service, GPNIP template and country package', async () => {
+    order.config.product_mapping = { product_id: 'fp1-week', provider_isp: 'FPT', selection: 'fpt_fp1', product_id_configured: true };
+    order.config.country_policy = { source: 'manual', code: 'US', package_id: 'stale' };
+    await worker.processOrder(order._id);
+    expect(provider.buy).toHaveBeenCalledWith(expect.objectContaining({ id_service: 'fp1-week', isp: 'FPT', product_id_configured: true }));
+  });
+  it.each([0, 60])('dispatches validated rotation snapshot %s despite template changes', async rotate_interval => {
+    order.config.rotate_interval = rotate_interval;
+    worker.serviceModel.findById = () => ({ exec: async () => ({ body_api: '{"rotate_interval":999}' }) });
+    await worker.processOrder(order._id);
+    expect(provider.buy).toHaveBeenCalledWith(expect.objectContaining({ rotate_interval }));
+  });
+  it('HomeProxy rotating snapshot retains the special one-day provider duration', async () => {
+    worker.partnerModel.findById = () => ({ exec: async () => ({ code: 'homeproxy', status: true, token_api: 'key' }) });
+    order.order_type = 'rotating';
+    order.config.product_mapping = { product_id: 'rotating-week', provider_isp: 'HOMEPROXY', product_id_configured: true };
+    await worker.processOrder(order._id);
+    expect(provider.buy).toHaveBeenCalledWith(expect.objectContaining({ id_service: 'rotating-week', isp: 'HOMEPROXY', duration_days: 1, proxy_type: 'rotating' }));
+  });
+  it.each([
+    ['homeproxy', 'vnpt', 'ab734ade-8bc6-4a70-b783-d9b31d7df36c'],
+    ['proxyvn', 'Viettel', 'Viettel'],
+    ['twoproxy', 'Viettel_thuong_2', 'Viettel_thuong_2'],
+  ])('keeps %s connector-derived package for configured none', async (code, isp, expectedId) => {
+    worker.partnerModel.findById = () => ({ exec: async () => ({ code, status: true, token_api: 'test-key' }) });
+    order.order_type = 'static';
+    order.config = { isp, country_policy: { source: 'none', package_id: '' } };
+    await worker.processOrder(order._id);
+    expect(provider.buy).toHaveBeenCalledWith(expect.objectContaining({ id_service: expectedId, country_policy_configured: true }));
   });
   it('resumes polling an existing provider ID without buying again', async () => {
     order.config.gpnip_purchase_started = true;

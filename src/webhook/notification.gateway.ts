@@ -17,13 +17,13 @@ import { User, UserDocument } from '../schemas/users.schema';
 export class NotificationGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(NotificationGateway.name);
 
-  private sendTelegram(text: string, channel: 'default' | 'order' = 'default') {
+  private sendTelegram(text: string, channel: 'default' | 'deposit' | 'order' = 'default') {
     const token = channel === 'order'
       ? (process.env.TELEGRAM_ORDER_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN)
-      : process.env.TELEGRAM_BOT_TOKEN;
+      : (channel === 'deposit' ? process.env.TELEGRAM_DEPOSIT_BOT_TOKEN : undefined) || process.env.TELEGRAM_BOT_TOKEN;
     const chatId = channel === 'order'
       ? (process.env.TELEGRAM_ORDER_CHAT_ID || process.env.TELEGRAM_CHAT_ID)
-      : process.env.TELEGRAM_CHAT_ID;
+      : (channel === 'deposit' ? process.env.TELEGRAM_DEPOSIT_CHAT_ID : undefined) || process.env.TELEGRAM_CHAT_ID;
     if (!token || !chatId) return;
     fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
@@ -81,6 +81,7 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
       `👤 ${userLabel}\n` +
       `💵 Số tiền: <b>${data.amount.toLocaleString('vi-VN')}đ</b>\n` +
       `🏦 Số dư: <b>${data.balance.toLocaleString('vi-VN')}đ</b>`,
+      'deposit',
     );
   }
 
@@ -96,6 +97,7 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
       `💵 Số tiền: <b>${data.amount.toLocaleString('vi-VN')}đ</b>\n` +
       `🏦 Nguồn: ${data.source}\n` +
       `📝 Chưa cộng ví — vào trang quản lý nạp tiền để duyệt hoặc huỷ.`,
+      'deposit',
     );
   }
 
@@ -112,6 +114,7 @@ export class NotificationGateway implements OnGatewayConnection, OnGatewayDiscon
       `💵 Số tiền: <b>${data.amount.toLocaleString('vi-VN')}đ</b>\n` +
       `📉 Ngưỡng tối thiểu: <b>${data.min.toLocaleString('vi-VN')}đ</b>\n` +
       `📝 ${data.reason}`,
+      'deposit',
     );
   }
 

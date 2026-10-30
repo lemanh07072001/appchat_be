@@ -8,6 +8,12 @@ export type PartnerDocument = Partner & Document & {
 
 @Schema({ timestamps: true })
 export class Partner {
+  @Prop({ type: String, enum: ['manual', 'api', 'none'] })
+  country_source?: string;
+
+  @Prop({ type: [{ _id: false, code: String, name: String, provider_value: String }], default: undefined })
+  country_options?: { code: string; name?: string; provider_value?: string }[];
+
   @Prop({ required: true })
   name: string;
 

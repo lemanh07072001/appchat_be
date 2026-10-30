@@ -12,6 +12,7 @@ import { createHash } from 'crypto';
 import { AffiliateService } from '../affiliate/affiliate.service';
 import { OrderStatusEnum as OS, PaymentStatusEnum } from '../enum/order.enum';
 import { AUDIT_CAP, RECEIPT_CAP, RESERVATION_CAP, discount, fingerprint, integer, missingRefund, normalizeCode, validateVoucher } from './voucher.rules';
+import { publicOrderConfig } from '../countries/country-policy';
 
 // Native collections intentionally preserve full, versioned durable snapshots. Each monetary
 // boundary is ONE document update; none of these operations requires Mongo transactions.
@@ -217,7 +218,7 @@ export class VouchersService implements OnModuleInit {
       proxy_type: o.proxy_type, pricing_mode: o.pricing_mode, quantity: o.quantity, duration_days: o.duration_days,
       bandwidth_gb: o.bandwidth_gb, start_date: o.start_date, end_date: o.end_date, price_per_unit: o.price_per_unit,
       subtotal: o.subtotal, voucher_snapshot: o.voucher_snapshot, total_price: o.total_price,
-      balance_before: i.balance_before ?? null, balance_after: i.balance_after ?? null, config: o.config,
+      balance_before: i.balance_before ?? null, balance_after: i.balance_after ?? null, config: publicOrderConfig(o.config),
     } };
   }
   private async dispatch(i: any) {
@@ -246,7 +247,7 @@ export class VouchersService implements OnModuleInit {
         ip_address: p.host, port: Number(p.port), protocol: p.protocol?.toLowerCase() ?? 'http',
         auth_username: p.username, auth_password: p.password, provider_proxy_id: p.provider_proxy_id,
         provider_metadata: p.provider_metadata ?? {}, domain: p.domain ?? '', prev_ip: p.prev_ip ?? '', location: p.location ?? '',
-        isp: p.isp ?? '', provider: frozen.partnerCode, country_code: p.country_code ?? 'VN', is_active: true, is_available: false,
+        isp: p.isp ?? '', provider: frozen.partnerCode, country_code: p.country_code ?? o.config?.country_policy?.code ?? 'VN', is_active: true, is_available: false,
         ...(o.config?.is_cdk ? { cdk_key: hex.slice(24,56) } : {}),
       };
     });

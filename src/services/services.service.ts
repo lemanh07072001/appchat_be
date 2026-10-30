@@ -7,6 +7,9 @@ import { Model, Types } from 'mongoose';
 import { CreateServiceDto } from '../dto/create-service.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
+import { CountryPolicyService } from '../countries/country-policy.service';
+import { validateCountryConfig } from '../countries/country-policy';
+import { validateProductMapping } from './product-mapping';
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -21,6 +24,8 @@ export class ServicesService {
     private partnerModel: Model<Partner>,
     @InjectModel(Country.name)
     private countryModel: Model<Country>,
+    private readonly countryPolicy: CountryPolicyService,
+    private readonly providerFactory: ProxyProviderFactory,
   ) {}
 
   /**
@@ -33,7 +38,7 @@ export class ServicesService {
    *
    * Chỉ đọc: không sửa gì ở dịch vụ, không gọi API tốn tiền.
    */
-  async listCountriesForService(factory: ProxyProviderFactory, id: string) {
+  async listCountriesForService(factory: ProxyProviderFactory, id: string, duration?: number, isp?: string) {
     if (!Types.ObjectId.isValid(id)) {
       throw new BadRequestException('Service id không hợp lệ');
     }
@@ -57,7 +62,7 @@ export class ServicesService {
         'Adapter chưa hỗ trợ tra quốc gia theo gói',
       );
     }
-    if (!service.id_service?.trim()) {
+    if (!this.countryPolicy.packageId(service, duration, partner.code, isp)) {
       throw new BadRequestException(
         'Dịch vụ chưa khai ID gói nhà cung cấp (id_service)',
       );
@@ -65,7 +70,7 @@ export class ServicesService {
 
     return provider.listCountriesForPackage(
       partner.token_api,
-      service.id_service.trim(),
+      this.countryPolicy.packageId(service, duration, partner.code, isp),
     );
   }
 
@@ -74,6 +79,8 @@ export class ServicesService {
    * Tránh leak danh sách user khác qua API public.
    */
   private applyUserDiscount(service: any, userId: string | null) {
+    if (service.isp) service.isp = service.isp.map(({ name, code }: any) => ({ name, code }));
+    if (service.country_options) service.country_options = service.country_options.map(({ code, name }: any) => ({ code, name }));
     const discounts = userId ? service.user_discounts?.[userId] : null;
     if (discounts && service.pricing) {
       const newPricing: Record<string, any> = {};
@@ -93,9 +100,9 @@ export class ServicesService {
 
   async findApiEnabledList(userId: string | null = null) {
     const services = await this.serviceModel
-      .find({ status: true, api_enabled: true })
+      .find({ status: true, api_enabled: true, consolidated_into: null })
       .populate('country', 'name code image_url')
-      .select('_id name type proxy_type ip_version protocol connector_protocol_mode isp country_choices pricing pricing_mode bandwidth_tiers bandwidth_max_gb usage_type user_discounts')
+      .select('_id name type proxy_type ip_version protocol connector_protocol_mode isp country_choices pricing pricing_mode bandwidth_tiers bandwidth_max_gb usage_type user_discounts country country_source country_options country_sales_mode country_allowlist')
       .sort({ order: 1, createdAt: -1 })
       .lean()
       .exec();
@@ -108,7 +115,7 @@ export class ServicesService {
     ip_version?: string,
     userId: string | null = null,
   ) {
-    const filter: any = { status: true };
+    const filter: any = { status: true, consolidated_into: null };
     if (category) filter.type = category;
     if (usage_type) filter.usage_type = usage_type;
     if (ip_version) filter.ip_version = ip_version;
@@ -128,7 +135,7 @@ export class ServicesService {
     const search = (query.search ?? '').trim();
     const skip = (page - 1) * limit;
 
-    const andConditions: any[] = [];
+    const andConditions: any[] = [{ consolidated_into: null }];
 
     if (search) {
       const safe = escapeRegex(search);
@@ -196,6 +203,8 @@ export class ServicesService {
   }
 
   async create(data: CreateServiceDto): Promise<ServiceDocument> {
+    validateProductMapping(data);
+    validateCountryConfig(data, true);
     const service = new this.serviceModel({
       ...data,
       partner: this.toObjectId(data.partner),
@@ -214,8 +223,13 @@ export class ServicesService {
     for (const [key, value] of Object.entries(data)) {
       if (value !== undefined) updateData[key] = value;
     }
-    updateData.partner = this.toObjectId(data.partner);
-    updateData.country = this.toObjectId(data.country);
+    if (data.partner !== undefined) updateData.partner = this.toObjectId(data.partner);
+    if (data.country !== undefined) updateData.country = this.toObjectId(data.country);
+    const merged = validateCountryConfig({ ...service.toObject(), ...updateData }, true);
+    validateProductMapping(merged);
+    for (const key of ['country_source', 'country_options', 'country_sales_mode', 'country_allowlist']) {
+      if (merged[key] !== undefined) updateData[key] = merged[key];
+    }
     if (data.isp !== undefined) updateData.isp = data.isp;
     if (data.protocol !== undefined) updateData.protocol = data.protocol;
     // Cổng do admin khai. Gán khi `!== undefined` (không phải khi truthy) để
@@ -270,6 +284,10 @@ export class ServicesService {
       pricing: service.pricing,
       badge: service.badge,
       duration_ids: service.duration_ids,
+      country_source: service.country_source,
+      country_options: service.country_options,
+      country_sales_mode: service.country_sales_mode,
+      country_allowlist: service.country_allowlist,
       order: service.order,
     });
     return newService.save();
@@ -281,6 +299,18 @@ export class ServicesService {
       throw new BadRequestException('Service not found');
     }
     return { message: 'Service deleted successfully' };
+  }
+
+  async effectiveCountries(id: string, duration?: number, admin = false, isp?: string) {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid service ID');
+    if (duration !== undefined && (!Number.isSafeInteger(duration) || duration < 0)) throw new BadRequestException('Invalid duration_days');
+    const service = await this.serviceModel.findById(id).exec();
+    if (!service || (!admin && !service.status)) throw new BadRequestException('Service unavailable');
+    const effective = await this.countryPolicy.effective(service, duration, isp);
+    if (admin && effective.source === 'legacy') {
+      return { ...await this.listCountriesForService(this.providerFactory, id, duration, isp), effective_policy: effective };
+    }
+    return admin ? { ...effective, iso_codes: effective.countries.map(c => c.code), effective_policy: effective } : effective;
   }
 
   async deleteMany(ids: string[]) {

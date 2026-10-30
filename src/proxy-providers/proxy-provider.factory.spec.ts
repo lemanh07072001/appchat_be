@@ -40,6 +40,10 @@ describe('ProxyProviderFactory', () => {
     const codes = factory.listProviders().map((p) => p.code);
     expect(codes).toEqual([...codes].sort());
   });
+  it('opts in only adapters that consume configured country selection', () => {
+    expect(factory.listProviders().filter(p => p.capabilities.countrySelection).map(p => p.code))
+      .toEqual(['gpnip', 'proxyseller', 'proxyv6']);
+  });
 
   it('khai đúng provider không gia hạn / xoay IP được', () => {
     const byCode = Object.fromEntries(factory.listProviders().map((p) => [p.code, p.capabilities]));

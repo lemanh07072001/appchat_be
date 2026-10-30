@@ -7,9 +7,12 @@ export interface ProviderBuyParams {
   quantity: number;
   duration_days: number;
   country_code?: string;
+  country_policy_configured?: boolean;
+  country_provider_value?: string;
   proxy_type?: string;       // static | rotating | ...
   protocol?: string;         // http | socks5 | ...
   isp?: string;
+  product_id_configured?: boolean;
   body_api?: string;         // template body từ service config (nếu có)
   id_service?: string;       // id dịch vụ nhà cung cấp (không phải provider nào cũng cần)
   rotate_interval?: number;  // phút xoay IP (0 = không xoay / proxy tĩnh)
@@ -84,6 +87,8 @@ export interface RotateResult {
  * "chưa hỗ trợ". `usage/topup` là method tuỳ chọn nên factory tự dò.
  */
 export interface ProviderCapabilities {
+  /** Explicit opt-in: buy honors configured ISO/provider country selection. */
+  countrySelection: boolean;
   buy: boolean;
   renew: boolean;
   rotate: boolean;
@@ -127,7 +132,7 @@ export interface IProxyProvider {
   readonly capabilities?: Pick<
     ProviderCapabilities,
     'buy' | 'renew' | 'rotate' | 'cancel'
-  >;
+  > & Partial<Pick<ProviderCapabilities, 'countrySelection'>>;
 
   /** Local validation must never spend money; preflight may call quote/catalog APIs only. */
   validateBuy?(params: ProviderBuyParams): void;
@@ -136,6 +141,7 @@ export interface IProxyProvider {
   readonly retryBuy?: boolean;
   buy(params: ProviderBuyParams): Promise<BuyResult>;
   renew(params: ProviderRenewParams): Promise<RenewResult>;
+  validateRenew?(params: ProviderRenewParams): void;
   rotate(params: ProviderRotateParams): Promise<RotateResult>;
   cancel(params: ProviderCancelParams): Promise<void>;
   /**

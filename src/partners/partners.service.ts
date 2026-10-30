@@ -6,6 +6,7 @@ import { CreatePartnerDto } from '../dto/create-partner.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { CheckProviderConnectionDto } from '../dto/check-provider-connection.dto';
 import { ProxyProviderFactory } from '../proxy-providers/proxy-provider.factory';
+import { validateCountryConfig } from '../countries/country-policy';
 
 @Injectable()
 export class PartnersService {
@@ -234,6 +235,7 @@ export class PartnersService {
   }
 
   async create(data: CreatePartnerDto): Promise<PartnerDocument> {
+    validateCountryConfig(data);
     const partner = new this.partnerModel(data);
     return partner.save();
   }
@@ -243,7 +245,9 @@ export class PartnersService {
     if (!partner) {
       throw new BadRequestException('Partner not found');
     }
-    Object.assign(partner, data);
+    const update = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
+    const merged = validateCountryConfig({ ...partner.toObject(), ...update });
+    Object.assign(partner, update, { country_options: merged.country_options });
     return partner.save();
   }
 
@@ -265,6 +269,8 @@ export class PartnersService {
       status: partner.status,
       token_api: partner.token_api,
       code: partner.code,
+      country_source: partner.country_source,
+      country_options: partner.country_options,
       order: partner.order,
     });
     return newPartner.save();

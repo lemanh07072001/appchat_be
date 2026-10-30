@@ -82,7 +82,13 @@ export class ProxysieutocProvider implements IProxyProvider {
 
   // ─── Mua proxy ───────────────────────────────────────────────────────────────
 
+  validateBuy(params: ProviderBuyParams): void {
+    if (params.product_id_configured && !params.id_service?.trim())
+      throw new BadRequestException('ProxySieuToc: mapped product ID required');
+  }
+
   async buy(params: ProviderBuyParams): Promise<BuyResult> {
+    this.validateBuy(params);
     interface BuyResponse {
       status: string;
       statusCode: number;
@@ -114,6 +120,7 @@ export class ProxysieutocProvider implements IProxyProvider {
       }
     }
 
+    if (params.product_id_configured) idProduct = params.id_service!;
     if (!idProduct) {
       throw new BadRequestException('ProxySieuToc: thiếu id_product trong body_api');
     }

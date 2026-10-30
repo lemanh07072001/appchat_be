@@ -163,6 +163,18 @@ mkdir -p logs
 | `REDIS_PASSWORD` | Redis password (bo trong neu khong dat) | _(trong)_ |
 | `REDIS_DB` | Redis database index | `0` |
 
+### Telegram cho thong bao nap tien
+
+- `TELEGRAM_DEPOSIT_BOT_TOKEN`: bot rieng cho thong bao nap tien; neu bo trong, dung `TELEGRAM_BOT_TOKEN`.
+- `TELEGRAM_DEPOSIT_CHAT_ID`: chat nhan thong bao; neu bo trong, dung `TELEGRAM_CHAT_ID`. Hai gia tri fallback doc lap.
+- Kenh don hang giu nguyen: `TELEGRAM_ORDER_BOT_TOKEN` / `TELEGRAM_ORDER_CHAT_ID`, fallback ve `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`.
+
+Sau khi cap nhat bien moi truong tren VPS, can restart ca server va worker de ap dung:
+
+```bash
+pm2 restart proxy-server proxy-worker --update-env
+```
+
 ---
 
 ## 9. Chay app voi PM2

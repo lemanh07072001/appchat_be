@@ -19,7 +19,7 @@ interface PsResponse<T> {
 }
 
 interface OrderMakeData {
-  orderId: number;
+  orderId: string | number;
   total: number;
   listBaseOrderNumbers: string[];
   balance: number;
@@ -62,7 +62,7 @@ interface ProxyListData {
 
 @ProxyProvider('proxyseller')
 export class ProxysellerProvider implements IProxyProvider {
-  readonly capabilities = { buy: true, renew: true, rotate: false, cancel: false };
+  readonly capabilities = { buy: true, renew: true, rotate: false, cancel: false, countrySelection: true };
 
   private readonly logger = new Logger(ProxysellerProvider.name);
   private readonly BASE_URL = 'https://proxy-seller.com/personal/api/v1';
@@ -76,11 +76,12 @@ export class ProxysellerProvider implements IProxyProvider {
     path: string,
     body?: Record<string, any>,
     query?: Record<string, string | number>,
+    apiVersion: 'v1' | 'v2' = 'v1',
   ): Promise<PsResponse<T>> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.TIMEOUT_MS);
 
-    let url = `${this.BASE_URL}${path}`;
+    let url = `${this.BASE_URL.replace(/v1$/, apiVersion)}${path}`;
     if (query && Object.keys(query).length) {
       const qs = new URLSearchParams();
       for (const [k, v] of Object.entries(query)) {
@@ -159,6 +160,13 @@ export class ProxysellerProvider implements IProxyProvider {
       } catch {
         // bỏ qua, dùng object rỗng
       }
+    }
+
+    if (params.country_policy_configured) {
+      if (!params.country_code || !params.country_provider_value) {
+        throw new BadRequestException('ProxySeller requires a configured countryId mapping');
+      }
+      extra.countryId = params.country_provider_value;
     }
 
     // periodId: ưu tiên body_api.periodId, fallback auto-map từ duration_days
@@ -301,9 +309,54 @@ export class ProxysellerProvider implements IProxyProvider {
 
   // ─── Gia hạn ─────────────────────────────────────────────────────────────────
 
-  async renew(params: ProviderRenewParams): Promise<RenewResult> {
+  private async resolveRenewalPeriodId(key: string, type: string, days: number): Promise<string> {
+    const raw = await this.request<{ items?: { period?: unknown } }>(
+      'GET', `/${key}/reference/list/${type}`, undefined, undefined, 'v2',
+    );
+    if (raw?.status !== 'success') {
+      throw new BadRequestException(`ProxySeller renewal reference lookup failed: ${JSON.stringify(raw?.errors ?? [])}`);
+    }
+    const periods = raw.data?.items?.period;
+    if (!Array.isArray(periods)) {
+      throw new BadRequestException('ProxySeller renewal reference: missing data.items.period array');
+    }
+    const positiveDays = (value: unknown): number | undefined => {
+      if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/.test(value))) return undefined;
+      const n = Number(value);
+      return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+    };
+    const codeDays = (value: unknown): number | undefined => {
+      if (typeof value !== 'string') return undefined;
+      // Machine codes only; numeric IDs and localized display names are not durations.
+      const match = /^(\d+)(d|w|m|y)$/.exec(value);
+      if (!match) return undefined;
+      return positiveDays(Number(match[1]) * ({ d: 1, w: 7, m: 30, y: 365 }[match[2]]!));
+    };
+    const matches: string[] = [];
+    for (const entry of periods) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      const id = entry.id;
+      const validId = (typeof id === 'string' && id.trim().length > 0) ||
+        (typeof id === 'number' && Number.isSafeInteger(id) && id > 0);
+      const explicit = [entry.days, entry.period].filter(value => value !== undefined && value !== null);
+      const durations = explicit.length
+        ? explicit.map(value => positiveDays(value) ?? codeDays(value))
+        : [entry.id, entry.code, entry.value].map(codeDays).filter(value => value !== undefined);
+      if (!durations.includes(days)) continue;
+      if (!validId || durations.some(value => value !== days)) {
+        throw new BadRequestException(`ProxySeller renewal reference: ambiguous period for ${days} days (${type})`);
+      }
+      matches.push(String(id));
+    }
+    // Even repeated rows are rejected: do not silently choose one catalog entry.
+    if (matches.length !== 1) {
+      throw new BadRequestException(`ProxySeller renewal reference: ${matches.length ? 'ambiguous period' : 'no matching period'} for ${days} days (${type})`);
+    }
+    return matches[0];
+  }
+
+  private renewalPayload(params: ProviderRenewParams) {
     const {
-      token_api: key,
       provider_order_id,
       provider_proxy_ids,
       duration_days,
@@ -311,10 +364,7 @@ export class ProxysellerProvider implements IProxyProvider {
       provider_metadata,
     } = params;
 
-    // ưu tiên ids = từng proxy id; fallback dùng orderId nếu không có
-    const ids = provider_proxy_ids?.length
-      ? provider_proxy_ids.map((x) => Number(x)).filter((x) => !isNaN(x))
-      : [];
+    const ids = (provider_proxy_ids ?? []).map(String).filter(Boolean);
 
     if (!ids.length) {
       throw new BadRequestException(
@@ -328,22 +378,33 @@ export class ProxysellerProvider implements IProxyProvider {
       provider_metadata as Record<string, any> | undefined,
     );
     const type = this.resolveType(
-      parsed.type || id_service || this.DEFAULT_TYPE,
+      provider_metadata?.proxyseller_type || (provider_order_id?.includes(':') ? parsed.type : id_service) || this.DEFAULT_TYPE,
     );
-
-    // periodId truyền qua id_service (vd: "ipv4|7" — type|periodId) nếu không có cách khác.
-    // Tạm dùng duration_days map → periodId nếu khách dùng số ngày chuẩn của ProxySeller.
-    const periodId = String(duration_days);
-
+    if (type === 'resident') throw new BadRequestException('ProxySeller: resident không hỗ trợ endpoint gia hạn này');
+    if (!Number.isSafeInteger(duration_days) || duration_days <= 0) {
+      throw new BadRequestException('ProxySeller: renewal duration_days must be a positive integer');
+    }
+    const byOrder = ['ipv6', 'mix', 'mix_isp'].includes(type);
+    if (byOrder && !parsed.orderId) throw new BadRequestException('ProxySeller renew: thiếu provider_order_id');
     const payload = {
-      ids,
-      periodId,
-      paymentId: 1,
+      ...(byOrder ? { orderIds: [parsed.orderId] } : { ids }),
+      paymentId: 'balance',
       coupon: '',
     };
+    return { type, payload };
+  }
+
+  validateRenew(params: ProviderRenewParams): void {
+    this.renewalPayload(params);
+  }
+
+  async renew(params: ProviderRenewParams): Promise<RenewResult> {
+    const { type, payload: selection } = this.renewalPayload(params);
+    const periodId = await this.resolveRenewalPeriodId(params.token_api, type, params.duration_days);
+    const payload = { ...selection, periodId };
 
     this.logger.log(`[RENEW] type=${type} payload=${JSON.stringify(payload)}`);
-    const raw = await this.request<OrderMakeData>('POST', `/${key}/prolong/make/${type}`, payload);
+    const raw = await this.request<OrderMakeData>('POST', `/${params.token_api}/prolong/make/${type}`, payload, undefined, 'v2');
     this.logger.log(`[RENEW] raw response: ${JSON.stringify(raw)}`);
 
     if (raw.status !== 'success' || !raw.data?.orderId) {
