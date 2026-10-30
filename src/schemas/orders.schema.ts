@@ -36,6 +36,43 @@ export class Order {
   @Prop({ type: String, default: null, enum: [null, 'dispatching', 'awaiting_delivery', 'reconciliation', 'delivered'] })
   connector_purchase_state: string | null;
 
+  /** One renewal attempt at a time, snapshotted the same way a purchase is: the proxies and
+   * duration sent upstream, the price already debited, and nothing a customer can restate. */
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  connector_renewal: {
+    accountId: string;
+    connectorCode: string;
+    connectorVersion: number;
+    input: { providerProxyIds: number[]; durationDays: number };
+    price: number;
+    previousEndDate: Date;
+  } | null;
+
+  /**
+   * Chỉ có lượt gia hạn ĐANG DIỄN RA mới ở đây. Gia hạn xong thì về null để chu kỳ sau còn
+   * gia hạn lại được; dấu vết thành công nằm ở `renew_count` / `last_renewed_at`.
+   */
+  @Prop({ type: String, default: null, enum: [null, 'dispatching', 'reconciliation'] })
+  connector_renewal_state: string | null;
+
+  @Prop({ type: String, select: false })
+  connector_renewal_key?: string;
+
+  @Prop({ type: String, select: false })
+  connector_renewal_hash?: string;
+
+  /** Mọi khoá idempotency đã dùng cho đơn này: khoá cũ phải bị từ chối, không được trừ ví lần hai. */
+  @Prop({ type: [String], default: undefined, select: false })
+  connector_renewal_keys?: string[];
+
+  /**
+   * Người vận hành đã đối chiếu một lượt gia hạn treo với nhà cung cấp và tự khai kết quả.
+   * Hệ thống không đoán hộ: `extended` thì nới hạn, `not-extended` thì hoàn tiền, kèm bằng chứng.
+   */
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  connector_renewal_review: { actor: string; outcome: 'extended' | 'not-extended'; evidence: string;
+    at: Date; price: number; durationDays: number } | null;
+
   @Prop({ type: Boolean, default: false })
   connector_affiliate_pending: boolean;
 
@@ -245,6 +282,10 @@ export class Order {
 export const OrderSchema = SchemaFactory.createForClass(Order);
 OrderSchema.index({ connector_checkout_key: 1 }, { unique: true,
   partialFilterExpression: { connector_checkout_key: { $type: 'string' } } });
+OrderSchema.index({ connector_renewal_key: 1 }, { unique: true,
+  partialFilterExpression: { connector_renewal_key: { $type: 'string' } } });
+// Multikey: một khoá idempotency chỉ được thuộc về đúng một đơn, kể cả khoá của lượt gia hạn cũ.
+OrderSchema.index({ connector_renewal_keys: 1 }, { unique: true, sparse: true });
 
 OrderSchema.index({ user_id: 1, status: 1 });
 OrderSchema.index({ end_date: 1, status: 1 });

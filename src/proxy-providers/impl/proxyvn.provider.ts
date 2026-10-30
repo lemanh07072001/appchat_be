@@ -14,7 +14,7 @@ import {
 
 @ProxyProvider('proxyvn')
 export class ProxyvnProvider implements IProxyProvider {
-  readonly capabilities = { buy: true, renew: true, rotate: true, cancel: true };
+  readonly capabilities = { buy: true, renew: true, rotate: true, cancel: true, countrySelection: true };
 
   private readonly logger     = new Logger(ProxyvnProvider.name);
   private readonly BASE_URL   = 'https://proxy.vn/apiv2';
@@ -75,6 +75,12 @@ export class ProxyvnProvider implements IProxyProvider {
   // ─── Mua proxy ──────────────────────────────────────────────────────────────
 
   async buy(params: ProviderBuyParams): Promise<BuyResult> {
+    // These documented ISP products are Vietnam-only; the purchase API has no country field.
+    // Never accept another country and silently deliver VN instead.
+    if (params.country_code && params.country_code.toUpperCase() !== 'VN' ||
+        params.country_provider_value && params.country_provider_value.toUpperCase() !== 'VN') {
+      throw new BadRequestException('ProxyVN: các gói ISP này chỉ hỗ trợ Việt Nam (VN)');
+    }
     const {
       token_api: key,
       quantity,

@@ -79,6 +79,30 @@ export class ConnectorOrderDelivery {
           /[\x00-\x1f\x7f]/.test(item.username) || /[\x00-\x1f\x7f]/.test(item.password)) {
         throw new BadGatewayException('Proxy delivery is incompatible with local storage');
       }
+      // Optional hostname alias. Stored as given or rejected; never rewritten into a URL or trimmed silently.
+      if (item.domain !== undefined && (typeof item.domain !== 'string' || !item.domain.trim() ||
+          item.domain !== item.domain.trim() || item.domain.length > 253 ||
+          /[\s/\\?#:@]/.test(item.domain) || !/^[a-zA-Z0-9.-]+$/.test(item.domain))) {
+        throw new BadGatewayException('Provider delivery hostname requires reconciliation');
+      }
+      // Optional display labels (network and site of the IP). Rejected rather than truncated.
+      for (const label of ['isp', 'location'] as const) {
+        const value = item[label];
+        if (value !== undefined && (typeof value !== 'string' || !value.trim() || value !== value.trim() ||
+            value.length > 64 || /[\x00-\x1f\x7f]/.test(value))) {
+          throw new BadGatewayException('Provider delivery location requires reconciliation');
+        }
+      }
+      // Upstream proxy identity, needed later to act on this one proxy (renewal, rotation).
+      // Providers number them or use opaque strings; keep an exact decimal copy of a number.
+      let providerProxyId: string | undefined;
+      if (typeof item.id === 'string') providerProxyId = item.id;
+      else if (typeof item.id === 'number') {
+        if (!Number.isSafeInteger(item.id) || item.id <= 0) {
+          throw new BadGatewayException('Provider delivery proxy identity requires reconciliation');
+        }
+        providerProxyId = String(item.id);
+      }
       const key = createHash('sha256').update(JSON.stringify([String(order._id), item.host, port, protocol, item.username])).digest('hex');
       if (keys.has(key)) throw new BadGatewayException('Provider delivery contains duplicate proxies');
       keys.add(key);
@@ -87,8 +111,11 @@ export class ConnectorOrderDelivery {
         ...(dual ? { access_endpoints: [{ protocol: 'http', port: item.httpPort },
           { protocol: 'socks5', port: item.socks5Port }] } : {}),
         auth_username: item.username, auth_password: item.password, country_code: 'ZZ',
+        ...(typeof item.domain === 'string' ? { domain: item.domain } : {}),
+        ...(typeof item.isp === 'string' ? { isp: item.isp } : {}),
+        ...(typeof item.location === 'string' ? { location: item.location } : {}),
         provider: binding.connectorCode, is_active: true, is_available: false,
-        ...(typeof item.id === 'string' ? { provider_proxy_id: item.id } : {}) };
+        ...(providerProxyId !== undefined ? { provider_proxy_id: providerProxyId } : {}) };
     });
     // Validate the complete lease before opening a transaction. An upstream expiry
     // may be future relative to now but still precede an existing pinned start.

@@ -63,9 +63,17 @@ export class ConnectorServiceBinding {
       throw new BadRequestException('Package duration is not in the sale price table');
     }
     const { account, definition } = await this.account(accountId);
-    const sourcePartnerId = account.sourcePartnerId ?? account.legacyPartnerId;
+    let sourcePartnerId = account.sourcePartnerId ?? account.legacyPartnerId;
+    // A successor copies its predecessor's credential, so without a provider link we cannot
+    // tell which provider it talks to. Taking over a service the chain already serves is the
+    // one case that answers the question by itself: accept it and record what it proved.
+    let inheritIdentity = false;
     if (account.predecessorAccountId && !sourcePartnerId) {
-      throw new BadRequestException('Successor source provider requires review before service binding');
+      if (!(await this.chainServes(account.predecessorAccountId, service.connector_binding?.accountId))) {
+        throw new BadRequestException('Successor source provider requires review before service binding');
+      }
+      inheritIdentity = !!service.partner;
+      sourcePartnerId = service.partner ?? undefined;
     }
     if (sourcePartnerId && String(service.partner ?? '') !== String(sourcePartnerId)) {
       throw new BadRequestException('Service provider does not match the connector account source provider');
@@ -101,7 +109,26 @@ export class ConnectorServiceBinding {
          : service.connector_protocol_mode ? { connector_protocol_mode: null } : {}),
     } });
     if (saved.modifiedCount !== 1) throw new ConflictException('Service changed; reload before selecting packages');
+    // Recorded only after the takeover is saved, and only when it was still unknown. No revision
+    // bump: this is the identity the predecessor already had, not an administrator edit.
+    if (inheritIdentity) {
+      await this.accounts.updateOne({ _id: account._id, sourcePartnerId: { $exists: false } },
+        { $set: { sourcePartnerId } });
+    }
     return { binding, purchaseEnabled: false };
+  }
+
+  /** Walks the predecessor chain of a successor account, bounded to keep a cycle from looping. */
+  private async chainServes(predecessorAccountId: Types.ObjectId, boundAccountId: string | undefined) {
+    if (!boundAccountId) return false;
+    let ancestor: Types.ObjectId | undefined = predecessorAccountId;
+    for (let hop = 0; ancestor && hop < 20; hop++) {
+      if (String(ancestor) === String(boundAccountId)) return true;
+      const row: { predecessorAccountId?: Types.ObjectId } | null = await this.accounts
+        .findById(ancestor).select('predecessorAccountId').lean().exec();
+      ancestor = row?.predecessorAccountId;
+    }
+    return false;
   }
 
   /** Trusted pricing result only. Never spread customer config into the pinned input. */

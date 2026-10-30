@@ -60,6 +60,13 @@ export function homeproxyPurchaseCandidate(provider: 'VIETTEL' | 'VNPT' | 'FPT' 
     statusId: { path: '$.status.id', type: 'number' },
   });
   definition.operations.fetch.output!.items!.fields.expiresAt = { path: '$.expiredAt', type: 'unixMilliseconds', required: true };
+  // Per-proxy identity upstream, required to act on one proxy later (renewal takes userProxyIds).
+  definition.operations.fetch.output!.items!.fields.id = { path: '$.id', type: 'number', required: true };
+  // Hostname alias for the same proxy. Optional: some IPs are delivered without one.
+  definition.operations.fetch.output!.items!.fields.domain = { path: '$.proxy.ipaddress.domain', type: 'string' };
+  // Where the IP actually sits. Display only; eligibility still comes from purchasePolicy.
+  definition.operations.fetch.output!.items!.fields.isp = { path: '$.proxy.ipaddress.provider', type: 'string' };
+  definition.operations.fetch.output!.items!.fields.location = { path: '$.proxy.ipaddress.location', type: 'string' };
   definition.operations.buy = {
     method: 'POST', path: '/merchant/orders', effect: 'write', timeoutMs: 30000,
     request: { body: { paymentMethod: { literal: 'WALLET' }, products: { array: [{ object: {
@@ -72,5 +79,21 @@ export function homeproxyPurchaseCandidate(provider: 'VIETTEL' | 'VNPT' | 'FPT' 
     output: { fields: { provider_order_id: { path: '$.id', type: 'string', required: true } } },
   };
   definition.actions.buy = { operation: 'buy' };
+  // Immediate renewal of specific proxies. The provider retired auto-renewal: it answers 422
+  // `isRenewal: autoRenewalDisabled` unless isRenewal is false with dayOfRenewal > 0. Verified
+  // 2026-10-30: 201 `{"status":"success"}` extended one proxy by exactly 24h from its old expiry.
+  definition.operations.renew = {
+    method: 'POST', path: '/merchant/orders/renewal-proxies', effect: 'write', timeoutMs: 30000,
+    request: { body: {
+      userProxyIds: { path: '$.input.providerProxyIds' },
+      dayOfRenewal: { path: '$.input.durationDays' },
+      isRenewal: { literal: false },
+      categoryTypeId: { literal: 1 },
+    } },
+    response: { success: { path: '$.status', equals: 'success' } },
+    output: { fields: { success: { path: '$.status', type: 'boolean', required: true,
+      values: [{ from: 'success', to: true }] } } },
+  };
+  definition.actions.renew = { operation: 'renew' };
   return validateConnectorDefinition(definition);
 }

@@ -23,6 +23,9 @@ import { ConnectorOrderPurchase } from './connector-order-purchase.service';
 import { Order, OrderSchema } from '../schemas/orders.schema';
 import { Proxy, ProxySchema } from '../schemas/proxies.schema';
 import { ConnectorOrderDelivery } from './connector-order-delivery.service';
+import { ConnectorOrderRenewal } from './connector-order-renewal.service';
+import { ConnectorRenewalReconciliation } from './connector-renewal-reconciliation.service';
+import { ConnectorRenewalsController } from './connector-renewals.controller';
 import { ConnectorServiceBinding } from './connector-service-binding.service';
 import { Service, ServiceSchema } from '../schemas/services.schema';
 import { ConnectorCheckout } from './connector-checkout.service';
@@ -45,8 +48,8 @@ import { ConnectorCredentialMigration } from './connector-credential-migration.s
     { name: WalletTransaction.name, schema: WalletTransactionSchema },
     { name: PersistedWorkflowRun.name, schema: PersistedWorkflowRunSchema },
     { name: ConnectorDispatch.name, schema: ConnectorDispatchSchema }])],
-  providers: [ConnectorCredentialMigration, ConnectorCache, ProviderConnectorsService, ConnectorSecrets, ConnectorHttp, ConnectorAccountsService, ConnectorCheckLock, ConnectorImport, MongoWorkflowStore, ConnectorWorkflowsService, ConnectorRuntime, ConnectorDispatches, ConnectorOrderPurchase, ConnectorOrderDelivery, ConnectorServiceBinding, ConnectorCheckout, ConnectorMigrationPreview, ConnectorAccountReadiness],
-  controllers: [ConnectorMigrationController, ProviderConnectorsController, ConnectorAccountsController, ConnectorWorkflowsController],
-  exports: [ProviderConnectorsService, ConnectorWorkflowsService, ConnectorRuntime, ConnectorDispatches, ConnectorOrderPurchase, ConnectorOrderDelivery, ConnectorServiceBinding, ConnectorCheckout],
+  providers: [ConnectorCredentialMigration, ConnectorCache, ProviderConnectorsService, ConnectorSecrets, ConnectorHttp, ConnectorAccountsService, ConnectorCheckLock, ConnectorImport, MongoWorkflowStore, ConnectorWorkflowsService, ConnectorRuntime, ConnectorDispatches, ConnectorOrderPurchase, ConnectorOrderDelivery, ConnectorOrderRenewal, ConnectorRenewalReconciliation, ConnectorServiceBinding, ConnectorCheckout, ConnectorMigrationPreview, ConnectorAccountReadiness],
+  controllers: [ConnectorMigrationController, ProviderConnectorsController, ConnectorAccountsController, ConnectorWorkflowsController, ConnectorRenewalsController],
+  exports: [ProviderConnectorsService, ConnectorWorkflowsService, ConnectorRuntime, ConnectorDispatches, ConnectorOrderPurchase, ConnectorOrderDelivery, ConnectorOrderRenewal, ConnectorServiceBinding, ConnectorCheckout],
 })
 export class ProviderConnectorsModule {}

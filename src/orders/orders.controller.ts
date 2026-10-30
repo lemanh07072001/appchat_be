@@ -9,6 +9,8 @@ import { BuyOrderDto } from '../dto/buy-order.dto';
 import { QuoteBandwidthDto } from '../dto/quote-bandwidth.dto';
 import { TopUpBandwidthDto } from '../dto/topup-bandwidth.dto';
 import { ChangeProxyPasswordDto } from '../dto/change-proxy-password.dto';
+import { RenewConnectorOrderDto } from '../dto/renew-connector-order.dto';
+import { ConnectorOrderRenewal } from '../provider-connectors/connector-order-renewal.service';
 import { SetAllowedIpsDto } from '../dto/set-allowed-ips.dto';
 import { PaginationQueryDto } from '../dto/pagination-query.dto';
 import { UserOrderQueryDto } from '../dto/user-order-query.dto';
@@ -27,6 +29,7 @@ export class OrdersController {
     private readonly expirationScheduler: OrdersExpirationScheduler,
     private readonly orderLogService: OrderLogService,
     private readonly proxyRotateService: ProxyRotateService,
+    private readonly connectorRenewal: ConnectorOrderRenewal,
   ) {}
 
   @Post('api/admin/orders/run-expiration')
@@ -108,15 +111,34 @@ export class OrdersController {
   }
 
   // ─── User: gia hạn order của chính mình ──────────────────
+  /**
+   * Một route cho cả hai luồng gia hạn. Đơn Connector đi qua `ConnectorOrderRenewal` (gia hạn
+   * CẢ ĐƠN: `end_date` là một mốc duy nhất, nên gia hạn lẻ vài proxy sẽ thu tiền cả đơn mà vẫn
+   * để số còn lại hết hạn); đơn nhà cung cấp cũ giữ nguyên đường cũ. Đường đi do dữ liệu của
+   * đơn quyết định, không do client gửi lên.
+   */
   @Post('api/orders/my/:id/renew')
   @UseGuards(PurchaseEnabledGuard)
-  renewMyOrder(
+  async renewMyOrder(
     @Req() req: Request,
     @Param('id') id: string,
-    @Body('duration_days') duration_days: number,
+    @Body() dto: RenewConnectorOrderDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     const userId = (req as any).user.sub as string;
-    return this.ordersService.renewByUser(userId, id, duration_days);
+    if (await this.connectorRenewal.mode(userId, id) === 'connector') {
+      return this.connectorRenewal.renew({ userId, orderId: id, durationDays: dto.duration_days,
+        key: idempotencyKey ?? '' });
+    }
+    return this.ordersService.renewByUser(userId, id, dto.duration_days);
+  }
+
+  /** Mốc thời hạn và giá gia hạn của riêng đơn này. Chỉ đọc, không trừ ví. */
+  @Get('api/orders/my/:id/renew-options')
+  async renewOptions(@Req() req: Request, @Param('id') id: string) {
+    const userId = (req as any).user.sub as string;
+    if (await this.connectorRenewal.mode(userId, id) !== 'connector') return { mode: 'legacy' as const };
+    return this.connectorRenewal.options(userId, id);
   }
 
   // ─── User: nạp thêm dung lượng cho đơn bán theo GB ───────

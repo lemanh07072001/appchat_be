@@ -20,14 +20,14 @@ describe('Service package binding', () => {
     const query = (value: unknown) => ({ select: jest.fn().mockReturnThis(), lean: jest.fn().mockReturnThis(), exec: jest.fn().mockResolvedValue(value) });
     const service = { _id: id, pricing_mode: 'duration', pricing: { '30': { price: 100 } }, connector_binding: null };
     const services = { findById: jest.fn(() => query(service)), updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }) };
-    const account = { enabled: true, connectorCode: 'example', connectorVersion: 1, credential: 'encrypted' };
-    const accounts = { findById: jest.fn(() => query(account)) };
+    const account = { _id: id, enabled: true, connectorCode: 'example', connectorVersion: 1, credential: 'encrypted' };
+    const accounts = { findById: jest.fn(() => query(account)), updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }) };
     const connectors = { publishedDefinition: jest.fn().mockResolvedValue(definition) };
     const runtime = { read: jest.fn().mockResolvedValue({ fields: {}, items: [{ id: 'package-30', name: '30 days' }] }) };
     const secrets = { decrypt: jest.fn().mockReturnValue('account-secret') };
     const sut = new ConnectorServiceBinding(services as any, accounts as any, connectors as any, runtime as any, secrets as any);
     const binding = { accountId: id, connectorCode: 'example', connectorVersion: 1, packages: { '30': 'package-30' } };
-    return { sut, service, services, account, connectors, runtime, secrets, binding, definition };
+    return { sut, service, services, account, accounts, connectors, runtime, secrets, binding, definition };
   }
   it('verifies catalog and saves package selection while disabling purchases and renewals', async () => {
     const f = fixture();
@@ -35,6 +35,47 @@ describe('Service package binding', () => {
     expect(f.runtime.read).toHaveBeenCalledWith(id, 'catalog', {}, f.account);
     expect(f.services.updateOne).toHaveBeenCalledWith(expect.objectContaining({ pricing: f.service.pricing }),
       { $set: { connector_binding: f.binding, api_enabled: false, allow_renew: false } });
+  });
+  describe('successor account without a provider link', () => {
+    const successor = '507f1f77bcf86cd799439022';
+    const parent = '507f1f77bcf86cd799439033';
+    const grandparent = '507f1f77bcf86cd799439044';
+    const partner = '507f1f77bcf86cd799439055';
+    function successorFixture(boundAccountId: string, chain: Record<string, string | undefined>, servicePartner = partner) {
+      const f = fixture();
+      Object.assign(f.account, { connectorVersion: 2, predecessorAccountId: parent });
+      Object.assign(f.service, { partner: servicePartner, connector_binding: { accountId: boundAccountId,
+        connectorCode: 'example', connectorVersion: 1, packages: { '30': 'package-30' } } });
+      f.binding.accountId = successor;
+      f.binding.connectorVersion = 2;
+      const query = (value: unknown) => ({ select: jest.fn().mockReturnThis(), lean: jest.fn().mockReturnThis(), exec: jest.fn().mockResolvedValue(value) });
+      f.accounts.findById = jest.fn((wanted: string) => query(String(wanted) === successor
+        ? f.account : { predecessorAccountId: chain[String(wanted)] })) as any;
+      return f;
+    }
+    it('takes over a service its predecessor already serves and records the proven provider', async () => {
+      const f = successorFixture(parent, { [parent]: undefined });
+      expect(await f.sut.bind(successor, id, { packages: { '30': 'package-30' } })).toEqual({ binding: f.binding, purchaseEnabled: false });
+      expect(f.accounts.updateOne).toHaveBeenCalledWith({ _id: f.account._id, sourcePartnerId: { $exists: false } },
+        { $set: { sourcePartnerId: partner } });
+    });
+    it('follows the chain past intermediate accounts', async () => {
+      const f = successorFixture(grandparent, { [parent]: grandparent, [grandparent]: undefined });
+      await expect(f.sut.bind(successor, id, { packages: { '30': 'package-30' } })).resolves.toMatchObject({ purchaseEnabled: false });
+    });
+    it.each(['unrelated-account', 'unbound-service'])('refuses to take over %s', async reason => {
+      const f = successorFixture(reason === 'unrelated-account' ? id : parent, { [parent]: undefined });
+      if (reason === 'unbound-service') (f.service as any).connector_binding = null;
+      await expect(f.sut.bind(successor, id, { packages: { '30': 'package-30' } }))
+        .rejects.toThrow('Successor source provider requires review');
+      expect(f.services.updateOne).not.toHaveBeenCalled();
+      expect(f.accounts.updateOne).not.toHaveBeenCalled();
+    });
+    it('records nothing when the taken-over service has no provider of its own', async () => {
+      const f = successorFixture(parent, { [parent]: undefined }, '');
+      await expect(f.sut.bind(successor, id, { packages: { '30': 'package-30' } })).resolves.toMatchObject({ purchaseEnabled: false });
+      expect(f.accounts.updateOne).not.toHaveBeenCalled();
+    });
   });
   it.each(['unknown-package', 'missing-duration', 'extra-duration', 'changed-service', 'bandwidth', 'missing-mapping'])(
     'refuses %s without silently substituting products', async reason => {

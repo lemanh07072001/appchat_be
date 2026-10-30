@@ -41,12 +41,16 @@ export class ServicesController {
   @Get('api/services')
   async findPublicList(
     @Req() req: Request,
-    @Query('category') category?: 'static' | 'rotating',
+    @Query('category') category?: string,
     @Query('usage_type') usage_type?: string,
     @Query('ip_version') ip_version?: string,
+    // `type` là tên các trang IPv6 đang gửi; trước đây bị bỏ qua nên trang xoay
+    // và trang tĩnh trả cùng một danh sách. Nhận cả hai, `category` thắng.
+    @Query('type') type?: string,
+    @Query('proxy_type') proxy_type?: string,
   ) {
     const userId = await this.resolveUserId(req);
-    return this.servicesService.findPublicList(category, usage_type, ip_version, userId);
+    return this.servicesService.findPublicList(category ?? type, usage_type, ip_version, userId, proxy_type);
   }
 
   /**

@@ -2962,9 +2962,9 @@ export class OrdersService {
     const orders = await this.orderModel
       .find({ user_id: new Types.ObjectId(userId), status: OrderStatusEnum.ACTIVE })
       .populate('service_id', 'name allow_renew')
-      .populate('partner_id', 'code token_api')
+      .populate('partner_id', 'code token_api status')
       // status/user_id cần cho checkOrderRenewable — không bỏ khỏi select
-      .select('order_code end_date price_per_unit quantity duration_days proxy_type order_type status user_id connector_purchase')
+      .select('order_code end_date price_per_unit quantity duration_days proxy_type order_type status user_id connector_purchase pricing_mode provider_order_id')
       .sort({ end_date: 1 })
       .exec();
 
@@ -3023,6 +3023,7 @@ export class OrdersService {
           _id: order._id.toString(),
           order_code: order.order_code,
           service_name: service?.name ?? '',
+          renewal_mode: order.connector_purchase ? 'connector' : 'legacy',
           proxy_type: order.proxy_type,
           end_date: order.end_date,
           price_per_unit: Number(order.price_per_unit ?? 0),

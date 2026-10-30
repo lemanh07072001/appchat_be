@@ -37,10 +37,31 @@ describe('HomeProxy purchase candidate, no live writes', () => {
     });
   it('maps millisecond expiry exactly and rejects absent expiry', () => {
     const output = homeproxyPurchaseCandidate().operations.fetch.output!;
-    const item = { orderId: 'sample-order', expiredAt: 1800000000000, protocol: 'HTTP',
+    const item = { id: 1457674, orderId: 'sample-order', expiredAt: 1800000000000, protocol: 'HTTP',
       proxy: { port: 8080, username: 'sample-user', password: 'sample-pass', ipaddress: { ip: 'proxy.example.com' } } };
     expect(mapConnectorOutput(output, { data: [item] }).items![0].expiresAt).toBe(new Date(item.expiredAt).toISOString());
     expect(() => mapConnectorOutput(output, { data: [{ ...item, expiredAt: undefined }] })).toThrow();
+    // Renewal acts per proxy, so a delivery without the provider's own proxy id is unusable.
+    expect(() => mapConnectorOutput(output, { data: [{ ...item, id: undefined }] })).toThrow();
+    expect(mapConnectorOutput(output, { data: [item] }).items![0].id).toBe(item.id);
+  });
+  it('builds the verified renewal request and only accepts the provider success envelope', () => {
+    const definition = homeproxyPurchaseCandidate();
+    const request = buildConnectorRequest(definition, 'renew',
+      { providerProxyIds: [1683054, 1683055], durationDays: 7 }, 'token');
+    expect(JSON.parse(request.body as string)).toEqual({ userProxyIds: [1683054, 1683055],
+      dayOfRenewal: 7, isRenewal: false, categoryTypeId: 1 });
+    expect(String(request.url)).toBe('https://api.homeproxy.vn/api/merchant/orders/renewal-proxies');
+    const output = definition.operations.renew!.output!;
+    expect(validateConnectorResult('renew', mapConnectorOutput(output, { status: 'success' })).fields.success).toBe(true);
+    for (const body of [{ status: 'pending' }, { status: true }, {}, { status: 'Success' }]) {
+      expect(() => validateConnectorResult('renew', mapConnectorOutput(output, body))).toThrow();
+    }
+  });
+  it('refuses a renewal without proxy identities or duration', () => {
+    for (const input of [{ durationDays: 1 }, { providerProxyIds: [1] }]) {
+      expect(() => buildConnectorRequest(homeproxyPurchaseCandidate(), 'renew', input, 'token')).toThrow('Missing provider input');
+    }
   });
   it('maps a mixed catalog without accepting null-provider combo packages', () => {
     const definition = homeproxyPurchaseCandidate();

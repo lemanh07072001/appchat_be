@@ -110,15 +110,17 @@ export class ServicesService {
   }
 
   async findPublicList(
-    category?: 'static' | 'rotating',
+    category?: string,
     usage_type?: string,
     ip_version?: string,
     userId: string | null = null,
+    proxy_type?: string,
   ) {
     const filter: any = { status: true, consolidated_into: null };
     if (category) filter.type = category;
     if (usage_type) filter.usage_type = usage_type;
     if (ip_version) filter.ip_version = ip_version;
+    if (proxy_type) filter.proxy_type = proxy_type;
     const services = await this.serviceModel
       .find(filter)
       .populate('country', 'name code image_url')

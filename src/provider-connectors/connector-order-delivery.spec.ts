@@ -83,6 +83,47 @@ describe('Transactional Connector delivery', () => {
     const f = fixture(); f.runtime.read.mockResolvedValue({ fields: {}, items: [{ ...f.proxy, ...extra }] } as any);
     return expect(f.service.poll(id)).rejects.toThrow('Provider delivery');
   });
+  it('stores a mapped hostname alias alongside the IP without replacing it', async () => {
+    const f = fixture();
+    f.runtime.read.mockResolvedValue({ fields: {}, items: [{ ...f.proxy, domain: 'node-7.proxy-dns.example' }] } as any);
+    expect(await f.service.poll(id)).toEqual({ delivered: true, quantity: 1 });
+    expect(f.proxies.insertMany.mock.calls[0][0][0]).toMatchObject({
+      ip_address: 'proxy.example.com', domain: 'node-7.proxy-dns.example' });
+  });
+  it('leaves the hostname unset when the provider maps none', async () => {
+    const f = fixture();
+    await f.service.poll(id);
+    expect(f.proxies.insertMany.mock.calls[0][0][0]).not.toHaveProperty('domain');
+  });
+  it.each(['', ' ', ' host.example ', 'http://host.example', 'host.example/path', 'host.example:8080',
+    'user@host.example', 'hó.example', 'a'.repeat(254)])('rejects an unusable mapped hostname %p', domain => {
+    const f = fixture();
+    f.runtime.read.mockResolvedValue({ fields: {}, items: [{ ...f.proxy, domain }] } as any);
+    return expect(f.service.poll(id)).rejects.toThrow('Provider delivery hostname');
+  });
+  it.each([['opaque-string', 'up-7781', 'up-7781'], ['numeric', 1457674, '1457674']])(
+    'keeps the upstream proxy identity (%s) for later per-proxy actions', async (_label, proxyId, stored) => {
+      const f = fixture();
+      f.runtime.read.mockResolvedValue({ fields: {}, items: [{ ...f.proxy, id: proxyId }] } as any);
+      expect(await f.service.poll(id)).toEqual({ delivered: true, quantity: 1 });
+      expect(f.proxies.insertMany.mock.calls[0][0][0]).toMatchObject({ provider_proxy_id: stored });
+    });
+  it.each([0, -5, 1.5, Number.MAX_SAFE_INTEGER + 2])('rejects an unusable numeric proxy identity %p', numericId => {
+    const f = fixture();
+    f.runtime.read.mockResolvedValue({ fields: {}, items: [{ ...f.proxy, id: numericId }] } as any);
+    return expect(f.service.poll(id)).rejects.toThrow('Provider delivery proxy identity');
+  });
+  it('stores mapped network and site labels for display', async () => {
+    const f = fixture();
+    f.runtime.read.mockResolvedValue({ fields: {}, items: [{ ...f.proxy, isp: 'VIETTEL', location: 'HNI' }] } as any);
+    expect(await f.service.poll(id)).toEqual({ delivered: true, quantity: 1 });
+    expect(f.proxies.insertMany.mock.calls[0][0][0]).toMatchObject({ isp: 'VIETTEL', location: 'HNI' });
+  });
+  it.each(['isp', 'location'])('rejects an unusable mapped %s label', field => {
+    const f = fixture();
+    f.runtime.read.mockResolvedValue({ fields: {}, items: [{ ...f.proxy, [field]: ' x'.repeat(40) }] } as any);
+    return expect(f.service.poll(id)).rejects.toThrow('Provider delivery location');
+  });
   it('does not insert after another consumer has fulfilled or changed the order', async () => {
     const f = fixture(); f.orders.updateOne.mockResolvedValue({ modifiedCount: 0 });
     expect(await f.service.poll(id)).toEqual({ delivered: false });
